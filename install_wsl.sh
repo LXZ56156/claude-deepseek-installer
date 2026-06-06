@@ -919,6 +919,10 @@ EOF
     printf 'Content-Type: application/json\n' >> "$header_file"
     printf 'anthropic-version: 2023-06-01\n' >> "$header_file"
 
+    # 保存当前 errexit 状态并临时关闭（脚本默认不使用 set -e，
+    # 但需要兼容用户通过 bash -e 调用的场景，且绝不能在此时开启 errexit）
+    _ccdi_errexit_saved=0
+    case $- in *e*) _ccdi_errexit_saved=1 ;; esac
     set +e
     response=$(curl -s -w "\n%{http_code}" \
         -H @"$header_file" \
@@ -928,7 +932,7 @@ EOF
         -d "$request_body" \
         "$messages_endpoint" 2>&1)
     local curl_exit=$?
-    set -e
+    if [ "$_ccdi_errexit_saved" -eq 1 ]; then set -e; fi
     rm -f "$header_file"
 
     http_code=$(echo "$response" | tail -1)
@@ -1153,10 +1157,14 @@ print(f'快速模型: {e.get(\"ANTHROPIC_SMALL_FAST_MODEL\", \"(未设置)\")}')
         printf 'anthropic-version: 2023-06-01\n' >> "$hf"
 
         local test_resp test_code
+        # 保存当前 errexit 状态并临时关闭（脚本默认不使用 set -e，
+        # 但需要兼容用户通过 bash -e 调用的场景，且绝不能在此时开启 errexit）
+        _ccdi_errexit_saved=0
+        case $- in *e*) _ccdi_errexit_saved=1 ;; esac
         set +e
         test_resp=$(curl -s -w "\n%{http_code}" -H @"$hf" --connect-timeout 15 --max-time 30 -X POST -d "$test_body" "${base_url}/messages" 2>&1)
         test_code=$(echo "$test_resp" | tail -1)
-        set -e
+        if [ "$_ccdi_errexit_saved" -eq 1 ]; then set -e; fi
         rm -f "$hf"
 
         if [ "$test_code" = "200" ]; then

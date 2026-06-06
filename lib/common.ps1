@@ -294,8 +294,16 @@ function Merge-SettingsJson {
     # 如果已有 env 字段，合并；否则新建
     $mergedEnv = @{}
     if (($existing.PSObject.Properties.Name -contains "env") -and $null -ne $existing.env) {
-        foreach ($prop in $existing.env.PSObject.Properties) {
-            $mergedEnv[$prop.Name] = $prop.Value
+        # 防御：仅当 env 是 PSCustomObject（JSON 对象）时才枚举属性。
+        # 如果旧配置中 env 是字符串/数组/布尔值/数字等非对象类型，
+        # 枚举其 PSObject.Properties 会产生 Length、Count 等错误字段。
+        if ($existing.env -is [System.Management.Automation.PSCustomObject]) {
+            foreach ($prop in $existing.env.PSObject.Properties) {
+                $mergedEnv[$prop.Name] = $prop.Value
+            }
+        }
+        else {
+            Write-Log "WARN" "旧配置中 env 字段类型异常 ($($existing.env.GetType().Name))，将安全重建 env，原字段已备份"
         }
     }
 

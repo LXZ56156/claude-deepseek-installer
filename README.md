@@ -63,15 +63,7 @@
 
 下载 ZIP 解压，或通过 git clone（如有 git）。
 
-### 3. 准备环境
-
-- **Windows 10/11** 操作系统
-- **Node.js 18+**（[nodejs.org](https://nodejs.org) 下载 LTS 版）
-- **npm**（随 Node.js 一起安装）
-- **PowerShell 5.1+** （Win 10/11 自带）
-- **DeepSeek API Key**（[platform.deepseek.com](https://platform.deepseek.com) 获取）
-
-### 4. 运行安装脚本
+### 3. Windows 安装
 
 在项目目录中右键 → **"在终端中打开"**，然后运行：
 
@@ -80,10 +72,21 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 按照屏幕提示选择：
-- `[2]` 安装 Claude Code 并配置 DeepSeek（推荐）
+- `[1]` 安装 Claude Code 并配置 DeepSeek（推荐）
 - 然后粘贴您的 DeepSeek API Key（输入时不显示，这是安全保护）
 
-### 4. 验证安装
+### 4. WSL 安装
+
+如果需要在 WSL Ubuntu 中安装，在 WSL 终端中运行：
+
+```bash
+chmod +x install_wsl.sh
+./install_wsl.sh
+```
+
+支持 `--mode all|install|configure|doctor` 指定运行模式。
+
+### 5. 验证安装
 
 ```powershell
 # 在 PowerShell 中
@@ -101,6 +104,16 @@ $env:CCDI_API_KEY = "sk-你的DeepSeekKey"
 powershell -ExecutionPolicy Bypass -File .\configure-deepseek.ps1 -NonInteractive -SkipApiTest
 Remove-Item Env:\CCDI_API_KEY
 ```
+
+### 6. 诊断和售后
+
+如遇问题，运行诊断脚本生成报告：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\doctor.ps1
+```
+
+将生成的 `report.txt` 发给技术支持（报告中的 API Key 已自动脱敏）。详见下方 [🩺 售后流程](#-售后流程) 和 [❓ 常见问题](#-常见问题)。
 
 ---
 

@@ -121,7 +121,6 @@ if (-not $writeResult.Success) {
 Write-Host ""
 if ($SkipApiTest) {
     Write-Result "API 测试" "SKIP" "已按参数跳过"
-    Write-Success "配置完成！您现在可以运行 'claude' 开始使用。"
 }
 else {
     # 测试 API 连接
@@ -134,21 +133,35 @@ else {
         if ($apiTest.Content) {
             Write-Info "模型返回: $($apiTest.Content)"
         }
-        Write-Host ""
-        Write-Success "配置完成！您现在可以运行 'claude' 开始使用。"
     }
     else {
         Write-Result "API 测试" "WARN" $apiTest.Error
         if ($apiTest.Suggestion) {
             Write-Warning $apiTest.Suggestion
         }
-        Write-Host ""
-        Write-Info "配置已保存，但 API 测试未通过。常见原因:"
-        Write-Info "  1. API Key 不正确（401）→ 请重新获取 Key"
-        Write-Info "  2. 余额不足（402）→ 请充值后重试"
-        Write-Info "  3. 网络问题 → 请检查是否能访问 api.deepseek.com"
-        Write-Info "  4. 如需诊断，请运行 doctor.ps1"
     }
+}
+
+Write-Host ""
+# 根据 Claude Code 安装状态和 API 测试结果给出针对性提示
+if (-not $claudeVersion) {
+    Write-Warning "配置已写入，但请先安装 Claude Code 才能使用。"
+    Write-Info "运行 install.ps1 安装 Claude Code CLI 后即可启动。"
+}
+elseif ($SkipApiTest) {
+    Write-Success "配置已写入！但未验证 API 是否可用。"
+    Write-Info "建议运行 doctor.ps1 诊断 API 连接状态。"
+}
+elseif ($apiTest.Success) {
+    Write-Success "配置完成！您现在可以运行 'claude' 开始使用。"
+}
+else {
+    Write-Warning "配置已写入，但 API 测试未通过。"
+    Write-Info "常见原因:"
+    Write-Info "  1. API Key 不正确（401）→ 请重新获取 Key"
+    Write-Info "  2. 余额不足（402）→ 请充值后重试"
+    Write-Info "  3. 网络问题 → 请检查是否能访问 api.deepseek.com"
+    Write-Info "  4. 如需诊断，请运行 doctor.ps1"
 }
 
 Write-Host ""

@@ -79,8 +79,13 @@ switch ($choice) {
         if (Confirm-UserChoice -Message "确认移除上述 DeepSeek env 字段？") {
             $configPath = Get-ClaudeConfigFile
             if (Test-Path $configPath) {
-                # 备份
-                Backup-File -FilePath $configPath
+                # 修改前必须成功备份，否则停止修改
+                $backupResult = Backup-File -FilePath $configPath
+                if (-not $backupResult) {
+                    Write-Error-Msg "配置文件备份失败，已停止修改，避免破坏用户配置。"
+                    Write-Info "请检查 backup/ 目录权限或磁盘空间。"
+                    break
+                }
 
                 # 读取配置
                 $config = Read-JsonFileSafe -FilePath $configPath
@@ -125,7 +130,13 @@ switch ($choice) {
         if (Confirm-UserChoice -Message "确认删除整个配置文件？此操作不可恢复！") {
             $configPath = Get-ClaudeConfigFile
             if (Test-Path $configPath) {
-                Backup-File -FilePath $configPath
+                # 删除前必须成功备份
+                $backupResult = Backup-File -FilePath $configPath
+                if (-not $backupResult) {
+                    Write-Error-Msg "配置文件备份失败，已停止删除操作。"
+                    Write-Info "请检查 backup/ 目录权限或磁盘空间。"
+                    break
+                }
                 Remove-Item -Path $configPath -Force
                 Write-Success "配置文件已删除。备份保留在 backup/ 目录。"
             }
