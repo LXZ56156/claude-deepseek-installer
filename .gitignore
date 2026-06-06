@@ -1,0 +1,20 @@
+# 日志目录 - 包含运行日志，不提交
+logs/
+
+# 备份目录 - 包含用户配置备份，不提交
+backup/
+
+# 用户配置示例 - 实际配置不提交
+*.settings.json
+!examples/settings.deepseek.example.json
+
+# 诊断报告 - 包含用户环境信息，不提交
+report*.txt
+!examples/report.example.txt
+
+# PowerShell 临时文件
+*.tmp
+*.log
+
+# VS Code
+.vscode/

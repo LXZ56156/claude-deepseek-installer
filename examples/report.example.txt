@@ -1,0 +1,45 @@
+=========================================================================
+  Claude Code 环境诊断报告
+  生成时间: 2026-06-06 14:30:00
+  脚本版本: 1.1.0
+=========================================================================
+
+【环境摘要】
+  操作系统:     Microsoft Windows 11 Pro 10.0.22631
+  PowerShell:   7.4.2
+  用户目录:     C:\Users\ZhangSan
+  当前用户:     ZhangSan (普通用户)
+  执行策略:     RemoteSigned
+
+【检测结果】
+  [OK] Windows 版本 - Windows 11 (10.0.22631)
+  [OK] PowerShell 版本 - 7.4.2
+  [OK] 用户权限 - 普通用户（非管理员）
+  [OK] Node.js - v20.11.0
+  [OK] npm - 10.2.4
+  [OK] Git - git version 2.44.0
+  [OK] VS Code - 1.90.0
+  [OK] WSL - WSL 2.0
+  [OK] Ubuntu - Ubuntu 22.04 (Running)
+  [OK] Claude Code - 1.0.0
+  [OK] Claude 配置目录 - C:\Users\ZhangSan\.claude\
+  [OK] settings.json - 存在且格式有效
+  [OK] ANTHROPIC_BASE_URL - https://api.deepseek.com/anthropic
+  [OK] ANTHROPIC_AUTH_TOKEN - sk-abc****wxyz (已设置)
+  [OK] ANTHROPIC_MODEL - deepseek-v4-pro[1m]
+  [OK] ANTHROPIC_SMALL_FAST_MODEL - deepseek-v4-flash
+  [OK] 网络: api.deepseek.com - 可访问 (延迟 45ms)
+  [OK] Anthropic Format smoke test - 200 OK - 模型返回: OK
+
+【结论】
+  所有检测项目通过，环境配置正常。
+
+【API Key 说明】
+  API Key 已设置为: sk-abc****wxyz
+  完整 Key 未记录在本报告中，以保护您的隐私。
+
+=========================================================================
+  报告结束
+  如需技术支持，请将此报告（report.txt）发送给服务提供者。
+  请勿发送您的 API Key！
+=========================================================================
