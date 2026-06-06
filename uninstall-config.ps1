@@ -90,15 +90,24 @@ switch ($choice) {
                 # 读取配置
                 $config = Read-JsonFileSafe -FilePath $configPath
                 if ($config -and ($config.PSObject.Properties.Name -contains "env") -and $null -ne $config.env) {
-                    # 保留非本工具管理的 env 字段
-                    $envHash = @{}
-                    $removedCount = 0
-                    foreach ($prop in $config.env.PSObject.Properties) {
-                        if ($prop.Name -in $managedFields) {
-                            $removedCount++
-                        }
-                        else {
-                            $envHash[$prop.Name] = $prop.Value
+                    # 防御：仅当 env 是 PSCustomObject（JSON 对象）时才枚举属性
+                    if ($config.env -isnot [System.Management.Automation.PSCustomObject]) {
+                        Write-Warning "配置文件中 env 字段类型异常 ($($config.env.GetType().Name))，将安全重建整个 env。"
+                        Write-Info "您自己的其他 env 字段未能保留，原始文件已备份。"
+                        $envHash = @{}
+                        $removedCount = $managedFields.Count
+                    }
+                    else {
+                        # 保留非本工具管理的 env 字段
+                        $envHash = @{}
+                        $removedCount = 0
+                        foreach ($prop in $config.env.PSObject.Properties) {
+                            if ($prop.Name -in $managedFields) {
+                                $removedCount++
+                            }
+                            else {
+                                $envHash[$prop.Name] = $prop.Value
+                            }
                         }
                     }
 
@@ -111,7 +120,12 @@ switch ($choice) {
                     }
                     Add-Member -InputObject $newConfig -MemberType NoteProperty -Name "env" -Value ([PSCustomObject]$envHash)
 
-                    Write-JsonFileSafe -FilePath $configPath -Data $newConfig
+                    # 写入前检查返回值，写回失败不谎报成功
+                    $writeOk = Write-JsonFileSafe -FilePath $configPath -Data $newConfig
+                    if (-not $writeOk) {
+                        Write-Error-Msg "配置写回失败，原备份已保留，请检查磁盘权限或磁盘空间。"
+                        break
+                    }
                     Write-Success "已移除 $removedCount 个 DeepSeek 相关 env 字段。"
                     Write-Info "您自己的其他 env 字段和配置项已保留。"
                 }
