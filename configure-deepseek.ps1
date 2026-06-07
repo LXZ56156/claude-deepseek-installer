@@ -84,7 +84,7 @@ else {
     Write-Warning "如选择 API 测试，Key 会发送到 DeepSeek 官方接口验证，不会发送给第三方。"
     Write-Host ""
 
-    $apiKey = Read-SecretInput -Prompt "API Key"
+    $apiKey = Read-ApiKeyWithMaskedConfirmation -Prompt "API Key"
 }
 
 if ([string]::IsNullOrWhiteSpace($apiKey)) {

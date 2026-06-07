@@ -265,7 +265,7 @@ function Step-InstallClaudeCode {
             $updateChoice = Read-Host "是否更新到最新版本？(Y/N，直接回车跳过)"
             if ($updateChoice -eq "Y" -or $updateChoice -eq "y") {
                 Write-Info "正在更新 Claude Code..."
-                $updateResult = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest") -TimeoutSec 900
+                $updateResult = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest") -TimeoutSec 900 -ProgressMessage "仍在通过 npm 更新 Claude Code，请勿关闭窗口。"
                 if ($updateResult.Success) {
                     Write-Success "Claude Code 已更新到最新版本。"
                 }
@@ -314,7 +314,7 @@ function Step-InstallClaudeCode {
             Write-Info "检测到 winget，可尝试自动安装 Node.js。"
             if (Confirm-UserChoice -Message "是否使用 winget 安装 Node.js？（将修改系统环境）") {
                 Write-Info "正在使用 winget 安装 Node.js..."
-                $installResult = Invoke-CommandSafe -Command "winget" -Arguments @("install", "OpenJS.NodeJS.LTS", "--silent", "--accept-package-agreements") -TimeoutSec 900
+                $installResult = Invoke-CommandSafe -Command "winget" -Arguments @("install", "OpenJS.NodeJS.LTS", "--silent", "--accept-package-agreements") -TimeoutSec 900 -ProgressMessage "仍在安装 Node.js LTS，请勿关闭窗口。"
                 if ($installResult.Success) {
                     Write-Success "Node.js 安装完成！"
                     Write-Warning "请关闭并重新打开 PowerShell 终端，然后重新运行本脚本。"
@@ -355,7 +355,7 @@ function Step-InstallClaudeCode {
     Write-Info "正在安装 Claude Code..."
     Write-Info "执行: npm install -g @anthropic-ai/claude-code@latest"
 
-    $installResult = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest") -TimeoutSec 900
+    $installResult = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest") -TimeoutSec 900 -ProgressMessage "仍在通过 npm 安装 Claude Code，请勿关闭窗口。"
 
     if ($installResult.Success) {
         Write-Success "Claude Code 安装成功！"
@@ -487,7 +487,7 @@ function Step-ConfigureDeepSeek {
         Write-Warning "输入时不会显示字符，这是安全保护，请直接粘贴后按回车。"
         Write-Host ""
 
-        $apiKey = Read-SecretInput -Prompt "请粘贴您的 DeepSeek API Key"
+        $apiKey = Read-ApiKeyWithMaskedConfirmation -Prompt "请粘贴您的 DeepSeek API Key"
     }
 
     if ([string]::IsNullOrWhiteSpace($apiKey)) {

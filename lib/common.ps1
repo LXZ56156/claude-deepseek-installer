@@ -388,6 +388,51 @@ function Read-SecretInput {
     }
 }
 
+function Read-ApiKeyWithMaskedConfirmation {
+    <#
+    .SYNOPSIS
+        隐藏读取 API Key，并显示脱敏值供用户确认。
+    .PARAMETER Prompt
+        输入提示。
+    .RETURNS
+        用户确认后的 API Key；输入 Q 或空值取消时返回 $null。
+    #>
+    param(
+        [string]$Prompt = "请粘贴您的 DeepSeek API Key"
+    )
+
+    while ($true) {
+        $apiKey = Read-SecretInput -Prompt $Prompt
+
+        if ([string]::IsNullOrWhiteSpace($apiKey)) {
+            return $null
+        }
+
+        Write-Host ""
+        Write-Info "已收到 API Key: $(Mask-ApiKey -Key $apiKey)"
+        $choice = Read-Host "按回车继续，输入 R 重新粘贴，输入 Q 取消"
+
+        if ([string]::IsNullOrWhiteSpace($choice)) {
+            return $apiKey
+        }
+
+        switch ($choice.Trim().ToUpperInvariant()) {
+            "R" {
+                Write-Info "请重新粘贴 API Key。"
+                continue
+            }
+            "Q" {
+                Write-Info "已取消输入 API Key。"
+                return $null
+            }
+            default {
+                Write-Info "未识别输入，继续使用当前 API Key。"
+                return $apiKey
+            }
+        }
+    }
+}
+
 function Get-ApiKeyFromEnvironment {
     <#
     .SYNOPSIS
@@ -482,7 +527,9 @@ function Invoke-CommandSafe {
         [Parameter(Mandatory = $true)]
         [string]$Command,
         [string[]]$Arguments = @(),
-        [int]$TimeoutSec = 60
+        [int]$TimeoutSec = 60,
+        [string]$ProgressMessage = "",
+        [int]$ProgressIntervalSec = 20
     )
 
     $result = @{
@@ -507,13 +554,39 @@ function Invoke-CommandSafe {
             -NoNewWindow -PassThru -RedirectStandardOutput $tmpOut `
             -RedirectStandardError $tmpErr
 
-        # 等待进程完成，设置超时
-        $finished = $proc.WaitForExit($TimeoutSec * 1000)
+        # 等待进程完成，设置超时；长命令可选择性输出心跳提示。
+        $finished = $false
+        $deadline = (Get-Date).AddSeconds($TimeoutSec)
+        $nextProgressAt = (Get-Date).AddSeconds([Math]::Max(1, $ProgressIntervalSec))
+
+        while (-not $finished) {
+            $finished = $proc.WaitForExit(1000)
+            if ($finished) {
+                break
+            }
+
+            $now = Get-Date
+            if ($now -ge $deadline) {
+                break
+            }
+
+            if ($ProgressMessage -and $now -ge $nextProgressAt) {
+                Write-Info $ProgressMessage
+                $nextProgressAt = $now.AddSeconds([Math]::Max(1, $ProgressIntervalSec))
+            }
+        }
 
         if (-not $finished) {
             # 超时：强制终止进程
-            $proc.Kill()
-            $proc.WaitForExit(5000) | Out-Null
+            try {
+                if (-not $proc.HasExited) {
+                    $proc.Kill()
+                    $proc.WaitForExit(5000) | Out-Null
+                }
+            }
+            catch {
+                Write-Log "WARN" "终止超时命令时发生异常: $_"
+            }
             $result.Error = "命令执行超时 (${TimeoutSec}秒): $Command"
             $result.Success = $false
             Write-Log "ERROR" "命令超时: $Command $argumentLine"

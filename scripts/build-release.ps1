@@ -409,6 +409,43 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
     Write-Host "  编码规范化完成。" -ForegroundColor Green
 
     # ============================================================
+    # 3.46 Release 文档字符检查
+    # ============================================================
+
+    Write-Host ""
+    Write-Host "[3.46/5] Release 文档字符检查..." -ForegroundColor Cyan
+
+    $badReleaseDocPattern = '\p{So}|[\u2500-\u257F]|\uFE0F'
+    $releaseDocHits = New-Object System.Collections.ArrayList
+    $releaseDocFiles = Get-ChildItem -Path $stagingDir -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in @(".md", ".txt") }
+
+    foreach ($docFile in $releaseDocFiles) {
+        $content = [System.IO.File]::ReadAllText($docFile.FullName)
+        $matches = [regex]::Matches($content, $badReleaseDocPattern)
+        if ($matches.Count -gt 0) {
+            $relPath = $docFile.FullName.Substring($stagingDir.Length + 1)
+            $sampleChars = ($matches | Select-Object -First 5 | ForEach-Object { $_.Value }) -join " "
+            [void]$releaseDocHits.Add("$relPath contains terminal-risk characters: $sampleChars")
+        }
+    }
+
+    if ($releaseDocHits.Count -gt 0) {
+        Write-Host "  错误: Release 文档包含易乱码字符:" -ForegroundColor Red
+        foreach ($hit in $releaseDocHits) {
+            Write-Host "    - $hit" -ForegroundColor Red
+        }
+        Write-Host "  请统一改为 [OK]/[WARN]/[ERROR]/[SKIP] 或普通中文。" -ForegroundColor Yellow
+        Remove-Item $ZipFilePath -Force -ErrorAction SilentlyContinue
+        Remove-Item $Sha256FilePath -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path $OutputDir) { Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue }
+        exit 1
+    }
+
+    Write-Host "  Release 文档字符检查通过。" -ForegroundColor Green
+
+    # ============================================================
     # 3.47 Bootstrap 导出检查
     # ============================================================
 
@@ -428,6 +465,7 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
             "Write-Error-Msg",
             "Write-FatalError",
             "Invoke-CommandSafe",
+            "Read-ApiKeyWithMaskedConfirmation",
             "Get-DesktopPath",
             "Get-WindowsVersionInfo",
             "Test-ClaudeInstalled",

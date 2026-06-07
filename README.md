@@ -9,7 +9,7 @@
 
 ---
 
-## 📦 三步开始（v1.3 懒人版）
+## 三步开始（v1.3 一键版）
 
 ### 1. 解压 ZIP
 
@@ -37,7 +37,7 @@
 
 ---
 
-## 📋 项目简介
+## 项目简介
 
 **Claude Code + DeepSeek API 本地配置服务**
 
@@ -48,93 +48,76 @@
 
 ---
 
-## ⚖️ 合规声明
+## 合规声明
 
 | 我们做什么 | 我们不做什么 |
 |-----------|-------------|
-| ✅ Claude Code 本地安装 | ❌ 出售 Claude 账号 |
-| ✅ DeepSeek API 本地配置 | ❌ 出售 API Key |
-| ✅ 环境诊断和修复 | ❌ API 中转/代理服务 |
-| ✅ 配置文件备份恢复 | ❌ 账号共享 |
-| ✅ 纯脚本，可审计 | ❌ 破解/绕过限制 |
-| ✅ 代码开源透明 | ❌ 打包 exe 或混淆 |
+| [OK] Claude Code 本地安装 | [NO] 出售 Claude 账号 |
+| [OK] DeepSeek API 本地配置 | [NO] 出售 API Key |
+| [OK] 环境诊断和修复 | [NO] API 中转/代理服务 |
+| [OK] 配置文件备份恢复 | [NO] 账号共享 |
+| [OK] 纯脚本，可审计 | [NO] 破解/绕过限制 |
+| [OK] 代码开源透明 | [NO] 打包 exe 或混淆 |
 
 ---
 
-## 👤 适合人群
+## 适合人群
 
-- ✅ 想用 Claude Code 但不想折腾环境的开发者
-- ✅ 已有 DeepSeek API Key，想接入 Claude Code
-- ✅ 在 Windows/WSL 环境下使用 VS Code
-- ✅ 遇到安装配置问题需要诊断
+- [OK] 想用 Claude Code 但不想折腾环境的开发者
+- [OK] 已有 DeepSeek API Key，想接入 Claude Code
+- [OK] 在 Windows/WSL 环境下使用 VS Code
+- [OK] 遇到安装配置问题需要诊断
 
-## ❌ 不适合人群
+## 不适合人群
 
-- ❌ 没有 DeepSeek API Key 的用户（工具不提供 Key）
-- ❌ macOS 用户（当前仅支持 Windows/WSL）
-- ❌ 期望 Claude 官方原生体验的用户（DeepSeek 兼容层有功能差异）
-- ❌ 期望工具提供 API 额度的用户
+- [NO] 没有 DeepSeek API Key 的用户（工具不提供 Key）
+- [NO] macOS 用户（当前仅支持 Windows/WSL）
+- [NO] 期望 Claude 官方原生体验的用户（DeepSeek 兼容层有功能差异）
+- [NO] 期望工具提供 API 额度的用户
 
 ---
 
-## 🚀 一键入口说明
+## 一键入口说明
 
 | 文件 | 用途 | 怎么用 |
 |------|------|--------|
-| `开始安装.cmd` | 懒人一键安装 | 双击运行 |
+| `开始安装.cmd` | 一键安装 | 双击运行 |
 | `一键诊断.cmd` | 环境诊断 | 有问题时双击 |
 | `恢复或卸载配置.cmd` | 配置管理 | 换 Key / 恢复备份时双击 |
 
 ---
 
-## 📁 文件结构
+## 文件结构
 
 ```
 claude-deepseek-installer/
-├── 开始安装.cmd                  # 懒人一键安装入口（双击）
-├── Start-Install.cmd             # 英文备用安装入口（双击）
-├── 一键诊断.cmd                  # 一键诊断入口（双击）
-├── Run-Diagnostics.cmd           # 英文备用诊断入口（双击）
-├── 恢复或卸载配置.cmd            # 配置管理入口（双击）
-├── Restore-Config.cmd            # 英文备用配置入口（双击）
-├── Start-Here.ps1                # v1.3 主入口脚本（菜单 + 7 步安装）
-├── README.md                     # 项目说明（本文件）
-├── QUICK_START.md                # 快速开始指南
-├── install.ps1                   # 安装脚本（向后兼容 / 高级用法）
-├── configure-deepseek.ps1        # DeepSeek API 独立配置脚本
-├── doctor.ps1                    # 环境诊断脚本
-├── uninstall-config.ps1          # 配置恢复/卸载脚本
-├── install_wsl.sh                # WSL Ubuntu 安装脚本
-├── .gitignore                    # Git 忽略规则
-├── lib/                          # 公共库
-│   ├── common.ps1                # 通用工具函数（含 PATH 刷新）
-│   ├── env-check.ps1             # 环境检测函数
-│   ├── config-writer.ps1         # 配置读写函数
-│   ├── logger.ps1                # 日志和输出
-│   ├── bootstrap.ps1             # 入口初始化和库加载
-│   └── deepseek-env.defaults.json # DeepSeek 默认 env 模板
-├── scripts/                      # 开发和自检脚本
-│   ├── check.sh                  # Bash 语法/模板检查
-│   ├── check.ps1                 # PowerShell 语法/库/.cmd 编码检查
-│   └── build-release.ps1         # Release ZIP 打包（allow-list + 安全扫描）
-├── docs/                         # 文档（仅 5 个进入 release）
-│   ├── 用户使用教程.md
-│   ├── 常见问题FAQ.md
-│   ├── 闲鱼商品说明.md
-│   ├── 测试清单.md
-│   └── 视频教程脚本.md
-├── examples/                     # 示例文件（仅 2 个进入 release）
-│   ├── settings.deepseek.example.json
-│   └── report.example.txt
-├── logs/                         # 运行日志（不提交 Git）
-├── backup/                       # 配置备份（不提交 Git）
-├── reports/                      # 安装报告和历史诊断报告（不提交 Git）
-└── release/                      # Release 产物（不提交 Git）
+|-- 开始安装.cmd                  # 一键安装入口（双击）
+|-- Start-Install.cmd             # 英文备用安装入口（双击）
+|-- 一键诊断.cmd                  # 一键诊断入口（双击）
+|-- Run-Diagnostics.cmd           # 英文备用诊断入口（双击）
+|-- 恢复或卸载配置.cmd            # 配置管理入口（双击）
+|-- Restore-Config.cmd            # 英文备用配置入口（双击）
+|-- Start-Here.ps1                # v1.3 主入口脚本（菜单 + 7 步安装）
+|-- README.md                     # 项目说明（本文件）
+|-- QUICK_START.md                # 快速开始指南
+|-- install.ps1                   # 安装脚本（向后兼容 / 高级用法）
+|-- configure-deepseek.ps1        # DeepSeek API 独立配置脚本
+|-- doctor.ps1                    # 环境诊断脚本
+|-- uninstall-config.ps1          # 配置恢复/卸载脚本
+|-- install_wsl.sh                # WSL Ubuntu 安装脚本
+|-- lib/                          # 公共库
+|-- scripts/                      # 开发和自检脚本
+|-- docs/                         # 用户文档
+|-- examples/                     # 示例文件
+|-- logs/                         # 运行日志（不提交 Git）
+|-- backup/                       # 配置备份（不提交 Git）
+|-- reports/                      # 安装报告和历史诊断报告（不提交 Git）
+`-- release/                      # Release 产物（不提交 Git）
 ```
 
 ---
 
-## 🔧 高级用法
+## 高级用法
 
 > 以下为 PowerShell 命令行用法，适合高级用户或远程指导场景。
 > 普通用户请直接双击 `.cmd` 文件。
@@ -142,7 +125,7 @@ claude-deepseek-installer/
 ### Windows 命令行安装
 
 ```powershell
-# 懒人一键安装入口
+# 一键安装入口
 powershell -ExecutionPolicy Bypass -File .\Start-Here.ps1
 
 # 直接进入某模式
@@ -170,7 +153,7 @@ powershell -ExecutionPolicy Bypass -File .\doctor.ps1
 
 ---
 
-## 🔒 安全说明
+## 安全说明
 
 **您的 API Key 安全是我们的首要考虑：**
 
@@ -184,7 +167,7 @@ powershell -ExecutionPolicy Bypass -File .\doctor.ps1
 
 ---
 
-## 🩺 售后流程
+## 售后流程
 
 ### 第 1 步：双击「一键诊断.cmd」
 
@@ -201,7 +184,7 @@ powershell -ExecutionPolicy Bypass -File .\doctor.ps1
 
 ---
 
-## ❓ 常见问题
+## 常见问题
 
 ### Q: 双击开始安装没有反应？
 A: 先确认已经完整解压 ZIP，再尝试英文入口 `Start-Install.cmd`。如果窗口有报错，请截图发给技术支持；确认是权限问题时再尝试管理员运行。
@@ -244,7 +227,7 @@ A: DeepSeek 官方服务异常，稍后重试。不是您的配置问题。
 
 ---
 
-## ⚠️ 免责声明
+## 免责声明
 
 1. 本工具仅做本地环境安装和配置，不提供任何在线服务。
 2. 买家需要自备 DeepSeek API Key，API 调用费用由买家承担。
@@ -263,10 +246,10 @@ A: DeepSeek 官方服务异常，稍后重试。不是您的配置问题。
 
 ---
 
-## 📄 License
+## License
 
 MIT License — 详见 [LICENSE](LICENSE) 文件。
 
 ---
 
-**🤖 生成说明**: 本项目由 Claude Code 辅助开发完成。
+**生成说明**: 本项目由 Claude Code 辅助开发完成。

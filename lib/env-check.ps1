@@ -494,6 +494,73 @@ function Test-DeepSeekApiAnthropic {
         return $result
     }
 
+    if ($env:CCDI_TEST_MODE -eq "1" -and -not [string]::IsNullOrWhiteSpace($env:CCDI_TEST_API_STATUS)) {
+        $mockStatus = $env:CCDI_TEST_API_STATUS.Trim().ToLowerInvariant()
+        Write-Log "DEBUG" "CCDI_TEST_API_STATUS mock: $mockStatus"
+
+        switch ($mockStatus) {
+            "200" {
+                $result.Success = $true
+                $result.StatusCode = 200
+                $result.Content = "OK"
+            }
+            "401" {
+                $result.StatusCode = 401
+                $result.Error = "API Key 验证失败 (401 Unauthorized)"
+                $result.Suggestion = "DeepSeek API Key 验证失败。请检查是否复制完整、是否有多余空格、是否已删除或无权限。到 platform.deepseek.com 重新获取。"
+            }
+            "402" {
+                $result.StatusCode = 402
+                $result.Error = "账户余额或计费异常 (402 Payment Required)"
+                $result.Suggestion = "API Key 可识别，但账户余额或计费状态可能异常，请到 DeepSeek 控制台检查余额。"
+            }
+            "403" {
+                $result.StatusCode = 403
+                $result.Error = "API Key 无权限 (403 Forbidden)"
+                $result.Suggestion = "请检查 API Key 是否有对应接口的访问权限。"
+            }
+            "404" {
+                $result.StatusCode = 404
+                $result.Error = "接口或模型未找到 (404 Not Found)"
+                $result.Suggestion = "endpoint 或模型名可能错误。请检查 DeepSeek 官方文档确认当前支持的模型名。当前使用: $Model。"
+            }
+            "429" {
+                $result.StatusCode = 429
+                $result.Error = "API 请求频率限制 (429 Too Many Requests)"
+                $result.Suggestion = "请求过于频繁，请稍等几分钟再试。"
+            }
+            "500" {
+                $result.StatusCode = 500
+                $result.Error = "DeepSeek 服务端错误 (500 Internal Server Error)"
+                $result.Suggestion = "DeepSeek 官方服务暂时异常，请稍后重试。这不是您的配置问题。"
+            }
+            "502" {
+                $result.StatusCode = 502
+                $result.Error = "DeepSeek 网关错误 (502 Bad Gateway)"
+                $result.Suggestion = "DeepSeek 官方服务暂时不可用，请稍后重试。这不是您的配置问题。"
+            }
+            "503" {
+                $result.StatusCode = 503
+                $result.Error = "DeepSeek 服务暂不可用 (503 Service Unavailable)"
+                $result.Suggestion = "DeepSeek 官方正在维护或过载，请稍后重试。这不是您的配置问题。"
+            }
+            "timeout" {
+                $result.Error = "网络连接失败: 连接超时"
+                $result.Suggestion = "连接超时。可能是 DNS、代理、网络环境或防火墙问题。"
+            }
+            "dns" {
+                $result.Error = "网络连接失败: DNS 解析失败"
+                $result.Suggestion = "DNS 解析失败。请检查网络/DNS 设置。"
+            }
+            default {
+                $result.Error = "未知测试状态: $mockStatus"
+                $result.Suggestion = "请检查 CCDI_TEST_API_STATUS 测试环境变量。"
+            }
+        }
+
+        return $result
+    }
+
     try {
         $messagesEndpoint = "$BaseUrl/messages"
 

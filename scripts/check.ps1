@@ -34,6 +34,7 @@ $requiredCommands = @(
     "Write-Error-Msg",
     "Write-FatalError",
     "Invoke-CommandSafe",
+    "Read-ApiKeyWithMaskedConfirmation",
     "Get-DesktopPath",
     "Get-WindowsVersionInfo",
     "Test-ClaudeInstalled",

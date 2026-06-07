@@ -165,6 +165,23 @@ function Assert-CmdAsciiNoBom {
     }
 }
 
+function Assert-ReleaseDocsNoTerminalRiskChars {
+    param([string]$ReleaseRoot)
+
+    $badPattern = '\p{So}|[\u2500-\u257F]|\uFE0F'
+    $docFiles = Get-ChildItem -Path $ReleaseRoot -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in @(".md", ".txt") }
+
+    foreach ($file in $docFiles) {
+        $content = Get-Content -Path $file.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        $matches = [regex]::Matches($content, $badPattern)
+        if ($matches.Count -gt 0) {
+            $relPath = $file.FullName.Substring($ReleaseRoot.Length + 1)
+            throw "release doc contains terminal-risk characters: $relPath"
+        }
+    }
+}
+
 function Assert-NoBadRuntimeText {
     param(
         [array]$Runs,
@@ -232,6 +249,28 @@ function New-TestClaudeConfig {
 
     $json = $settings | ConvertTo-Json -Depth 5
     [System.IO.File]::WriteAllText($settingsPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function New-SimEnvironment {
+    param(
+        [string]$ProfileDir,
+        [string]$DesktopDir,
+        [string]$DummyKey,
+        [string]$ApiStatus = "200"
+    )
+
+    $envVars = @{
+        CCDI_TEST_MODE = "1"
+        CCDI_TEST_USERPROFILE = $ProfileDir
+        CCDI_TEST_DESKTOP = $DesktopDir
+        CCDI_API_KEY = $DummyKey
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ApiStatus)) {
+        $envVars.CCDI_TEST_API_STATUS = $ApiStatus
+    }
+
+    return $envVars
 }
 
 function Assert-ZipDoesNotContainForbiddenEntries {
@@ -322,6 +361,14 @@ try {
     Get-ChildItem -Path $releaseRoot -Filter "*.cmd" -Recurse | ForEach-Object {
         Assert-CmdAsciiNoBom -File $_
     }
+    Assert-ReleaseDocsNoTerminalRiskChars -ReleaseRoot $releaseRoot
+    $startHereSource = Get-Content -Path (Join-Path $releaseRoot "Start-Here.ps1") -Raw -Encoding UTF8
+    if ($startHereSource -notmatch "直接回车默认选 1") {
+        throw "Start-Here source does not show default option guidance"
+    }
+    if ($startHereSource -notmatch "高级选项") {
+        throw "Start-Here source does not include advanced menu"
+    }
 
     Write-Check "bootstrap exports from extracted release"
     Push-Location $releaseRoot
@@ -336,6 +383,7 @@ try {
             "Write-Error-Msg",
             "Write-FatalError",
             "Invoke-CommandSafe",
+            "Read-ApiKeyWithMaskedConfirmation",
             "Get-DesktopPath",
             "Get-WindowsVersionInfo",
             "Test-ClaudeInstalled",
@@ -352,25 +400,29 @@ try {
         Pop-Location
     }
 
-    $envVars = @{
-        CCDI_TEST_MODE = "1"
-        CCDI_TEST_USERPROFILE = $testProfile
-        CCDI_TEST_DESKTOP = $testDesktop
-        CCDI_API_KEY = $DummyApiKey
-    }
+    $envVars = New-SimEnvironment -ProfileDir $testProfile -DesktopDir $testDesktop -DummyKey $DummyApiKey -ApiStatus "200"
 
     $runs = New-Object System.Collections.ArrayList
-    [void]$runs.Add((Invoke-SimCommand -Name "Start-Here.ps1 menu" -FileName $powerShellExe -Arguments @(
+    $menuRun = Invoke-SimCommand -Name "Start-Here.ps1 menu" -FileName $powerShellExe -Arguments @(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $releaseRoot "Start-Here.ps1")
-    ) -InputText "Y`r`n6`r`n" -WorkingDirectory $releaseRoot -Environment $envVars))
+    ) -InputText "Y`r`n5`r`n" -WorkingDirectory $releaseRoot -Environment $envVars
+    [void]$runs.Add($menuRun)
 
-    [void]$runs.Add((Invoke-SimCommand -Name "Start-Install.cmd" -FileName $cmdExe -Arguments @("/c", "Start-Install.cmd") -InputText "Y`r`n6`r`n`r`n" -WorkingDirectory $releaseRoot -Environment $envVars))
-    [void]$runs.Add((Invoke-SimCommand -Name "开始安装.cmd" -FileName $cmdExe -Arguments @("/c", "开始安装.cmd") -InputText "Y`r`n6`r`n`r`n" -WorkingDirectory $releaseRoot -Environment $envVars))
+    $advancedRun = Invoke-SimCommand -Name "Start-Here.ps1 advanced menu" -FileName $powerShellExe -Arguments @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $releaseRoot "Start-Here.ps1")
+    ) -InputText "Y`r`n4`r`n3`r`n5`r`n" -WorkingDirectory $releaseRoot -Environment $envVars
+    [void]$runs.Add($advancedRun)
+
+    [void]$runs.Add((Invoke-SimCommand -Name "Start-Install.cmd" -FileName $cmdExe -Arguments @("/c", "Start-Install.cmd") -InputText "Y`r`n5`r`n`r`n" -WorkingDirectory $releaseRoot -Environment $envVars))
+    [void]$runs.Add((Invoke-SimCommand -Name "开始安装.cmd" -FileName $cmdExe -Arguments @("/c", "开始安装.cmd") -InputText "Y`r`n5`r`n`r`n" -WorkingDirectory $releaseRoot -Environment $envVars))
 
     $startHereLogs = Get-ChildItem -Path (Join-Path $releaseRoot "logs") -Filter "start-here-*.log" -ErrorAction SilentlyContinue
     $startHereLogText = ($startHereLogs | ForEach-Object { Get-Content -Path $_.FullName -Raw -Encoding UTF8 }) -join "`n"
     if ($startHereLogText -notmatch "用户选择: 退出") {
         throw "Start-Here did not reach menu exit path"
+    }
+    if ($startHereLogText -notmatch "用户选择: 高级选项" -or $startHereLogText -notmatch "用户选择: 从高级选项返回主菜单") {
+        throw "Start-Here did not exercise advanced menu return path"
     }
 
     [void]$runs.Add((Invoke-SimCommand -Name "Run-Diagnostics.cmd" -FileName $cmdExe -Arguments @("/c", "Run-Diagnostics.cmd") -InputText "`r`n" -WorkingDirectory $releaseRoot -Environment $envVars -TimeoutSec 180))
@@ -386,6 +438,31 @@ try {
     }
     if (-not (Get-ChildItem -Path $reportsDir -Filter "report-*.txt" -ErrorAction SilentlyContinue)) {
         throw "doctor did not create reports/report-*.txt"
+    }
+
+    $apiMockCases = @(
+        @{ Status = "200"; Expected = "200 OK" },
+        @{ Status = "401"; Expected = "API Key 验证失败" },
+        @{ Status = "402"; Expected = "余额" },
+        @{ Status = "429"; Expected = "请求过于频繁" },
+        @{ Status = "503"; Expected = "DeepSeek 官方正在维护" },
+        @{ Status = "timeout"; Expected = "连接超时" },
+        @{ Status = "dns"; Expected = "DNS 解析失败" }
+    )
+
+    foreach ($case in $apiMockCases) {
+        $caseEnv = New-SimEnvironment -ProfileDir $testProfile -DesktopDir $testDesktop -DummyKey $DummyApiKey -ApiStatus $case.Status
+        $caseReport = Join-Path $reportsDir "api-mock-$($case.Status).txt"
+        $run = Invoke-SimCommand -Name "doctor API mock $($case.Status)" -FileName $powerShellExe -Arguments @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $releaseRoot "doctor.ps1"),
+            "-OutputPath", $caseReport,
+            "-NoOpenReport"
+        ) -InputText "`r`n" -WorkingDirectory $releaseRoot -Environment $caseEnv -TimeoutSec 180
+        $caseReportText = Get-Content -Path $caseReport -Raw -Encoding UTF8
+        if ($caseReportText -notmatch [regex]::Escape($case.Expected)) {
+            throw "doctor API mock $($case.Status) report missing expected text: $($case.Expected)"
+        }
+        [void]$runs.Add($run)
     }
 
     $missingDir = Join-Path $tempRoot "missing files"

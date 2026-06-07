@@ -1,5 +1,5 @@
 ﻿# ============================================================
-# Start-Here.ps1 - Claude Code + DeepSeek 懒人安装总控入口 (v1.3.0)
+# Start-Here.ps1 - Claude Code + DeepSeek 一键安装总控入口 (v1.3.0)
 #
 # 用法:
 #   双击 "开始安装.cmd" 或:
@@ -345,12 +345,12 @@ function Step-InstallClaudeCode {
         $downloadResult = Invoke-CommandSafe -Command "powershell" -Arguments @(
             "-NoProfile", "-Command",
             "Invoke-RestMethod -Uri 'https://claude.ai/install.ps1' -OutFile '$tempInstallScript'"
-        ) -TimeoutSec 180
+        ) -TimeoutSec 180 -ProgressMessage "仍在下载 Claude 官方安装脚本，请勿关闭窗口。"
 
         if ($downloadResult.Success -and (Test-Path $tempInstallScript)) {
             $installResult = Invoke-CommandSafe -Command "powershell" -Arguments @(
                 "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tempInstallScript
-            ) -TimeoutSec 600
+            ) -TimeoutSec 600 -ProgressMessage "仍在安装 Claude Code，请勿关闭窗口。"
             Remove-Item $tempInstallScript -Force -ErrorAction SilentlyContinue
 
             if ($installResult.Success) {
@@ -424,7 +424,7 @@ function Step-InstallClaudeCode {
                     "--accept-package-agreements",
                     "--accept-source-agreements",
                     "--silent"
-                ) -TimeoutSec 900
+                ) -TimeoutSec 900 -ProgressMessage "仍在安装 Node.js LTS，请勿关闭窗口。"
                 if ($installResult.Success) {
                     Write-Success "Node.js 安装完成！"
                     Write-Warning "请关闭并重新打开 PowerShell/命令提示符，然后重新运行本脚本。"
@@ -458,7 +458,7 @@ function Step-InstallClaudeCode {
 
     # npm 安装
     Write-Info "执行: npm install -g @anthropic-ai/claude-code@latest（首次下载可能需要几分钟）"
-    $installResult = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest") -TimeoutSec 900
+    $installResult = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest") -TimeoutSec 900 -ProgressMessage "仍在通过 npm 安装 Claude Code，请勿关闭窗口。"
 
     if ($installResult.Success) {
         Write-Success "npm 安装 Claude Code 成功！"
@@ -526,11 +526,11 @@ function Update-ClaudeCode {
         Invoke-CommandSafe -Command "powershell" -Arguments @(
             "-NoProfile", "-Command",
             "Invoke-RestMethod -Uri 'https://claude.ai/install.ps1' -OutFile '$tempScript'"
-        ) -TimeoutSec 180
+        ) -TimeoutSec 180 -ProgressMessage "仍在下载 Claude 官方安装脚本，请勿关闭窗口。"
         if (Test-Path $tempScript) {
             $result = Invoke-CommandSafe -Command "powershell" -Arguments @(
                 "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tempScript
-            ) -TimeoutSec 600
+            ) -TimeoutSec 600 -ProgressMessage "仍在更新 Claude Code，请勿关闭窗口。"
             Remove-Item $tempScript -Force -ErrorAction SilentlyContinue
             if ($result.Success) {
                 Write-Success "Claude Code 已更新（Native Install）。"
@@ -544,7 +544,7 @@ function Update-ClaudeCode {
 
     # npm fallback
     Write-Info "使用 npm 更新..."
-    $result = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest") -TimeoutSec 900
+    $result = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest") -TimeoutSec 900 -ProgressMessage "仍在通过 npm 更新 Claude Code，请勿关闭窗口。"
     if ($result.Success) {
         Write-Success "Claude Code 已更新（npm）。"
     }
@@ -601,7 +601,7 @@ function Step-GetApiKey {
     Write-Info "请直接粘贴后按回车。"
     Write-Host ""
 
-    $apiKey = Read-SecretInput -Prompt "请粘贴您的 DeepSeek API Key"
+    $apiKey = Read-ApiKeyWithMaskedConfirmation -Prompt "请粘贴您的 DeepSeek API Key"
 
     if ([string]::IsNullOrWhiteSpace($apiKey)) {
         Write-Error-Msg "API Key 不能为空！"
@@ -841,7 +841,7 @@ Claude Code + DeepSeek 安装完成报告
 
 生成时间: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 脚本版本: v$ScriptVersion
-运行模式: 懒人一键安装
+运行模式: 一键安装
 
 一、系统信息
 --------------------------------------
@@ -986,11 +986,11 @@ function Show-CompletionPage {
 }
 
 # ============================================================
-# 懒人一键安装流程（模式 1）
+# 一键安装流程（模式 1）
 # ============================================================
 
 function Start-LazyInstall {
-    Write-Log "INFO" "开始懒人一键安装流程"
+    Write-Log "INFO" "开始一键安装流程"
 
     # Step 1: 环境检查
     $envResult = Step-CheckEnvironment
@@ -1118,7 +1118,7 @@ function Start-WslSetup {
         $wslResult = Invoke-CommandSafe -Command "wsl" -Arguments @(
             "bash", "-lc",
             "cd '$wslPath' && chmod +x install_wsl.sh && ./install_wsl.sh"
-        ) -TimeoutSec 600
+        ) -TimeoutSec 600 -ProgressMessage "仍在 WSL 中执行配置，请勿关闭窗口。"
 
         if ($wslResult.Success) {
             Write-Success "WSL 配置完成！"
@@ -1156,18 +1156,16 @@ function Show-MainMenu {
     Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host "                    请选择要执行的操作                        " -ForegroundColor Cyan
     Write-Host "==============================================================" -ForegroundColor Cyan
-    Write-Host "  [1] 懒人一键安装（推荐）                                    " -ForegroundColor Green
+    Write-Host "  [1] 一键安装（推荐）                                        " -ForegroundColor Green
     Write-Host "      自动检测 → 安装 → 配置 → 测试 → 生成报告               " -ForegroundColor White
-    Write-Host "  [2] 仅配置 DeepSeek API                                    " -ForegroundColor White
-    Write-Host "      （Claude Code 已安装的情况）                            " -ForegroundColor White
-    Write-Host "  [3] 仅运行环境诊断（不安装任何东西）                        " -ForegroundColor White
-    Write-Host "  [4] 配置 WSL Ubuntu 环境（高级选项）                        " -ForegroundColor White
-    Write-Host "  [5] 恢复或卸载配置                                          " -ForegroundColor White
-    Write-Host "  [6] 退出                                                    " -ForegroundColor White
+    Write-Host "  [2] 遇到问题：一键诊断                                      " -ForegroundColor White
+    Write-Host "  [3] 修改 / 恢复 / 卸载配置                                  " -ForegroundColor White
+    Write-Host "  [4] 高级选项                                                " -ForegroundColor White
+    Write-Host "  [5] 退出                                                    " -ForegroundColor White
     Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host ""
 
-    $choice = Read-Host "请输入选项编号 (1-6，直接回车默认选 1)"
+    $choice = Read-Host "请输入选项编号 (1-5，直接回车默认选 1)"
 
     if ([string]::IsNullOrWhiteSpace($choice)) {
         $choice = "1"
@@ -1175,34 +1173,63 @@ function Show-MainMenu {
 
     switch ($choice) {
         "1" {
-            Write-Log "INFO" "用户选择: 懒人一键安装"
+            Write-Log "INFO" "用户选择: 一键安装"
             Start-LazyInstall
         }
         "2" {
-            Write-Log "INFO" "用户选择: 仅配置 DeepSeek API"
-            Start-ConfigureOnly
-        }
-        "3" {
             Write-Log "INFO" "用户选择: 仅运行诊断"
             Start-DoctorOnly
         }
-        "4" {
-            Write-Log "INFO" "用户选择: WSL 配置"
-            Start-WslSetup
-        }
-        "5" {
+        "3" {
             Write-Log "INFO" "用户选择: 恢复或卸载配置"
             Start-UninstallMenu
         }
-        "6" {
+        "4" {
+            Write-Log "INFO" "用户选择: 高级选项"
+            Show-AdvancedMenu
+        }
+        "5" {
             Write-Log "INFO" "用户选择: 退出"
             Write-Info "感谢使用！"
             Write-Info "如遇问题请运行「一键诊断.cmd」获取诊断报告。"
             exit 0
         }
         default {
-            Write-Error-Msg "无效选项，请输入 1-6。"
+            Write-Error-Msg "无效选项，请输入 1-5。"
             Show-MainMenu
+        }
+    }
+}
+
+function Show-AdvancedMenu {
+    Write-Host ""
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host "                         高级选项                             " -ForegroundColor Cyan
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host "  [1] 仅配置 DeepSeek API                                     " -ForegroundColor White
+    Write-Host "  [2] 配置 WSL Ubuntu 环境                                    " -ForegroundColor White
+    Write-Host "  [3] 返回主菜单                                              " -ForegroundColor White
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host ""
+
+    $choice = Read-Host "请输入选项编号 (1-3)"
+
+    switch ($choice) {
+        "1" {
+            Write-Log "INFO" "用户选择: 仅配置 DeepSeek API"
+            Start-ConfigureOnly
+        }
+        "2" {
+            Write-Log "INFO" "用户选择: WSL 配置"
+            Start-WslSetup
+        }
+        "3" {
+            Write-Log "INFO" "用户选择: 从高级选项返回主菜单"
+            Show-MainMenu
+        }
+        default {
+            Write-Error-Msg "无效选项，请输入 1-3。"
+            Show-AdvancedMenu
         }
     }
 }
@@ -1220,7 +1247,7 @@ function Main {
         }
 
         if ($NonInteractive) {
-            Write-Info "非交互模式：自动开始懒人一键安装..."
+            Write-Info "非交互模式：自动开始一键安装..."
             Start-LazyInstall
             return
         }

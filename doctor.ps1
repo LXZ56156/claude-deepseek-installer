@@ -13,6 +13,7 @@ param(
     [switch]$SaveReport,   # 兼容旧参数：默认仍保存报告
     [switch]$NoSaveReport, # 不保存 report.txt，仅输出控制台摘要
     [switch]$SkipApiTest,  # 跳过 DeepSeek API 在线测试
+    [switch]$NoOpenReport, # 不自动打开或选中诊断报告
     [string]$OutputPath    # 报告输出路径，默认为当前目录 report.txt
 )
 
@@ -689,6 +690,7 @@ function Main {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
     $savedPaths = @()
+    $supportReportPath = $null
     if ($OutputPath) {
         $outputPath = $OutputPath
         $outputDir = Split-Path -Parent $outputPath
@@ -697,6 +699,7 @@ function Main {
         }
         [System.IO.File]::WriteAllText($outputPath, $reportContent, $utf8NoBom)
         $savedPaths += $outputPath
+        $supportReportPath = $outputPath
     }
     else {
         $reportsDir = Join-Path $ScriptDir "reports"
@@ -712,10 +715,13 @@ function Main {
         [System.IO.File]::WriteAllText($latestReportPath, $reportContent, $utf8NoBom)
         $savedPaths += $outputPath
         $savedPaths += $latestReportPath
+        $supportReportPath = $latestReportPath
     }
 
     $fullOutputPath = (Resolve-Path $outputPath -ErrorAction SilentlyContinue).Path
     if (-not $fullOutputPath) { $fullOutputPath = $outputPath }
+    $fullSupportReportPath = (Resolve-Path $supportReportPath -ErrorAction SilentlyContinue).Path
+    if (-not $fullSupportReportPath) { $fullSupportReportPath = $supportReportPath }
     Write-Host ""
     Write-Success "诊断报告已保存到: $fullOutputPath"
     if (-not $OutputPath) {
@@ -723,8 +729,31 @@ function Main {
     }
     Write-Info "日志文件: $(Get-LogFilePath)"
     Write-Host ""
-    Write-Info "请将上述文件（$fullOutputPath）发送给技术支持。"
+    Write-Info "请发送此诊断报告给技术支持: $fullSupportReportPath"
     Write-Warning "请不要发送您的 API Key！报告中已自动脱敏处理。"
+
+    if ($env:CCDI_TEST_MODE -ne "1") {
+        if (Get-Command Set-Clipboard -ErrorAction SilentlyContinue) {
+            try {
+                Set-Clipboard -Value $fullSupportReportPath
+                Write-Info "报告路径已复制到剪贴板。"
+            }
+            catch {
+                Write-Log "WARN" "复制报告路径到剪贴板失败: $_"
+            }
+        }
+
+        if (-not $NoOpenReport) {
+            try {
+                Start-Process -FilePath "explorer.exe" -ArgumentList "/select,`"$fullSupportReportPath`"" -ErrorAction Stop
+                Write-Info "已为您打开报告所在位置。"
+            }
+            catch {
+                Write-Log "WARN" "打开报告所在位置失败: $_"
+            }
+        }
+    }
+
     Write-Host ""
 }
 

@@ -44,6 +44,7 @@ PY
 echo "[check] report example uses ASCII status markers"
 python3 - <<'PY'
 from pathlib import Path
+import unicodedata
 
 text = Path("examples/report.example.txt").read_text(encoding="utf-8")
 bad = ["✅", "⚠", "❌", "⏭"]
@@ -62,6 +63,27 @@ bad_logger = ["✅", "⚠", "❌", "⏭", "\ufe0f"]
 found_logger = [ch for ch in bad_logger if ch in logger]
 if found_logger:
     raise SystemExit(f"logger.ps1 contains non-ASCII status icons: {found_logger}")
+
+release_docs = [
+    Path("README.md"),
+    Path("QUICK_START.md"),
+    Path("docs/用户使用教程.md"),
+    Path("docs/常见问题FAQ.md"),
+    Path("docs/闲鱼商品说明.md"),
+    Path("docs/测试清单.md"),
+    Path("docs/视频教程脚本.md"),
+    Path("examples/report.example.txt"),
+]
+for path in release_docs:
+    content = path.read_text(encoding="utf-8")
+    risky = []
+    for ch in content:
+        code = ord(ch)
+        if ch == "\ufe0f" or 0x2500 <= code <= 0x257F or unicodedata.category(ch) == "So":
+            risky.append(ch)
+    if risky:
+        sample = " ".join(risky[:5])
+        raise SystemExit(f"{path} contains terminal-risk characters: {sample}")
 PY
 
 echo "[check] sensitive-output guardrails"
