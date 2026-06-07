@@ -310,6 +310,75 @@ Write-Host ""
 Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
 
     # ============================================================
+    # 3.45 编码规范化：.ps1 加 BOM，.cmd 验证 ASCII 无 BOM
+    # ============================================================
+
+    Write-Host ""
+    Write-Host "[3.45/5] 编码规范化..." -ForegroundColor Cyan
+
+    $utf8Bom = New-Object System.Text.UTF8Encoding($true)
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+    # .ps1/.psm1: 确保有 UTF-8 BOM（PowerShell 5.1 需要 BOM 才能正确解析中文）
+    $psFiles = Get-ChildItem -Path $stagingDir -Filter "*.ps1" -Recurse -ErrorAction SilentlyContinue
+    $psFiles += Get-ChildItem -Path $stagingDir -Filter "*.psm1" -Recurse -ErrorAction SilentlyContinue
+
+    foreach ($f in $psFiles) {
+        $raw = [System.IO.File]::ReadAllBytes($f.FullName)
+        $hasBom = ($raw.Length -ge 3 -and $raw[0] -eq 0xEF -and $raw[1] -eq 0xBB -and $raw[2] -eq 0xBF)
+        if (-not $hasBom) {
+            [System.IO.File]::WriteAllText($f.FullName, [System.Text.Encoding]::UTF8.GetString($raw), $utf8Bom)
+            Write-Host "  [BOM] $($f.Name)" -ForegroundColor Cyan
+        }
+    }
+
+    # .cmd: 验证无 BOM + 纯 ASCII
+    $cmdFiles = Get-ChildItem -Path $stagingDir -Filter "*.cmd" -Recurse -ErrorAction SilentlyContinue
+    foreach ($f in $cmdFiles) {
+        $raw = [System.IO.File]::ReadAllBytes($f.FullName)
+        $hasBom = ($raw.Length -ge 3 -and $raw[0] -eq 0xEF -and $raw[1] -eq 0xBB -and $raw[2] -eq 0xBF)
+        $nonAscii = $raw | Where-Object { $_ -gt 0x7F }
+        if ($hasBom) {
+            Write-Host "  错误: $($f.Name) 包含 UTF-8 BOM，CMD 会乱码" -ForegroundColor Red
+            Write-Host "  请确保 .cmd 文件为纯 ASCII 无 BOM。" -ForegroundColor Yellow
+            Remove-Item $ZipFilePath -Force -ErrorAction SilentlyContinue
+            Remove-Item $Sha256FilePath -Force -ErrorAction SilentlyContinue
+            Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            if (Test-Path $OutputDir) { Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue }
+            exit 1
+        }
+        if ($nonAscii) {
+            Write-Host "  错误: $($f.Name) 包含 $($nonAscii.Count) 个非 ASCII 字节，CMD 会乱码" -ForegroundColor Red
+            Write-Host "  请将 .cmd 文件改为纯 ASCII。" -ForegroundColor Yellow
+            Remove-Item $ZipFilePath -Force -ErrorAction SilentlyContinue
+            Remove-Item $Sha256FilePath -Force -ErrorAction SilentlyContinue
+            Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            if (Test-Path $OutputDir) { Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue }
+            exit 1
+        }
+    }
+
+    # .ps1/.psm1 构建时校验：必须都有 BOM
+    $psFilesNoBom = $psFiles | Where-Object {
+        $raw = [System.IO.File]::ReadAllBytes($_.FullName)
+        -not ($raw.Length -ge 3 -and $raw[0] -eq 0xEF -and $raw[1] -eq 0xBB -and $raw[2] -eq 0xBF)
+    }
+    if ($psFilesNoBom) {
+        Write-Host "  错误: 以下 .ps1/.psm1 文件缺少 UTF-8 BOM：" -ForegroundColor Red
+        foreach ($f in $psFilesNoBom) { Write-Host "    - $($f.Name)" -ForegroundColor Red }
+        Write-Host "  PowerShell 5.1 需要 BOM 才能正确解析中文。" -ForegroundColor Yellow
+        Remove-Item $ZipFilePath -Force -ErrorAction SilentlyContinue
+        Remove-Item $Sha256FilePath -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path $OutputDir) { Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue }
+        exit 1
+    }
+
+    Write-Host "  .ps1 BOM 修复: $($psFiles.Count) 个文件"
+    Write-Host "  .cmd 编码验证: $($cmdFiles.Count) 个文件，全部通过"
+    Write-Host "  编码规范化完成。" -ForegroundColor Green
+
+    # ============================================================
     # 3.5 扫描文件内容，防止真实 API Key 泄露
     # ============================================================
 
