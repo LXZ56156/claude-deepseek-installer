@@ -68,4 +68,27 @@ if ($doctorText -match '\$Suggestions \+=') {
     throw "doctor.ps1 still uses scoped Suggestions +="
 }
 
+Write-Host "[check] .cmd launcher encoding"
+$cmdFiles = @(
+    (Join-Path $RootDir "开始安装.cmd"),
+    (Join-Path $RootDir "一键诊断.cmd"),
+    (Join-Path $RootDir "恢复或卸载配置.cmd")
+)
+foreach ($cmdFile in $cmdFiles) {
+    if (-not (Test-Path $cmdFile)) {
+        throw "$([System.IO.Path]::GetFileName($cmdFile)) missing"
+    }
+    $bytes = [System.IO.File]::ReadAllBytes($cmdFile)
+    # BOM check: first 3 bytes must not be EF BB BF
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        throw "$([System.IO.Path]::GetFileName($cmdFile)) has UTF-8 BOM (will garble Chinese path on CMD)"
+    }
+    # ASCII check: no byte > 0x7F (all .cmd content must be pure ASCII)
+    $nonAscii = $bytes | Where-Object { $_ -gt 0x7F }
+    if ($nonAscii) {
+        throw "$([System.IO.Path]::GetFileName($cmdFile)) contains non-ASCII bytes (will garble on CMD)"
+    }
+}
+Write-Host "[check] .cmd launchers: no BOM, pure ASCII"
+
 Write-Host "[check] OK"
