@@ -72,7 +72,10 @@ Write-Host "[check] .cmd launcher encoding"
 $cmdFiles = @(
     (Join-Path $RootDir "开始安装.cmd"),
     (Join-Path $RootDir "一键诊断.cmd"),
-    (Join-Path $RootDir "恢复或卸载配置.cmd")
+    (Join-Path $RootDir "恢复或卸载配置.cmd"),
+    (Join-Path $RootDir "Start-Install.cmd"),
+    (Join-Path $RootDir "Run-Diagnostics.cmd"),
+    (Join-Path $RootDir "Restore-Config.cmd")
 )
 foreach ($cmdFile in $cmdFiles) {
     if (-not (Test-Path $cmdFile)) {

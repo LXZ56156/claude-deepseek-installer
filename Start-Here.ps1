@@ -311,7 +311,7 @@ function Step-InstallClaudeCode {
         }
 
         Write-Info "运行 claude doctor..."
-        $doctorResult = Invoke-CommandSafe -Command "claude" -Arguments @("doctor")
+        $doctorResult = Invoke-CommandSafe -Command "claude" -Arguments @("doctor") -TimeoutSec 180
         if ($doctorResult.Success) {
             Write-Host $doctorResult.Output
         }
@@ -340,12 +340,12 @@ function Step-InstallClaudeCode {
         $downloadResult = Invoke-CommandSafe -Command "powershell" -Arguments @(
             "-NoProfile", "-Command",
             "Invoke-RestMethod -Uri 'https://claude.ai/install.ps1' -OutFile '$tempInstallScript'"
-        )
+        ) -TimeoutSec 180
 
         if ($downloadResult.Success -and (Test-Path $tempInstallScript)) {
             $installResult = Invoke-CommandSafe -Command "powershell" -Arguments @(
                 "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tempInstallScript
-            )
+            ) -TimeoutSec 600
             Remove-Item $tempInstallScript -Force -ErrorAction SilentlyContinue
 
             if ($installResult.Success) {
@@ -402,13 +402,13 @@ function Step-InstallClaudeCode {
         if ($wingetOk) {
             Write-Info "检测到 winget，可以自动安装 Node.js LTS。"
             if ($NonInteractive -or (Confirm-UserChoice -Message "是否使用 winget 安装 Node.js LTS？（将修改系统环境）")) {
-                Write-Info "正在使用 winget 安装 Node.js LTS..."
+                Write-Info "正在使用 winget 安装 Node.js LTS（可能需要几分钟）..."
                 $installResult = Invoke-CommandSafe -Command "winget" -Arguments @(
                     "install", "OpenJS.NodeJS.LTS",
                     "--accept-package-agreements",
                     "--accept-source-agreements",
                     "--silent"
-                )
+                ) -TimeoutSec 900
                 if ($installResult.Success) {
                     Write-Success "Node.js 安装完成！"
                     Write-Warning "请关闭并重新打开 PowerShell/命令提示符，然后重新运行本脚本。"
@@ -436,8 +436,8 @@ function Step-InstallClaudeCode {
     }
 
     # npm 安装
-    Write-Info "执行: npm install -g @anthropic-ai/claude-code@latest"
-    $installResult = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest")
+    Write-Info "执行: npm install -g @anthropic-ai/claude-code@latest（首次下载可能需要几分钟）"
+    $installResult = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest") -TimeoutSec 900
 
     if ($installResult.Success) {
         Write-Success "npm 安装 Claude Code 成功！"
@@ -459,7 +459,7 @@ function Step-InstallClaudeCode {
     if ($newVersion) {
         Write-Success "Claude Code 安装验证通过: $newVersion"
         Write-Info "运行 claude doctor..."
-        $doctorResult = Invoke-CommandSafe -Command "claude" -Arguments @("doctor")
+        $doctorResult = Invoke-CommandSafe -Command "claude" -Arguments @("doctor") -TimeoutSec 180
         if ($doctorResult.Success) {
             Write-Host $doctorResult.Output
         }
@@ -494,11 +494,11 @@ function Update-ClaudeCode {
         Invoke-CommandSafe -Command "powershell" -Arguments @(
             "-NoProfile", "-Command",
             "Invoke-RestMethod -Uri 'https://claude.ai/install.ps1' -OutFile '$tempScript'"
-        )
+        ) -TimeoutSec 180
         if (Test-Path $tempScript) {
             $result = Invoke-CommandSafe -Command "powershell" -Arguments @(
                 "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tempScript
-            )
+            ) -TimeoutSec 600
             Remove-Item $tempScript -Force -ErrorAction SilentlyContinue
             if ($result.Success) {
                 Write-Success "Claude Code 已更新（Native Install）。"
@@ -512,7 +512,7 @@ function Update-ClaudeCode {
 
     # npm fallback
     Write-Info "使用 npm 更新..."
-    $result = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest")
+    $result = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest") -TimeoutSec 900
     if ($result.Success) {
         Write-Success "Claude Code 已更新（npm）。"
     }
@@ -1073,11 +1073,11 @@ function Start-WslSetup {
         $wslPath = $winPath -replace '\\', '/' -replace '^([A-Za-z]):', '/mnt/$1'
         $wslPath = $wslPath.ToLower() -replace '^/mnt/([a-z])/', { "/mnt/$($_.Groups[1].Value.ToLower())/" }
 
-        Write-Info "正在 WSL 中执行 install_wsl.sh..."
+        Write-Info "正在 WSL 中执行 install_wsl.sh（可能需要几分钟）..."
         $wslResult = Invoke-CommandSafe -Command "wsl" -Arguments @(
             "bash", "-lc",
             "cd '$wslPath' && chmod +x install_wsl.sh && ./install_wsl.sh"
-        )
+        ) -TimeoutSec 600
 
         if ($wslResult.Success) {
             Write-Success "WSL 配置完成！"

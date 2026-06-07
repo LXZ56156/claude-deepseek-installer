@@ -54,6 +54,9 @@ $RequiredFiles = @(
     "开始安装.cmd",
     "一键诊断.cmd",
     "恢复或卸载配置.cmd",
+    "Start-Install.cmd",
+    "Run-Diagnostics.cmd",
+    "Restore-Config.cmd",
     "Start-Here.ps1",
     "install.ps1",
     "configure-deepseek.ps1",
@@ -122,120 +125,196 @@ Write-Host "[3/5] 收集文件..." -ForegroundColor Cyan
 Write-Host "  使用文件系统方式打包（统一 staging 流程，确保 API Key 扫描必定执行）..." -ForegroundColor Green
 Write-Host ""
 
-# 构建排除模式（与 .gitignore 保持一致）
-$ExcludePatterns = @(
-    # Git
-    ".git",
-    ".gitignore",
-    ".gitattributes",
-    ".gitmodules",
-    # IDE
-    ".vscode",
-    ".idea",
-    "*.sln",
-    "*.csproj",
-    # 运行时数据
-    "logs",
-    "backup",
-    "reports",
-    # 报告文件
-    "report*.txt",
-    "report*.md",
-    # 临时文件
-    "*.tmp",
-    "*.log",
-    "*.bak",
-    # 系统文件
-    "Thumbs.db",
-    ".DS_Store",
-    "desktop.ini",
-    # release 目录自身
-        "release"
-        # CLAUDE.md (项目开发用，非用户文档)
-        # 保留，用户可能想看
-    )
+# 白名单：只有这些文件/目录可以进入 release ZIP
+# 任何未列出的文件都会被排除，防止本地临时文件误入商品包
+$AllowedEntries = @(
+    # 入口文件
+    "开始安装.cmd",
+    "一键诊断.cmd",
+    "恢复或卸载配置.cmd",
+    "Start-Install.cmd",
+    "Run-Diagnostics.cmd",
+    "Restore-Config.cmd",
+    # 主脚本
+    "Start-Here.ps1",
+    "install.ps1",
+    "configure-deepseek.ps1",
+    "doctor.ps1",
+    "uninstall-config.ps1",
+    "install_wsl.sh",
+    # 目录（复制全部内容）
+    "lib",
+    "docs",
+    "examples",
+    # 特定脚本文件
+    "scripts/check.ps1",
+    "scripts/check.sh",
+    # 文档
+    "README.md",
+    "QUICK_START.md",
+    "LICENSE"
+)
 
-    # 用于 ZipFile.CreateFromDirectory 的排除逻辑
-    # PowerShell 5.1 没有 Compress-Archive 的排除功能，所以我们需要手动过滤
+# 创建临时 staging 目录
+$tempDir = Join-Path $env:TEMP "ccdi_build_$PID"
+if (Test-Path $tempDir) {
+    Remove-Item -Path $tempDir -Recurse -Force
+}
+$stagingDir = Join-Path $tempDir $ReleaseName
+New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
 
-    $tempDir = Join-Path $env:TEMP "ccdi_build_$PID"
-    if (Test-Path $tempDir) {
-        Remove-Item -Path $tempDir -Recurse -Force
-    }
-    New-Item -ItemType Directory -Path (Join-Path $tempDir $ReleaseName) -Force | Out-Null
+# ============================================================
+# 3.4 源目录 API Key 预扫描（allow-list 过滤前）
+# 扫描项目源目录中的文本文件，防止误将真实 Key 提交到仓库后
+# 即使文件不在 allow-list 中也能捕获
+# ============================================================
 
-    # 递归复制文件，排除指定模式
-    function Copy-Filtered {
-        param(
-            [string]$SourceDir,
-            [string]$DestDir,
-            [string[]]$Excludes,
-            [string]$RelativePath = ""
-        )
+# 共享定义（源预扫描和 staging 扫描共用）
+$safePlaceholders = @(
+    "sk-你的DeepSeekKey",
+    "sk-xxxx",
+    "__API_KEY__",
+    "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "sk-1234567890abcdef1234567890abcdef"  # scripts/check.ps1 的 Mask-ApiKey 单元测试 Key
+)
 
-        $items = Get-ChildItem -Path $SourceDir -Force -ErrorAction SilentlyContinue
-        foreach ($item in $items) {
-            $itemRelPath = if ($RelativePath) { "$RelativePath/$($item.Name)" } else { $item.Name }
+$dangerPatterns = @(
+    'sk-[A-Za-z0-9]{20,}',
+    'ANTHROPIC_AUTH_TOKEN.*sk-',
+    'DEEPSEEK_API_KEY.*sk-',
+    'CCDI_API_KEY.*sk-'
+)
 
-            # 检查是否需要排除
-            $exclude = $false
-            foreach ($pattern in $Excludes) {
-                # 通配符匹配
-                if ($item.Name -like $pattern) {
-                    $exclude = $true
-                    break
+$textExtensions = @("*.ps1", "*.psm1", "*.sh", "*.json", "*.md", "*.txt", "*.cmd", "*.bat",
+                    "*.js", "*.ts", "*.py", "*.html", "*.css", "*.yaml", "*.yml",
+                    "*.xml", "*.ini", "*.cfg", "*.conf", "*.env", "*.example")
+
+Write-Host ""
+Write-Host "[3.4/5] 源目录 API Key 预扫描..." -ForegroundColor Cyan
+
+$sourceScanExcludes = @(".git", "logs", "backup", "reports", "release", "node_modules")
+
+$sourceApiHits = [System.Collections.Generic.List[object]]::new()
+
+function Test-SourceFileForApiKey {
+    param([string]$FilePath, [string]$DisplayPath)
+
+    try {
+        $content = Get-Content -Path $FilePath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if (-not $content) { return }
+
+        foreach ($pattern in $dangerPatterns) {
+            $matches = [regex]::Matches($content, $pattern)
+            foreach ($m in $matches) {
+                $candidate = $m.Value.Trim()
+                $isSafe = $false
+                foreach ($safe in $safePlaceholders) {
+                    if ($candidate -match [regex]::Escape($safe)) {
+                        $isSafe = $true
+                        break
+                    }
                 }
-                # 目录精确匹配
-                if ($item.PSIsContainer -and $item.Name -eq $pattern) {
-                    $exclude = $true
-                    break
+                if (-not $isSafe) {
+                    $keyPart = $candidate -replace '^.*?(sk-[A-Za-z0-9]{20,})', '$1'
+                    if ($keyPart.Length -ge 32) {
+                        [void]$sourceApiHits.Add([PSCustomObject]@{
+                            File    = $DisplayPath
+                            Pattern = $pattern
+                            Match   = ($candidate.Substring(0, [Math]::Min(60, $candidate.Length)) + "...")
+                        })
+                    }
                 }
-            }
-
-            if ($exclude) {
-                Write-Host "  [SKIP] $itemRelPath" -ForegroundColor DarkGray
-                continue
-            }
-
-            if ($item.PSIsContainer) {
-                $newDestDir = Join-Path $DestDir $item.Name
-                New-Item -ItemType Directory -Path $newDestDir -Force | Out-Null
-                Copy-Filtered -SourceDir $item.FullName -DestDir $newDestDir -Excludes $Excludes -RelativePath $itemRelPath
-            }
-            else {
-                $destFile = Join-Path $DestDir $item.Name
-                Copy-Item -Path $item.FullName -Destination $destFile -Force
-                Write-Host "  [ADD] $itemRelPath" -ForegroundColor Green
             }
         }
     }
+    catch { }
+}
 
-    $stagingDir = Join-Path $tempDir $ReleaseName
-    Copy-Filtered -SourceDir $ProjectRoot -DestDir $stagingDir -Excludes $ExcludePatterns
+$sourceTextFiles = @()
+foreach ($ext in $textExtensions) {
+    $sourceTextFiles += Get-ChildItem -Path $ProjectRoot -Filter $ext -Recurse -ErrorAction SilentlyContinue |
+        Where-Object {
+            $full = $_.FullName
+            $skip = $false
+            foreach ($excl in $sourceScanExcludes) {
+                if ($full -match "\\$excl\\" -or $full -match "\\$excl`$" -or $full -match "/$excl/" -or $full -match "/$excl`$") {
+                    $skip = $true
+                    break
+                }
+            }
+            -not $skip
+        }
+}
+$sourceTextFiles = $sourceTextFiles | Sort-Object FullName -Unique
+
+foreach ($file in $sourceTextFiles) {
+    $relPath = $file.FullName.Substring($ProjectRoot.Length + 1)
+    Test-SourceFileForApiKey -FilePath $file.FullName -DisplayPath $relPath
+}
+
+if ($sourceApiHits.Count -gt 0) {
+    Write-Host ""
+    Write-Host "错误: 在项目源文件中扫描到疑似真实 API Key，已中止发布。" -ForegroundColor Red
+    Write-Host ""
+    foreach ($hit in $sourceApiHits) {
+        Write-Host "  [$($hit.File)]" -ForegroundColor Red
+        Write-Host "    匹配模式: $($hit.Pattern)" -ForegroundColor DarkYellow
+        Write-Host "    内容片段: $($hit.Match)" -ForegroundColor DarkYellow
+    }
+    Write-Host ""
+    Write-Host "请确认以上文件中的 sk-... 是否为真实 API Key。" -ForegroundColor Yellow
+    Write-Host "如果是真实 Key，请立即删除并到 DeepSeek 平台重新生成。" -ForegroundColor Yellow
+    Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path $OutputDir) {
+        Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    exit 1
+}
+
+Write-Host "  源目录预扫描通过，未发现真实 API Key。" -ForegroundColor Green
+
+# 按白名单复制文件
+foreach ($entry in $AllowedEntries) {
+    $sourcePath = Join-Path $ProjectRoot $entry
+    $destPath = Join-Path $stagingDir $entry
+
+    if (-not (Test-Path $sourcePath)) {
+        Write-Host "  [WARN] 白名单条目不存在，跳过: $entry" -ForegroundColor Yellow
+        continue
+    }
+
+    if (Test-Path $sourcePath -PathType Container) {
+        # 目录：递归复制全部内容
+        $destParent = Split-Path -Parent $destPath
+        if (-not (Test-Path $destParent)) {
+            New-Item -ItemType Directory -Path $destParent -Force | Out-Null
+        }
+        Copy-Item -Path $sourcePath -Destination $destPath -Recurse -Force
+        $fileCount = (Get-ChildItem -Path $destPath -Recurse -File -ErrorAction SilentlyContinue).Count
+        Write-Host "  [ADD] $entry/ ($fileCount files)" -ForegroundColor Green
+    }
+    else {
+        # 单个文件
+        $destParent = Split-Path -Parent $destPath
+        if ($destParent -and -not (Test-Path $destParent)) {
+            New-Item -ItemType Directory -Path $destParent -Force | Out-Null
+        }
+        Copy-Item -Path $sourcePath -Destination $destPath -Force
+        Write-Host "  [ADD] $entry" -ForegroundColor Green
+    }
+}
+
+# 输出打包摘要
+$totalFiles = (Get-ChildItem -Path $stagingDir -Recurse -File -ErrorAction SilentlyContinue).Count
+Write-Host ""
+Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
 
     # ============================================================
     # 3.5 扫描文件内容，防止真实 API Key 泄露
     # ============================================================
 
     Write-Host ""
-    Write-Host "[3.5/5] 扫描文件内容中的 API Key..." -ForegroundColor Cyan
-
-    # 已知的安全占位符（允许出现）
-    $safePlaceholders = @(
-        "sk-你的DeepSeekKey",
-        "sk-xxxx",
-        "__API_KEY__",
-        "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-        "sk-1234567890abcdef1234567890abcdef"  # scripts/check.ps1 的 Mask-ApiKey 单元测试 Key
-    )
-
-    # 危险的 API Key 模式
-    $dangerPatterns = @(
-        'sk-[A-Za-z0-9]{20,}',
-        'ANTHROPIC_AUTH_TOKEN.*sk-',
-        'DEEPSEEK_API_KEY.*sk-',
-        'CCDI_API_KEY.*sk-'
-    )
+    Write-Host "[3.5/5] 扫描 staging 文件内容中的 API Key..." -ForegroundColor Cyan
 
     $apiKeyHits = [System.Collections.Generic.List[object]]::new()
 
@@ -281,11 +360,7 @@ $ExcludePatterns = @(
         }
     }
 
-    # 递归扫描 staging 目录中的所有文本文件
-    $textExtensions = @("*.ps1", "*.psm1", "*.sh", "*.json", "*.md", "*.txt", "*.cmd", "*.bat",
-                        "*.js", "*.ts", "*.py", "*.html", "*.css", "*.yaml", "*.yml",
-                        "*.xml", "*.ini", "*.cfg", "*.conf", "*.env", "*.example")
-
+    # 扫描 staging 目录中的所有文本文件
     $scanFiles = @()
     foreach ($ext in $textExtensions) {
         $scanFiles += Get-ChildItem -Path $stagingDir -Filter $ext -Recurse -ErrorAction SilentlyContinue

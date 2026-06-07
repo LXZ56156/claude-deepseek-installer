@@ -265,7 +265,7 @@ function Step-InstallClaudeCode {
             $updateChoice = Read-Host "是否更新到最新版本？(Y/N，直接回车跳过)"
             if ($updateChoice -eq "Y" -or $updateChoice -eq "y") {
                 Write-Info "正在更新 Claude Code..."
-                $updateResult = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest")
+                $updateResult = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest") -TimeoutSec 900
                 if ($updateResult.Success) {
                     Write-Success "Claude Code 已更新到最新版本。"
                 }
@@ -283,7 +283,7 @@ function Step-InstallClaudeCode {
 
         # 运行 claude doctor 检查状态
         Write-Info "正在运行 claude doctor..."
-        $doctorResult = Invoke-CommandSafe -Command "claude" -Arguments @("doctor")
+        $doctorResult = Invoke-CommandSafe -Command "claude" -Arguments @("doctor") -TimeoutSec 180
         if ($doctorResult.Success) {
             Write-Host $doctorResult.Output
         }
@@ -314,7 +314,7 @@ function Step-InstallClaudeCode {
             Write-Info "检测到 winget，可尝试自动安装 Node.js。"
             if (Confirm-UserChoice -Message "是否使用 winget 安装 Node.js？（将修改系统环境）") {
                 Write-Info "正在使用 winget 安装 Node.js..."
-                $installResult = Invoke-CommandSafe -Command "winget" -Arguments @("install", "OpenJS.NodeJS.LTS", "--silent", "--accept-package-agreements")
+                $installResult = Invoke-CommandSafe -Command "winget" -Arguments @("install", "OpenJS.NodeJS.LTS", "--silent", "--accept-package-agreements") -TimeoutSec 900
                 if ($installResult.Success) {
                     Write-Success "Node.js 安装完成！"
                     Write-Warning "请关闭并重新打开 PowerShell 终端，然后重新运行本脚本。"
@@ -355,7 +355,7 @@ function Step-InstallClaudeCode {
     Write-Info "正在安装 Claude Code..."
     Write-Info "执行: npm install -g @anthropic-ai/claude-code@latest"
 
-    $installResult = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest")
+    $installResult = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest") -TimeoutSec 900
 
     if ($installResult.Success) {
         Write-Success "Claude Code 安装成功！"
@@ -380,7 +380,7 @@ function Step-InstallClaudeCode {
 
         # 运行 doctor
         Write-Info "运行 claude doctor..."
-        $doctorResult = Invoke-CommandSafe -Command "claude" -Arguments @("doctor")
+        $doctorResult = Invoke-CommandSafe -Command "claude" -Arguments @("doctor") -TimeoutSec 180
         if ($doctorResult.Success) {
             Write-Host $doctorResult.Output
         }
@@ -439,7 +439,7 @@ function Step-InstallVSCodeExtension {
     }
 
     Write-Info "正在安装 Claude Code VS Code 扩展..."
-    $installResult = Invoke-CommandSafe -Command "code" -Arguments @("--install-extension", "anthropic.claude-code")
+    $installResult = Invoke-CommandSafe -Command "code" -Arguments @("--install-extension", "anthropic.claude-code") -TimeoutSec 180
 
     if ($installResult.Success) {
         Write-Success "Claude Code VS Code 扩展安装成功！"
