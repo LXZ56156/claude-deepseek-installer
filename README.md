@@ -1,19 +1,46 @@
 # Claude Code + DeepSeek 一键安装配置助手
 
-> VS Code AI 编程环境本地配置 | Claude Code 安装 | DeepSeek API 接入
+> 解压即用，双击安装 | Windows / WSL 环境诊断 | 自备 DeepSeek API Key
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-blue)](https://www.microsoft.com/windows)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)](https://learn.microsoft.com/powershell/)
+[![Version](https://img.shields.io/badge/Version-1.3.0-green)]()
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+
+---
+
+## 📦 三步开始（v1.3 懒人版）
+
+### 1. 解压 ZIP
+
+下载后右键解压到任意目录。
+
+### 2. 双击「开始安装.cmd」
+
+双击项目目录中的 **`开始安装.cmd`**，按提示操作。
+
+### 3. 粘贴 DeepSeek API Key
+
+脚本会自动打开 DeepSeek API Key 页面。登录、复制 Key，回到窗口粘贴（不显示是正常的）。
+
+之后脚本会自动完成：检测 → 安装 → 配置 → 测试 → 生成报告。
+
+看到 **「安装流程全部完成」** 后，即可运行 `claude` 开始使用。
+
+---
+
+> **遇到问题？** 双击「一键诊断.cmd」→ 把 report.txt 发给技术支持。
+>
+> **想修改配置？** 双击「恢复或卸载配置.cmd」。
 
 ---
 
 ## 📋 项目简介
 
-这是一个**AI 编程环境本地配置工具**，帮助用户在 Windows / WSL 环境下：
-1. **一键安装** Claude Code CLI 工具
-2. **一键配置** DeepSeek API 接入
-3. **一键诊断** 环境问题
+**Claude Code + DeepSeek API 本地配置服务**
+
+帮你把 Claude Code 和你自己的 DeepSeek API Key 配到本机。
+能安装、能配置、能查错、能恢复。
 
 本项目是纯脚本工具，供**闲鱼等技术服务场景**使用。买家购买的是**安装配置人工服务**，脚本作为交付品辅助自动化。
 
@@ -48,72 +75,13 @@
 
 ---
 
-## 🚀 快速开始
+## 🚀 一键入口说明
 
-### 1. 准备环境
-
-- **Windows 10/11** 操作系统
-- **Node.js 18+**（[nodejs.org](https://nodejs.org) 下载 LTS 版，Claude Code 运行必需）
-- **npm**（随 Node.js 一起安装）
-- **PowerShell 5.1+** （Win 10/11 自带）
-- **VS Code**（推荐，可选；Claude Code CLI 是核心交付，VS Code 扩展是可选增强项）
-- **DeepSeek API Key**（[platform.deepseek.com](https://platform.deepseek.com) 获取）
-
-### 2. 下载项目
-
-下载 ZIP 解压，或通过 git clone（如有 git）。
-
-### 3. Windows 安装
-
-在项目目录中右键 → **"在终端中打开"**，然后运行：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-按照屏幕提示选择：
-- `[1]` 安装 Claude Code 并配置 DeepSeek（推荐）
-- 然后粘贴您的 DeepSeek API Key（输入时不显示，这是安全保护）
-
-### 4. WSL 安装
-
-如果需要在 WSL Ubuntu 中安装，在 WSL 终端中运行：
-
-```bash
-chmod +x install_wsl.sh
-./install_wsl.sh
-```
-
-支持 `--mode all|install|configure|doctor` 指定运行模式。
-
-### 5. 验证安装
-
-```powershell
-# 在 PowerShell 中
-claude --version
-claude doctor
-
-# 如需诊断
-powershell -ExecutionPolicy Bypass -File .\doctor.ps1
-```
-
-非交互配置（适合售后自动化，不把 Key 写进命令历史）：
-
-```powershell
-$env:CCDI_API_KEY = "sk-你的DeepSeekKey"
-powershell -ExecutionPolicy Bypass -File .\configure-deepseek.ps1 -NonInteractive -SkipApiTest
-Remove-Item Env:\CCDI_API_KEY
-```
-
-### 6. 诊断和售后
-
-如遇问题，运行诊断脚本生成报告：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\doctor.ps1
-```
-
-将生成的 `report.txt` 发给技术支持（报告中的 API Key 已自动脱敏）。详见下方 [🩺 售后流程](#-售后流程) 和 [❓ 常见问题](#-常见问题)。
+| 文件 | 用途 | 怎么用 |
+|------|------|--------|
+| `开始安装.cmd` | 懒人一键安装 | 双击运行 |
+| `一键诊断.cmd` | 环境诊断 | 有问题时双击 |
+| `恢复或卸载配置.cmd` | 配置管理 | 换 Key / 恢复备份时双击 |
 
 ---
 
@@ -121,35 +89,78 @@ powershell -ExecutionPolicy Bypass -File .\doctor.ps1
 
 ```
 claude-deepseek-installer/
-├── README.md                    # 项目说明（本文件）
-├── QUICK_START.md               # 快速开始指南
-├── install.ps1                  # 主安装脚本（Windows）
-├── configure-deepseek.ps1       # DeepSeek API 独立配置脚本
-├── doctor.ps1                   # 环境诊断脚本
-├── uninstall-config.ps1         # 配置恢复/卸载脚本
-├── install_wsl.sh               # WSL Ubuntu 安装脚本
-├── .gitignore                   # Git 忽略规则
-├── lib/                         # 公共库
-│   ├── common.ps1               # 通用工具函数
-│   ├── env-check.ps1            # 环境检测函数
-│   ├── config-writer.ps1        # 配置读写函数
-│   ├── logger.ps1               # 日志和输出
-│   ├── bootstrap.ps1            # 入口初始化和库加载
+├── 开始安装.cmd                  # 懒人一键安装入口（双击）
+├── 一键诊断.cmd                  # 一键诊断入口（双击）
+├── 恢复或卸载配置.cmd            # 配置管理入口（双击）
+├── Start-Here.ps1                # v1.3 主入口脚本
+├── README.md                     # 项目说明（本文件）
+├── QUICK_START.md                # 快速开始指南
+├── install.ps1                   # 安装脚本（高级用法）
+├── configure-deepseek.ps1        # DeepSeek API 独立配置脚本
+├── doctor.ps1                    # 环境诊断脚本
+├── uninstall-config.ps1          # 配置恢复/卸载脚本
+├── install_wsl.sh                # WSL Ubuntu 安装脚本
+├── .gitignore                    # Git 忽略规则
+├── lib/                          # 公共库
+│   ├── common.ps1                # 通用工具函数
+│   ├── env-check.ps1             # 环境检测函数
+│   ├── config-writer.ps1         # 配置读写函数
+│   ├── logger.ps1                # 日志和输出
+│   ├── bootstrap.ps1             # 入口初始化和库加载
 │   └── deepseek-env.defaults.json # DeepSeek 默认 env 模板
-├── scripts/                     # 轻量自检脚本
+├── scripts/                      # 轻量自检脚本
 │   ├── check.sh
-│   └── check.ps1
-├── docs/                        # 文档
-│   ├── 闲鱼商品说明.md           # 闲鱼商品详情文案
-│   ├── 用户使用教程.md           # 用户使用教程
-│   ├── 常见问题FAQ.md            # 常见问题解答
-│   ├── 售后排查话术.md           # 售后话术参考
-│   └── 测试清单.md               # 手动测试清单
-├── examples/                    # 示例文件
+│   ├── check.ps1
+│   └── build-release.ps1         # Release 打包脚本
+├── docs/                         # 文档
+│   ├── 闲鱼商品说明.md
+│   ├── 用户使用教程.md
+│   ├── 常见问题FAQ.md
+│   ├── 售后排查话术.md
+│   ├── 视频教程脚本.md
+│   └── 测试清单.md
+├── examples/                     # 示例文件
 │   ├── settings.deepseek.example.json
 │   └── report.example.txt
-├── logs/                        # 运行日志（不提交 Git）
-└── backup/                      # 配置备份（不提交 Git）
+├── logs/                         # 运行日志（不提交 Git）
+├── backup/                       # 配置备份（不提交 Git）
+└── reports/                      # 安装报告（不提交 Git）
+```
+
+---
+
+## 🔧 高级用法
+
+> 以下为 PowerShell 命令行用法，适合高级用户或远程指导场景。
+> 普通用户请直接双击 `.cmd` 文件。
+
+### Windows 命令行安装
+
+```powershell
+# 懒人一键安装入口
+powershell -ExecutionPolicy Bypass -File .\Start-Here.ps1
+
+# 直接进入某模式
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Mode InstallAndConfigure
+
+# 非交互配置（不把 Key 写进命令历史）
+$env:CCDI_API_KEY = "sk-你的DeepSeekKey"
+powershell -ExecutionPolicy Bypass -File .\configure-deepseek.ps1 -NonInteractive -SkipApiTest
+Remove-Item Env:\CCDI_API_KEY
+```
+
+### WSL 安装
+
+```bash
+# 在 WSL Ubuntu 终端中
+chmod +x install_wsl.sh
+./install_wsl.sh
+```
+
+### 诊断
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\doctor.ps1
 ```
 
 ---
@@ -170,19 +181,13 @@ claude-deepseek-installer/
 
 ## 🩺 售后流程
 
-如果遇到问题，请按以下步骤操作：
+### 第 1 步：双击「一键诊断.cmd」
 
-### 第 1 步：运行诊断
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\doctor.ps1
-```
-
-这会生成一份 `report.txt` 诊断报告。
+这会生成一份 `report-YYYYMMDD-HHMMSS.txt` 诊断报告。
 
 ### 第 2 步：发送报告
 
-将 `report.txt` 文件发送给卖家/技术支持。
+将生成的 report 文件发送给卖家/技术支持。
 
 ### 第 3 步：不要发送 API Key
 
@@ -193,8 +198,32 @@ powershell -ExecutionPolicy Bypass -File .\doctor.ps1
 
 ## ❓ 常见问题
 
+### Q: 双击开始安装没有反应？
+A: 右键「开始安装.cmd」→「以管理员身份运行」试试。如果还不行，请截图窗口内容发给技术支持。
+
+### Q: 输入 API Key 为什么不显示？
+A: 这是安全保护机制，输入和粘贴都不会显示字符。直接粘贴后按回车即可。
+
+### Q: API 测试失败是不是安装失败？
+A: 不一定。API 测试可能因为 Key 不对、余额不足、网络问题等失败。Claude Code 本身可能已安装成功，配置也已写入。先检查 Key 和余额，运行诊断确认。
+
+### Q: 没有 VS Code 能不能用？
+A: 可以。Claude Code CLI 是核心交付，可以在 PowerShell/CMD 中直接使用。VS Code 是可选增强项。
+
+### Q: Windows 和 WSL 有什么区别？
+A: Windows 原生是默认推荐方式。WSL 是 Linux 子系统，适合需要 Linux 环境的开发者。本工具默认配置 Windows 环境，WSL 是高级选项。
+
+### Q: 我可以不给卖家 API Key 吗？
+A: 可以。您自己输入 API Key，脚本只写入本机配置。请不要把 Key 发给任何人。
+
+### Q: 如何生成诊断报告？
+A: 双击「一键诊断.cmd」即可。
+
+### Q: 如何恢复旧配置？
+A: 双击「恢复或卸载配置.cmd」→ 选择恢复备份。
+
 ### Q: 需要管理员权限吗？
-A: **不需要。** 本工具以普通用户权限运行即可。如果 npm 安装遇到权限问题，脚本会提示解决方案。
+A: **不需要。** 本工具以普通用户权限运行即可。
 
 ### Q: claude 命令提示不存在？
 A: 关闭 PowerShell 窗口后重新打开，让 PATH 环境变量刷新。
@@ -205,17 +234,8 @@ A: API Key 不正确。请到 [platform.deepseek.com](https://platform.deepseek.
 ### Q: 402 错误？
 A: DeepSeek 账户余额不足，请充值。
 
-### Q: 429 错误？
-A: 请求过于频繁，请稍等几分钟再试。
-
 ### Q: 5xx 错误？
 A: DeepSeek 官方服务异常，稍后重试。不是您的配置问题。
-
-### Q: 能用 Claude 官方模型吗？
-A: 本工具配置的是 DeepSeek 兼容层接入方式。如需使用 Claude 官方模型，需要 Anthropic 官方 API Key，并自行配置 Anthropic 的 API 地址。
-
-### Q: 支持多模态（图片/文档）吗？
-A: 取决于 DeepSeek 官方对该兼容接口的支持情况。请查阅 [DeepSeek 官方文档](https://platform.deepseek.com/docs)。
 
 ---
 

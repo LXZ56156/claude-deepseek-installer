@@ -4,6 +4,12 @@ logs/
 # 备份目录 - 包含用户配置备份，不提交
 backup/
 
+# 安装报告目录 - 包含用户环境信息，不提交
+reports/
+
+# Release 打包输出 - 不提交
+release/
+
 # 用户配置示例 - 实际配置不提交
 *.settings.json
 !examples/settings.deepseek.example.json
@@ -12,9 +18,17 @@ backup/
 report*.txt
 !examples/report.example.txt
 
+# 安装完成报告
+install-report*.txt
+
 # PowerShell 临时文件
 *.tmp
 *.log
 
 # VS Code
 .vscode/
+
+# 系统文件
+Thumbs.db
+.DS_Store
+desktop.ini

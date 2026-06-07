@@ -1,74 +1,117 @@
-# 快速开始指南
+# 快速开始指南 (v1.3)
 
-## 一、5 分钟上手
+## 一、解压即用（推荐方式）
 
-### 1. 打开 PowerShell
+### 第 1 步：解压
 
-**方法 A（推荐）：**
-在项目文件夹中，按住 `Shift` 键，右键点击空白处 → **"在此处打开 PowerShell 窗口"**
+下载 ZIP 文件，右键解压到任意目录（桌面也可以）。
 
-**方法 B：**
-按 `Win + R`，输入 `powershell`，然后 `cd` 到项目目录：
-```powershell
-cd C:\Users\你的用户名\Downloads\claude-deepseek-installer
-```
+### 第 2 步：双击「开始安装.cmd」
 
-### 2. 运行安装脚本
+在解压后的文件夹中找到 **`开始安装.cmd`**，双击运行。
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
+### 第 3 步：按提示操作
 
-### 3. 按提示操作
+脚本会显示菜单：
 
 ```
-[1] 仅安装 Claude Code（不配置 DeepSeek）
-[2] 安装 Claude Code 并配置 DeepSeek API（推荐）  ← 选这个
+[1] 懒人一键安装（推荐）
+    自动检测 → 安装 → 配置 → 测试 → 生成报告
+[2] 仅配置 DeepSeek API
 [3] 仅运行环境诊断
-[4] 仅配置 DeepSeek API
-[5] 退出
+[4] 配置 WSL Ubuntu 环境（高级选项）
+[5] 恢复或卸载配置
+[6] 退出
 ```
 
-输入 `2` 并按回车。
+直接按回车（默认选 [1]），开始自动安装流程。
 
-### 4. 输入 API Key
+### 第 4 步：获取 API Key
 
-当提示输入 API Key 时：
-1. 打开浏览器访问 https://platform.deepseek.com
-2. 登录后在 API Keys 页面复制您的 Key
-3. 回到 PowerShell，按 `Ctrl+V` 粘贴（不会显示任何字符）
-4. 按回车确认
+脚本会自动打开 DeepSeek API Key 页面。如果没自动打开，手动访问：
+https://platform.deepseek.com/api_keys
 
-### 5. 完成！
+1. 注册/登录 DeepSeek 账号
+2. 点击「创建 API Key」
+3. 复制生成的 Key（通常以 `sk-` 开头）
 
-看到 `✅ 安装流程完成！` 后，关闭 PowerShell 并重新打开。
+### 第 5 步：粘贴 API Key
 
-测试是否成功：
+回到安装窗口，粘贴 Key（**粘贴时不显示字符，这是安全保护**），按回车。
+
+### 第 6 步：等待安装
+
+脚本会自动完成：
+1. ✅ 检查系统环境
+2. ✅ 安装 Claude Code CLI
+3. ✅ 写入 DeepSeek 配置
+4. ✅ 测试 API 连接
+5. ✅ 创建测试项目
+6. ✅ 生成安装完成报告
+
+### 第 7 步：开始使用
+
+看到「安装流程全部完成」后，打开终端：
+
 ```powershell
-claude --version
+cd "%USERPROFILE%\Desktop\ClaudeCode-Test"
+claude
 ```
+
+---
 
 ## 二、遇到问题？
 
-运行诊断脚本：
-```powershell
-powershell -ExecutionPolicy Bypass -File .\doctor.ps1
-```
+双击 **`一键诊断.cmd`**，把生成的 `report-YYYYMMDD-HHMMSS.txt` 文件发给技术支持。
 
-将生成的 `report.txt` 发给卖家/技术支持。
+**注意：诊断报告中不包含完整 API Key，可以放心发送。**
 
-## 三、常用命令
+---
+
+## 三、入口文件速查
+
+| 文件 | 什么时候用 |
+|------|-----------|
+| `开始安装.cmd` | 首次安装 / 重新安装 |
+| `一键诊断.cmd` | 遇到问题 / 售后支持 |
+| `恢复或卸载配置.cmd` | 换 Key / 恢复备份 / 清除配置 |
+
+---
+
+## 四、获取 DeepSeek API Key
+
+1. 访问 https://platform.deepseek.com
+2. 注册账号（支持手机号）
+3. 进入 "API Keys" 页面
+4. 点击 "创建 API Key"
+5. 复制并保存 Key（只显示一次！）
+6. Key 格式示例：`sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
+
+**注意：DeepSeek API 是付费服务，请关注余额。**
+
+---
+
+## 五、常用命令
 
 | 命令 | 作用 |
 |------|------|
 | `claude` | 启动 Claude Code |
 | `claude --version` | 查看版本 |
-| `claude doctor` | 官方诊断 |
-| `.\doctor.ps1` | 本工具深度诊断 |
-| `.\configure-deepseek.ps1` | 修改 API Key |
-| `.\uninstall-config.ps1` | 恢复/清除配置 |
+| `claude doctor` | Claude Code 官方诊断 |
 
-非交互配置（避免 Key 出现在命令历史）：
+---
+
+## 六、高级用法
+
+> 以下为 PowerShell 命令行用法，适合高级用户或远程指导场景。
+
+### 直接运行入口脚本
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Start-Here.ps1
+```
+
+### 非交互配置（避免 Key 出现在命令历史）
 
 ```powershell
 $env:CCDI_API_KEY = "sk-你的DeepSeekKey"
@@ -76,9 +119,13 @@ powershell -ExecutionPolicy Bypass -File .\configure-deepseek.ps1 -NonInteractiv
 Remove-Item Env:\CCDI_API_KEY
 ```
 
-## 四、WSL 用户
+### 运行诊断
 
-如果使用 WSL Ubuntu：
+```powershell
+powershell -ExecutionPolicy Bypass -File .\doctor.ps1
+```
+
+### WSL 用户
 
 ```bash
 # 在 WSL Ubuntu 终端中
@@ -86,22 +133,3 @@ cd /mnt/c/Users/你的用户名/Downloads/claude-deepseek-installer
 chmod +x install_wsl.sh
 ./install_wsl.sh
 ```
-
-WSL 非交互配置：
-
-```bash
-export CCDI_API_KEY="sk-你的DeepSeekKey"
-./install_wsl.sh --mode configure --non-interactive --skip-api-test
-unset CCDI_API_KEY
-```
-
-## 五、获取 DeepSeek API Key
-
-1. 访问 https://platform.deepseek.com
-2. 注册账号（支持手机号）
-3. 进入 "API Keys" 页面
-4. 点击 "创建 API Key"
-5. 复制并保存 Key（只显示一次！）
-6. Key 格式：`sk-xxxxxxxxxxxxxxxx`
-
-**注意：DeepSeek API 是付费服务，请关注余额。**
