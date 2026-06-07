@@ -9,6 +9,8 @@
 #   不会删除 Claude Code 本身
 # ============================================================
 
+try {
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
@@ -172,3 +174,20 @@ switch ($choice) {
 
 Write-Host ""
 Write-Info "日志已保存: $(Get-LogFilePath)"
+}
+catch {
+    $msg = "脚本执行过程中发生未预期的错误：$($_.Exception.Message)"
+
+    if (Get-Command Write-Error-Msg -ErrorAction SilentlyContinue) {
+        Write-Error-Msg $msg
+    }
+    else {
+        Write-Host "[ERROR] $msg" -ForegroundColor Red
+    }
+
+    if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+        Write-Log "ERROR" $_
+    }
+
+    exit 1
+}

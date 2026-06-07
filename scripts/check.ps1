@@ -25,6 +25,26 @@ Write-Host "[check] load libraries"
 . (Join-Path $RootDir "lib\bootstrap.ps1")
 $null = Initialize-CcdiScript -ScriptName "check"
 
+Write-Host "[check] bootstrap exports"
+$requiredCommands = @(
+    "Write-Log",
+    "Write-Info",
+    "Write-Success",
+    "Write-Warning",
+    "Write-Error-Msg",
+    "Invoke-CommandSafe",
+    "Get-WindowsVersionInfo",
+    "Test-ClaudeInstalled",
+    "Write-DeepSeekConfig",
+    "Get-DeepSeekConfigStatus"
+)
+
+foreach ($cmd in $requiredCommands) {
+    if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
+        throw "Bootstrap 导出检查失败：未找到 $cmd"
+    }
+}
+
 Write-Host "[check] Mask-ApiKey"
 $key = "sk-1234567890abcdef1234567890abcdef"
 $masked = Mask-ApiKey -Key $key

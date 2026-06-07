@@ -762,14 +762,19 @@ function Main {
         Show-Menu
     }
     catch {
-        # 对用户显示友好中文提示，详细错误写入日志
-        Write-Error-Msg "脚本执行过程中发生未预期的错误，请尝试以下操作："
-        Write-Info "  1. 关闭 PowerShell 窗口后重新打开"
-        Write-Info "  2. 重新运行本脚本"
-        Write-Info "  3. 如果问题持续，请运行 doctor.ps1 并将 report.txt 发给技术支持"
-        Write-Log "ERROR" "未预期错误: $($_.Exception.Message)"
-        Write-Log "ERROR" "堆栈: $($_.ScriptStackTrace)"
-        Write-Info "日志文件: $(Get-LogFilePath)"
+        $msg = "脚本执行过程中发生未预期的错误：$($_.Exception.Message)"
+
+        if (Get-Command Write-Error-Msg -ErrorAction SilentlyContinue) {
+            Write-Error-Msg $msg
+        }
+        else {
+            Write-Host "[ERROR] $msg" -ForegroundColor Red
+        }
+
+        if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+            Write-Log "ERROR" $_
+        }
+
         exit 1
     }
 }

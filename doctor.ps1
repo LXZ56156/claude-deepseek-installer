@@ -64,11 +64,11 @@ function Add-CheckResult {
         "OK"   { Write-Result $Name "OK" $Detail }
         "WARN" {
             Write-Result $Name "WARN" $Detail
-            [void]$script:DoctorState.Warnings.Add("$Name: $Detail")
+            [void]$script:DoctorState.Warnings.Add("${Name}: $Detail")
         }
         "ERROR"{
             Write-Result $Name "ERROR" $Detail
-            [void]$script:DoctorState.Errors.Add("$Name: $Detail")
+            [void]$script:DoctorState.Errors.Add("${Name}: $Detail")
         }
         "SKIP" { Write-Result $Name "SKIP" $Detail }
     }
@@ -706,7 +706,18 @@ try {
     Main
 }
 catch {
-    Write-Error-Msg "诊断脚本执行异常: $($_.Exception.Message)"
-    Write-Log "ERROR" "诊断异常: $($_.Exception.Message)"
-    Write-Log "ERROR" "堆栈: $($_.ScriptStackTrace)"
+    $msg = "脚本执行过程中发生未预期的错误：$($_.Exception.Message)"
+
+    if (Get-Command Write-Error-Msg -ErrorAction SilentlyContinue) {
+        Write-Error-Msg $msg
+    }
+    else {
+        Write-Host "[ERROR] $msg" -ForegroundColor Red
+    }
+
+    if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+        Write-Log "ERROR" $_
+    }
+
+    exit 1
 }

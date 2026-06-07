@@ -391,6 +391,44 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
     Write-Host "  编码规范化完成。" -ForegroundColor Green
 
     # ============================================================
+    # 3.47 Bootstrap 导出检查
+    # ============================================================
+
+    Write-Host ""
+    Write-Host "[3.47/5] Bootstrap 导出检查..." -ForegroundColor Cyan
+
+    Push-Location $stagingDir
+    try {
+        . .\lib\bootstrap.ps1
+        Initialize-CcdiScript -ScriptName "bootstrap-smoke" | Out-Null
+
+        $requiredCommands = @(
+            "Write-Log",
+            "Write-Info",
+            "Write-Success",
+            "Write-Warning",
+            "Write-Error-Msg",
+            "Invoke-CommandSafe",
+            "Get-WindowsVersionInfo",
+            "Test-ClaudeInstalled",
+            "Write-DeepSeekConfig",
+            "Get-DeepSeekConfigStatus"
+        )
+
+        foreach ($cmd in $requiredCommands) {
+            if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
+                throw "Bootstrap 导出检查失败：未找到 $cmd"
+            }
+        }
+    }
+    finally {
+        Pop-Location
+        Remove-Item -Path (Join-Path $stagingDir "logs") -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Host "  Bootstrap 导出检查通过。" -ForegroundColor Green
+
+    # ============================================================
     # 3.5 扫描文件内容，防止真实 API Key 泄露
     # ============================================================
 

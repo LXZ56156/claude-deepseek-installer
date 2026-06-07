@@ -10,6 +10,11 @@ function Get-CcdiProjectRoot {
     return $script:CcdiProjectRoot
 }
 
+. (Join-Path $script:CcdiLibDir "logger.ps1")
+. (Join-Path $script:CcdiLibDir "common.ps1")
+. (Join-Path $script:CcdiLibDir "env-check.ps1")
+. (Join-Path $script:CcdiLibDir "config-writer.ps1")
+
 function Initialize-CcdiScript {
     <#
     .SYNOPSIS
@@ -21,11 +26,6 @@ function Initialize-CcdiScript {
         [Parameter(Mandatory = $true)]
         [string]$ScriptName
     )
-
-    . (Join-Path $script:CcdiLibDir "logger.ps1")
-    . (Join-Path $script:CcdiLibDir "common.ps1")
-    . (Join-Path $script:CcdiLibDir "env-check.ps1")
-    . (Join-Path $script:CcdiLibDir "config-writer.ps1")
 
     Initialize-Logger -LogDirPath (Join-Path $script:CcdiProjectRoot "logs") -ScriptName $ScriptName
 

@@ -1204,14 +1204,19 @@ function Main {
         Show-MainMenu
     }
     catch {
-        Write-Error-Msg "脚本执行过程中发生未预期的错误。"
-        Write-Info "  1. 关闭窗口后重新打开"
-        Write-Info "  2. 重新运行「开始安装.cmd」"
-        Write-Info "  3. 如问题持续，运行「一键诊断.cmd」并将 report.txt 发给技术支持"
-        Write-Log "ERROR" "未预期错误: $($_.Exception.Message)"
-        Write-Log "ERROR" "堆栈: $($_.ScriptStackTrace)"
-        Write-Info "日志文件: $(Get-LogFilePath)"
-        Pause-ForUser
+        $msg = "脚本执行过程中发生未预期的错误：$($_.Exception.Message)"
+
+        if (Get-Command Write-Error-Msg -ErrorAction SilentlyContinue) {
+            Write-Error-Msg $msg
+        }
+        else {
+            Write-Host "[ERROR] $msg" -ForegroundColor Red
+        }
+
+        if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+            Write-Log "ERROR" $_
+        }
+
         exit 1
     }
 }
