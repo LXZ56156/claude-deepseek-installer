@@ -18,7 +18,8 @@
 param(
     [switch]$NonInteractive,
     [switch]$SkipApiTest,
-    [switch]$SkipDisclaimer
+    [switch]$SkipDisclaimer,
+    [switch]$StepPause
 )
 
 # ============================================================
@@ -38,6 +39,7 @@ $ScriptVersion = "1.3.0"
 # 状态变量
 $script:ClaudeInstalled = $false
 $script:ClaudeInstallMethod = ""
+$script:ClaudeInstallStatus = ""
 $script:ConfigWritten = $false
 $script:ApiTestPassed = $false
 $script:ApiTestSkipped = $false
@@ -88,7 +90,9 @@ function Write-ResultLine {
 }
 
 function Pause-ForUser {
-    if (-not $NonInteractive) {
+    param([switch]$Force)
+
+    if (-not $NonInteractive -and ($Force -or $StepPause)) {
         Write-Host ""
         Read-Host "按回车键继续..."
     }
@@ -321,6 +325,7 @@ function Step-InstallClaudeCode {
 
         $script:ClaudeInstalled = $true
         $script:ClaudeInstallMethod = "已存在"
+        $script:ClaudeInstallStatus = "AlreadyInstalled"
         return $true
     }
 
@@ -376,6 +381,7 @@ function Step-InstallClaudeCode {
             Write-Success "Claude Code 安装验证通过: $newVersion"
             $script:ClaudeInstalled = $true
             $script:ClaudeInstallMethod = "Native Install"
+            $script:ClaudeInstallStatus = "Installed"
             return $true
         }
         else {
@@ -387,6 +393,7 @@ function Step-InstallClaudeCode {
                 Write-Success "Claude Code 安装验证通过（PATH 刷新后）: $newVersion"
                 $script:ClaudeInstalled = $true
                 $script:ClaudeInstallMethod = "Native Install"
+                $script:ClaudeInstallStatus = "Installed"
                 return $true
             }
             Write-Warning "PATH 刷新后仍未检测到 claude，将继续尝试 npm fallback。"
@@ -422,22 +429,27 @@ function Step-InstallClaudeCode {
                     Write-Success "Node.js 安装完成！"
                     Write-Warning "请关闭并重新打开 PowerShell/命令提示符，然后重新运行本脚本。"
                     Write-Warning "这样 Node.js 和 npm 命令才能被正确识别。"
+                    $script:ClaudeInstallMethod = "Node.js via winget"
+                    $script:ClaudeInstallStatus = "NeedsRestart"
                 }
                 else {
                     Write-Error-Msg "Node.js 自动安装失败。"
                     Write-Info "请手动下载安装: https://nodejs.org (选择 LTS 版本)"
                     Write-Info "安装完成后重新运行本脚本。"
+                    $script:ClaudeInstallStatus = "Failed"
                 }
             }
             else {
                 Write-Info "请手动安装 Node.js 后重新运行本脚本。"
                 Write-Info "下载地址: https://nodejs.org (选择 LTS 版本)"
+                $script:ClaudeInstallStatus = "Failed"
             }
         }
         else {
             Write-Info "未检测到 winget，请手动安装 Node.js:"
             Write-Info "下载地址: https://nodejs.org (选择 LTS 版本)"
             Write-Info "安装完成后，关闭并重新打开终端，然后重新运行本脚本。"
+            $script:ClaudeInstallStatus = "Failed"
         }
 
         $script:ClaudeInstalled = $false
@@ -460,6 +472,7 @@ function Step-InstallClaudeCode {
             Write-Warning "建议使用 nvm 管理 Node.js，或使用官方 Native Install 方式。"
         }
         $script:ClaudeInstalled = $false
+        $script:ClaudeInstallStatus = "Failed"
         return $false
     }
 
@@ -474,6 +487,7 @@ function Step-InstallClaudeCode {
         }
         $script:ClaudeInstalled = $true
         $script:ClaudeInstallMethod = "npm fallback"
+        $script:ClaudeInstallStatus = "Installed"
         return $true
     }
     else {
@@ -484,6 +498,7 @@ function Step-InstallClaudeCode {
             Write-Success "Claude Code 检测成功（PATH 刷新后）: $newVersion"
             $script:ClaudeInstalled = $true
             $script:ClaudeInstallMethod = "npm fallback"
+            $script:ClaudeInstallStatus = "Installed"
             return $true
         }
 
@@ -498,6 +513,7 @@ function Step-InstallClaudeCode {
 
         $script:ClaudeInstalled = $false
         $script:ClaudeInstallMethod = "可能已安装（PATH 未刷新）"
+        $script:ClaudeInstallStatus = "NeedsRestart"
         return $false
     }
 }
@@ -692,7 +708,7 @@ function Step-TestApi {
 function Step-CreateTestProject {
     Write-Step "Step 6/7：创建测试项目"
 
-    $desktopPath = [Environment]::GetFolderPath("Desktop")
+    $desktopPath = Get-DesktopPath
     $testDir = Join-Path $desktopPath "ClaudeCode-Test"
 
     # 如果目录已存在，使用带时间戳的备用名
@@ -947,17 +963,21 @@ function Show-CompletionPage {
         Write-Warning "DeepSeek 配置未完成"
         Write-Info "请稍后运行 configure-deepseek.ps1 配置 API Key。"
     }
+    elseif ($script:ClaudeInstallStatus -eq "NeedsRestart") {
+        Write-Host "==============================================================" -ForegroundColor Yellow
+        Write-Host "            需要重开终端后继续                                " -ForegroundColor Yellow
+        Write-Host "==============================================================" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Warning "当前终端还无法识别新安装的命令。"
+        Write-Info "下一步: 关闭此窗口，重新双击「开始安装.cmd」。"
+    }
     else {
         Write-Host "==============================================================" -ForegroundColor Red
         Write-Host "            安装未完成                                        " -ForegroundColor Red
         Write-Host "==============================================================" -ForegroundColor Red
         Write-Host ""
         Write-Error-Msg "Claude Code 安装未成功。"
-        Write-Info "请尝试以下操作:"
-        Write-Info "  1. 检查上述错误信息"
-        Write-Info "  2. 手动安装 Node.js 后重试"
-        Write-Info "  3. 运行「一键诊断.cmd」获取诊断报告"
-        Write-Info "  4. 将诊断报告发给技术支持"
+        Write-Info "下一步: 运行「一键诊断.cmd」生成 report.txt，并将报告发给技术支持。"
     }
 
     Write-Host ""
@@ -980,13 +1000,18 @@ function Start-LazyInstall {
     # Step 2: 安装 Claude Code
     $claudeOk = Step-InstallClaudeCode
     if (-not $claudeOk) {
-        Write-Error-Msg "Claude Code 安装未成功，跳过后续配置步骤。"
-        Write-Info "请先解决安装问题后重新运行本脚本。"
+        if ($script:ClaudeInstallStatus -eq "NeedsRestart") {
+            Write-Warning "当前需要重开终端后继续，已跳过后续配置步骤。"
+        }
+        else {
+            Write-Error-Msg "Claude Code 安装未成功，跳过后续配置步骤。"
+            Write-Info "请先解决安装问题后重新运行本脚本。"
+        }
         Show-CompletionPage
         return
     }
 
-    Pause-ForUser
+    Pause-ForUser -Force
 
     # Step 3: 获取 API Key
     $apiKey = Step-GetApiKey
@@ -1032,7 +1057,7 @@ function Start-LazyInstall {
 function Start-ConfigureOnly {
     Write-Step "仅配置 DeepSeek API"
 
-    . (Join-Path $ScriptDir "configure-deepseek.ps1")
+    & (Join-Path $ScriptDir "configure-deepseek.ps1")
     # configure-deepseek.ps1 有自己的完整交互流程
     exit 0
 }
@@ -1206,15 +1231,11 @@ function Main {
     catch {
         $msg = "脚本执行过程中发生未预期的错误：$($_.Exception.Message)"
 
-        if (Get-Command Write-Error-Msg -ErrorAction SilentlyContinue) {
-            Write-Error-Msg $msg
+        if (Get-Command Write-FatalError -ErrorAction SilentlyContinue) {
+            Write-FatalError -Message $msg -ErrorRecord $_
         }
         else {
             Write-Host "[ERROR] $msg" -ForegroundColor Red
-        }
-
-        if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-            Write-Log "ERROR" $_
         }
 
         exit 1

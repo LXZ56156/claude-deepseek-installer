@@ -15,7 +15,23 @@ function Get-UserProfilePath {
     .SYNOPSIS
         获取当前用户目录路径，兼容中文 Windows
     #>
+    if ($env:CCDI_TEST_MODE -eq "1" -and -not [string]::IsNullOrWhiteSpace($env:CCDI_TEST_USERPROFILE)) {
+        return $env:CCDI_TEST_USERPROFILE
+    }
+
     return [System.Environment]::GetFolderPath('UserProfile')
+}
+
+function Get-DesktopPath {
+    <#
+    .SYNOPSIS
+        获取当前用户桌面路径。测试模式下可重定向到临时目录。
+    #>
+    if ($env:CCDI_TEST_MODE -eq "1" -and -not [string]::IsNullOrWhiteSpace($env:CCDI_TEST_DESKTOP)) {
+        return $env:CCDI_TEST_DESKTOP
+    }
+
+    return [Environment]::GetFolderPath("Desktop")
 }
 
 function Get-ClaudeConfigDir {

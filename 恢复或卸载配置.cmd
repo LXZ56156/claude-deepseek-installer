@@ -13,6 +13,8 @@ if not exist "%~dp0lib\bootstrap.ps1" (
     exit /b 1
 )
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0uninstall-config.ps1"
+set "PS_EXIT=%ERRORLEVEL%"
 echo.
 echo Press any key to exit...
 pause >nul
+exit /b %PS_EXIT%

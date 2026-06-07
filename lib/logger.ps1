@@ -122,6 +122,32 @@ function Write-Error-Msg {
     Write-Log "ERROR" $Message
 }
 
+function Write-FatalError {
+    <#
+    .SYNOPSIS
+        输出入口脚本顶层异常兜底信息。
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+        [object]$ErrorRecord = $null
+    )
+
+    Write-Error-Msg $Message
+    if ($ErrorRecord) {
+        Write-Log "ERROR" $ErrorRecord
+    }
+
+    if (Get-Command Get-LogFilePath -ErrorAction SilentlyContinue) {
+        $logFile = Get-LogFilePath
+        if ($logFile) {
+            Write-Info "日志文件: $logFile"
+        }
+    }
+
+    Write-Info "如问题持续，请运行「一键诊断.cmd」并将 report.txt 发给技术支持。"
+}
+
 function Write-Step {
     <#
     .SYNOPSIS

@@ -173,15 +173,11 @@ Write-Info "如需恢复旧配置，请运行: uninstall-config.ps1"
 catch {
     $msg = "脚本执行过程中发生未预期的错误：$($_.Exception.Message)"
 
-    if (Get-Command Write-Error-Msg -ErrorAction SilentlyContinue) {
-        Write-Error-Msg $msg
+    if (Get-Command Write-FatalError -ErrorAction SilentlyContinue) {
+        Write-FatalError -Message $msg -ErrorRecord $_
     }
     else {
         Write-Host "[ERROR] $msg" -ForegroundColor Red
-    }
-
-    if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-        Write-Log "ERROR" $_
     }
 
     exit 1

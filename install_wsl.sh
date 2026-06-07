@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # install_wsl.sh - WSL Ubuntu 内 Claude Code 安装配置脚本
-# 版本: 1.2.0
+# 版本: 1.3.0
 #
 # 用法:
 #   chmod +x install_wsl.sh
@@ -26,7 +26,7 @@ BACKUP_DIR="$SCRIPT_DIR/backup"
 DEFAULTS_FILE="$SCRIPT_DIR/lib/deepseek-env.defaults.json"
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 LOG_FILE="$LOG_DIR/install_wsl-${TIMESTAMP}.log"
-SCRIPT_VERSION="1.2.0"
+SCRIPT_VERSION="1.3.0"
 MODE="menu"
 YES=0
 NON_INTERACTIVE=0
@@ -65,22 +65,22 @@ log() {
 }
 
 info() {
-    echo -e "${CYAN}[信息]${NC} $*"
+    echo -e "${CYAN}[INFO]${NC} $*"
     log "INFO" "$*"
 }
 
 success() {
-    echo -e "${GREEN}[成功]${NC} $*"
+    echo -e "${GREEN}[OK]${NC} $*"
     log "INFO" "[OK] $*"
 }
 
 warn() {
-    echo -e "${YELLOW}[警告]${NC} $*"
+    echo -e "${YELLOW}[WARN]${NC} $*"
     log "WARN" "$*"
 }
 
 error() {
-    echo -e "${RED}[错误]${NC} $*"
+    echo -e "${RED}[ERROR]${NC} $*"
     log "ERROR" "$*"
 }
 
@@ -407,6 +407,47 @@ except:
     fi
 }
 
+parse_api_content() {
+    if command -v node &> /dev/null; then
+        node << 'NODEEOF'
+const fs = require('fs');
+try {
+  const data = JSON.parse(fs.readFileSync(0, 'utf-8'));
+  if (Array.isArray(data.content) && data.content.length > 0) {
+    console.log(data.content[0].text || '');
+  } else if (data.content) {
+    console.log(String(data.content));
+  } else if (data.choices && data.choices[0] && data.choices[0].message) {
+    console.log(data.choices[0].message.content || '');
+  } else {
+    console.log('UNKNOWN_FORMAT');
+  }
+} catch (e) {
+  console.log('PARSE_ERROR: ' + e.message);
+}
+NODEEOF
+    elif command -v python3 &> /dev/null; then
+        python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    if 'content' in data:
+        if isinstance(data['content'], list):
+            print(data['content'][0].get('text', ''))
+        else:
+            print(str(data['content']))
+    elif 'choices' in data:
+        print(data['choices'][0].get('message', {}).get('content', ''))
+    else:
+        print('UNKNOWN_FORMAT')
+except Exception as e:
+    print(f'PARSE_ERROR: {e}')
+"
+    else
+        echo "UNKNOWN_FORMAT"
+    fi
+}
+
 # ============================================================
 # 免责声明
 # ============================================================
@@ -419,9 +460,9 @@ show_disclaimer() {
 
     clear
     echo ""
-    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║     Claude Code + DeepSeek WSL 安装脚本 v${SCRIPT_VERSION}              ║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${CYAN}============================================================${NC}"
+    echo -e "${CYAN}  Claude Code + DeepSeek WSL 安装脚本 v${SCRIPT_VERSION}${NC}"
+    echo -e "${CYAN}============================================================${NC}"
     echo ""
     echo -e "${YELLOW}【重要说明】${NC}"
     echo ""
@@ -942,22 +983,7 @@ EOF
     case $http_code in
         200)
             local content
-            content=$(echo "$body" | python3 -c "
-import json, sys
-try:
-    data = json.load(sys.stdin)
-    if 'content' in data:
-        if isinstance(data['content'], list):
-            print(data['content'][0].get('text', ''))
-        else:
-            print(str(data['content']))
-    elif 'choices' in data:
-        print(data['choices'][0].get('message', {}).get('content', ''))
-    else:
-        print('UNKNOWN_FORMAT')
-except Exception as e:
-    print(f'PARSE_ERROR: {e}')
-" 2>/dev/null)
+            content=$(echo "$body" | parse_api_content 2>/dev/null)
             if [ -n "$content" ] && [ "$content" != "UNKNOWN_FORMAT" ] && [[ ! "$content" =~ ^PARSE_ERROR ]]; then
                 success "Anthropic Format smoke test 通过！(HTTP 200)"
                 info "模型返回内容: $content"
@@ -1200,25 +1226,25 @@ print_final_summary() {
 
     # 根据状态决定摘要标题
     if [ "$CLAUDE_OK" -eq 1 ] && [ "$CONFIG_OK" -eq 1 ] && [ "$API_TEST_PASSED" -eq 1 ]; then
-        echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${GREEN}║                     安装流程全部完成！                       ║${NC}"
-        echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
+        echo -e "${GREEN}============================================================${NC}"
+        echo -e "${GREEN}  安装流程全部完成！${NC}"
+        echo -e "${GREEN}============================================================${NC}"
     elif [ "$CLAUDE_OK" -eq 1 ] && [ "$CONFIG_OK" -eq 1 ] && [ "$API_TEST_SKIPPED" -eq 1 ]; then
-        echo -e "${YELLOW}╔══════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${YELLOW}║           安装完成（未验证 API 可用）                        ║${NC}"
-        echo -e "${YELLOW}╚══════════════════════════════════════════════════════════════╝${NC}"
+        echo -e "${YELLOW}============================================================${NC}"
+        echo -e "${YELLOW}  安装完成（未验证 API 可用）${NC}"
+        echo -e "${YELLOW}============================================================${NC}"
     elif [ "$CLAUDE_OK" -eq 1 ] && [ "$CONFIG_OK" -eq 1 ] && [ "$API_TEST_FAILED" -eq 1 ]; then
-        echo -e "${YELLOW}╔══════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${YELLOW}║           安装部分完成（API 测试未通过）                      ║${NC}"
-        echo -e "${YELLOW}╚══════════════════════════════════════════════════════════════╝${NC}"
+        echo -e "${YELLOW}============================================================${NC}"
+        echo -e "${YELLOW}  安装部分完成（API 测试未通过）${NC}"
+        echo -e "${YELLOW}============================================================${NC}"
     elif [ "$CLAUDE_OK" -eq 1 ]; then
-        echo -e "${YELLOW}╔══════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${YELLOW}║           安装部分完成                                      ║${NC}"
-        echo -e "${YELLOW}╚══════════════════════════════════════════════════════════════╝${NC}"
+        echo -e "${YELLOW}============================================================${NC}"
+        echo -e "${YELLOW}  安装部分完成${NC}"
+        echo -e "${YELLOW}============================================================${NC}"
     else
-        echo -e "${RED}╔══════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${RED}║           安装未完成，请检查上述错误                          ║${NC}"
-        echo -e "${RED}╚══════════════════════════════════════════════════════════════╝${NC}"
+        echo -e "${RED}============================================================${NC}"
+        echo -e "${RED}  安装未完成，请检查上述错误${NC}"
+        echo -e "${RED}============================================================${NC}"
     fi
     echo ""
 

@@ -128,7 +128,7 @@ claude-deepseek-installer/
 │   └── report.example.txt
 ├── logs/                         # 运行日志（不提交 Git）
 ├── backup/                       # 配置备份（不提交 Git）
-├── reports/                      # 安装报告（不提交 Git）
+├── reports/                      # 安装报告和历史诊断报告（不提交 Git）
 └── release/                      # Release 产物（不提交 Git）
 ```
 
@@ -188,11 +188,11 @@ powershell -ExecutionPolicy Bypass -File .\doctor.ps1
 
 ### 第 1 步：双击「一键诊断.cmd」
 
-这会生成一份 `report-YYYYMMDD-HHMMSS.txt` 诊断报告。
+这会生成项目目录下的 `report.txt` 最新诊断报告，并在 `reports/` 中保留带时间戳的历史报告。
 
 ### 第 2 步：发送报告
 
-将生成的 report 文件发送给卖家/技术支持。
+将项目目录下的 `report.txt` 发送给卖家/技术支持。
 
 ### 第 3 步：不要发送 API Key
 
@@ -204,7 +204,7 @@ powershell -ExecutionPolicy Bypass -File .\doctor.ps1
 ## ❓ 常见问题
 
 ### Q: 双击开始安装没有反应？
-A: 右键「开始安装.cmd」→「以管理员身份运行」试试。如果还不行，请截图窗口内容发给技术支持。
+A: 先确认已经完整解压 ZIP，再尝试英文入口 `Start-Install.cmd`。如果窗口有报错，请截图发给技术支持；确认是权限问题时再尝试管理员运行。
 
 ### Q: 输入 API Key 为什么不显示？
 A: 这是安全保护机制，输入和粘贴都不会显示字符。直接粘贴后按回车即可。

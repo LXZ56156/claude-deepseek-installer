@@ -686,14 +686,41 @@ function Main {
     }
 
     $reportContent = $script:DoctorState.ReportLines -join "`r`n"
-    $outputPath = if ($OutputPath) { $OutputPath } else { Join-Path $ScriptDir "report.txt" }
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($outputPath, $reportContent, $utf8NoBom)
+
+    $savedPaths = @()
+    if ($OutputPath) {
+        $outputPath = $OutputPath
+        $outputDir = Split-Path -Parent $outputPath
+        if ($outputDir -and -not (Test-Path $outputDir)) {
+            New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+        }
+        [System.IO.File]::WriteAllText($outputPath, $reportContent, $utf8NoBom)
+        $savedPaths += $outputPath
+    }
+    else {
+        $reportsDir = Join-Path $ScriptDir "reports"
+        if (-not (Test-Path $reportsDir)) {
+            New-Item -ItemType Directory -Path $reportsDir -Force | Out-Null
+        }
+
+        $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        $outputPath = Join-Path $reportsDir "report-$timestamp.txt"
+        $latestReportPath = Join-Path $ScriptDir "report.txt"
+
+        [System.IO.File]::WriteAllText($outputPath, $reportContent, $utf8NoBom)
+        [System.IO.File]::WriteAllText($latestReportPath, $reportContent, $utf8NoBom)
+        $savedPaths += $outputPath
+        $savedPaths += $latestReportPath
+    }
 
     $fullOutputPath = (Resolve-Path $outputPath -ErrorAction SilentlyContinue).Path
     if (-not $fullOutputPath) { $fullOutputPath = $outputPath }
     Write-Host ""
     Write-Success "诊断报告已保存到: $fullOutputPath"
+    if (-not $OutputPath) {
+        Write-Info "最新报告快捷文件: $(Join-Path $ScriptDir "report.txt")"
+    }
     Write-Info "日志文件: $(Get-LogFilePath)"
     Write-Host ""
     Write-Info "请将上述文件（$fullOutputPath）发送给技术支持。"
@@ -708,15 +735,11 @@ try {
 catch {
     $msg = "脚本执行过程中发生未预期的错误：$($_.Exception.Message)"
 
-    if (Get-Command Write-Error-Msg -ErrorAction SilentlyContinue) {
-        Write-Error-Msg $msg
+    if (Get-Command Write-FatalError -ErrorAction SilentlyContinue) {
+        Write-FatalError -Message $msg -ErrorRecord $_
     }
     else {
         Write-Host "[ERROR] $msg" -ForegroundColor Red
-    }
-
-    if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-        Write-Log "ERROR" $_
     }
 
     exit 1

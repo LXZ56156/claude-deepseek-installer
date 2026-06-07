@@ -69,6 +69,16 @@ for path in [Path("doctor.ps1"), Path("install_wsl.sh")]:
     if "sudo npm install -g @anthropic-ai/claude-code" in text:
         raise SystemExit(f"{path} suggests sudo npm install")
 
+install_wsl = Path("install_wsl.sh").read_text(encoding="utf-8")
+bad_wsl_chars = ["✅", "⚠", "❌", "⏭", "╔", "╚", "║", "═", "━", "┌", "│"]
+found_wsl = [ch for ch in bad_wsl_chars if ch in install_wsl]
+if found_wsl:
+    raise SystemExit(f"install_wsl.sh contains terminal-risk characters: {found_wsl}")
+
+for marker in ("[INFO]", "[OK]", "[WARN]", "[ERROR]"):
+    if marker not in install_wsl:
+        raise SystemExit(f"install_wsl.sh missing ASCII marker {marker}")
+
 doctor = Path("doctor.ps1").read_text(encoding="utf-8")
 if "$script:DoctorState" not in doctor or "$Suggestions +=" in doctor:
     raise SystemExit("doctor state management is not centralized")
