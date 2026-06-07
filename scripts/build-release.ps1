@@ -255,6 +255,119 @@ else {
     $stagingDir = Join-Path $tempDir $ReleaseName
     Copy-Filtered -SourceDir $ProjectRoot -DestDir $stagingDir -Excludes $ExcludePatterns
 
+    # ============================================================
+    # 3.5 扫描文件内容，防止真实 API Key 泄露
+    # ============================================================
+
+    Write-Host ""
+    Write-Host "[3.5/5] 扫描文件内容中的 API Key..." -ForegroundColor Cyan
+
+    # 已知的安全占位符（允许出现）
+    $safePlaceholders = @(
+        "sk-你的DeepSeekKey",
+        "sk-xxxx",
+        "__API_KEY__",
+        "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    )
+
+    # 危险的 API Key 模式
+    $dangerPatterns = @(
+        'sk-[A-Za-z0-9]{20,}',
+        'ANTHROPIC_AUTH_TOKEN.*sk-',
+        'DEEPSEEK_API_KEY.*sk-',
+        'CCDI_API_KEY.*sk-'
+    )
+
+    $apiKeyHits = @()
+
+    function Test-ContainsRealApiKey {
+        param([string]$FilePath, [string]$DisplayPath)
+
+        try {
+            $content = Get-Content -Path $FilePath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+            if (-not $content) { return }
+
+            foreach ($pattern in $dangerPatterns) {
+                $matches = [regex]::Matches($content, $pattern)
+                foreach ($m in $matches) {
+                    $candidate = $m.Value.Trim()
+
+                    # 检查是否为安全占位符
+                    $isSafe = $false
+                    foreach ($safe in $safePlaceholders) {
+                        if ($candidate -match [regex]::Escape($safe)) {
+                            $isSafe = $true
+                            break
+                        }
+                    }
+
+                    # 额外的安全判断: 明显是文档中的示例（不超过 32 字符 + 出现在 markdown 或注释中）
+                    if (-not $isSafe) {
+                        # 提取纯 Key 部分（去掉前缀如 ANTHROPIC_AUTH_TOKEN=）
+                        $keyPart = $candidate -replace '^.*?(sk-[A-Za-z0-9]{20,})', '$1'
+
+                        # 如果 Key 看起来像真实 Key（足够长且复杂）
+                        if ($keyPart.Length -ge 32) {
+                            $apiKeyHits += @{
+                                File    = $DisplayPath
+                                Pattern = $pattern
+                                Match   = ($candidate.Substring(0, [Math]::Min(60, $candidate.Length)) + "...")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch {
+            Write-Host "    [WARN] 无法扫描: $DisplayPath" -ForegroundColor DarkGray
+        }
+    }
+
+    # 递归扫描 staging 目录中的所有文本文件
+    $textExtensions = @("*.ps1", "*.psm1", "*.sh", "*.json", "*.md", "*.txt", "*.cmd", "*.bat",
+                        "*.js", "*.ts", "*.py", "*.html", "*.css", "*.yaml", "*.yml",
+                        "*.xml", "*.ini", "*.cfg", "*.conf", "*.env", "*.example")
+
+    $scanFiles = @()
+    foreach ($ext in $textExtensions) {
+        $scanFiles += Get-ChildItem -Path $stagingDir -Filter $ext -Recurse -ErrorAction SilentlyContinue
+    }
+
+    # 也扫描无扩展名的文件（如 LICENSE）
+    $scanFiles += Get-ChildItem -Path $stagingDir -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -eq "" }
+
+    $scanFiles = $scanFiles | Sort-Object FullName -Unique
+
+    foreach ($file in $scanFiles) {
+        $relPath = $file.FullName.Substring($stagingDir.Length + 1)
+        Test-ContainsRealApiKey -FilePath $file.FullName -DisplayPath $relPath
+    }
+
+    if ($apiKeyHits.Count -gt 0) {
+        Write-Host ""
+        Write-Host "错误: 在待打包文件中扫描到疑似真实 API Key，已中止发布。" -ForegroundColor Red
+        Write-Host ""
+        foreach ($hit in $apiKeyHits) {
+            Write-Host "  [$($hit.File)]" -ForegroundColor Red
+            Write-Host "    匹配模式: $($hit.Pattern)" -ForegroundColor DarkYellow
+            Write-Host "    内容片段: $($hit.Match)" -ForegroundColor DarkYellow
+        }
+        Write-Host ""
+        Write-Host "请确认以上文件中的 sk-... 是否为真实 API Key。" -ForegroundColor Yellow
+        Write-Host "如果是占位符，请替换为安全占位符（如 sk-你的DeepSeekKey 或 __API_KEY__）。" -ForegroundColor Yellow
+        Write-Host "如果是真实 Key，请立即删除并到 DeepSeek 平台重新生成。" -ForegroundColor Yellow
+
+        # 清理临时目录和输出文件
+        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path $OutputDir) {
+            Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        exit 1
+    }
+
+    Write-Host "  内容扫描通过，未发现真实 API Key。" -ForegroundColor Green
+
     Write-Host ""
     Write-Host "  正在创建 ZIP..."
 
@@ -328,10 +441,6 @@ foreach ($entry in $entries) {
     }
 }
 
-# 检查是否有文件包含完整 API Key（基本检查）
-# 注意：这只检查 ZIP 条目的文件名和路径，不检查内容
-# 完整的内容审计应在 git pre-commit hook 中进行
-
 Write-Host ""
 Write-Host "  ZIP 包含 $($zip.Entries.Count) 个条目" -ForegroundColor Green
 
@@ -339,12 +448,18 @@ $zip.Dispose()
 
 if ($issues.Count -gt 0) {
     Write-Host ""
-    Write-Host "警告: 发现 $($issues.Count) 个不应包含的条目。" -ForegroundColor Yellow
-    Write-Host "请检查 .gitignore 和排除规则。" -ForegroundColor Yellow
+    Write-Host "错误: ZIP 中发现 $($issues.Count) 个不应包含的条目，已中止发布。" -ForegroundColor Red
+    foreach ($i in $issues) {
+        Write-Host "  - $i" -ForegroundColor Red
+    }
+    Write-Host ""
+    Write-Host "请检查 .gitignore 和排除规则，修复后重新打包。" -ForegroundColor Yellow
+    Remove-Item $ZipFilePath -Force -ErrorAction SilentlyContinue
+    Remove-Item $Sha256FilePath -Force -ErrorAction SilentlyContinue
+    exit 1
 }
-else {
-    Write-Host "  验证通过，没有不应包含的条目。" -ForegroundColor Green
-}
+
+Write-Host "  验证通过，没有不应包含的条目。" -ForegroundColor Green
 
 # ============================================================
 # 完成
