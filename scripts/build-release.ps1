@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # build-release.ps1 - Release ZIP 打包脚本
 #
 # 用法:
@@ -115,83 +115,41 @@ Write-Host "  输出目录: $OutputDir" -ForegroundColor Green
 Write-Host ""
 
 # ============================================================
-# 收集要打包的文件
+# 收集要打包的文件（统一走 staging 目录）
 # ============================================================
 
 Write-Host "[3/5] 收集文件..." -ForegroundColor Cyan
+Write-Host "  使用文件系统方式打包（统一 staging 流程，确保 API Key 扫描必定执行）..." -ForegroundColor Green
+Write-Host ""
 
-# 使用 git archive 如果可用且是 git 仓库
-$isGitRepo = Test-Path (Join-Path $ProjectRoot ".git")
-$useGitArchive = $isGitRepo -and (Get-Command git -ErrorAction SilentlyContinue)
-
-# 首先检查哪些新增文件不在 Git 中
-if ($useGitArchive) {
-    Push-Location $ProjectRoot
-    try {
-        $untrackedNew = @()
-        $newFiles = @("开始安装.cmd", "一键诊断.cmd", "恢复或卸载配置.cmd", "Start-Here.ps1", "scripts/build-release.ps1")
-        foreach ($f in $newFiles) {
-            $gitStatus = git status --porcelain $f 2>$null
-            if ($gitStatus) {
-                $untrackedNew += $f
-                Write-Host "  [WARN] $f 未在 Git 中跟踪" -ForegroundColor Yellow
-            }
-        }
-        if ($untrackedNew.Count -gt 0) {
-            Write-Host "  注意: 以上文件需要通过 git add 跟踪后才能被 git archive 包含。" -ForegroundColor Yellow
-            Write-Host "  将使用文件系统方式打包。" -ForegroundColor Yellow
-            $useGitArchive = $false
-        }
-    }
-    finally {
-        Pop-Location
-    }
-}
-
-if ($useGitArchive) {
-    Write-Host "  使用 git archive 打包..." -ForegroundColor Green
-    Push-Location $ProjectRoot
-    try {
-        # git archive 自动遵守 .gitignore
-        git archive --format zip --output $ZipFilePath HEAD
-        Write-Host "  git archive 完成。" -ForegroundColor Green
-    }
-    finally {
-        Pop-Location
-    }
-}
-else {
-    Write-Host "  使用文件系统方式打包..." -ForegroundColor Green
-    Write-Host ""
-
-    # 构建排除模式
-    $ExcludePatterns = @(
-        # Git
-        ".git",
-        ".gitignore",
-        ".gitattributes",
-        ".gitmodules",
-        # IDE
-        ".vscode",
-        ".idea",
-        "*.sln",
-        "*.csproj",
-        # 运行时数据
-        "logs",
-        "backup",
-        "reports",
-        # 报告文件
-        "report*.txt",
-        "report*.md",
-        # 临时文件
-        "*.tmp",
-        "*.log",
-        "*.bak",
-        # 系统文件
-        "Thumbs.db",
-        ".DS_Store",
-        "desktop.ini",
-        # release 目录自身
+# 构建排除模式（与 .gitignore 保持一致）
+$ExcludePatterns = @(
+    # Git
+    ".git",
+    ".gitignore",
+    ".gitattributes",
+    ".gitmodules",
+    # IDE
+    ".vscode",
+    ".idea",
+    "*.sln",
+    "*.csproj",
+    # 运行时数据
+    "logs",
+    "backup",
+    "reports",
+    # 报告文件
+    "report*.txt",
+    "report*.md",
+    # 临时文件
+    "*.tmp",
+    "*.log",
+    "*.bak",
+    # 系统文件
+    "Thumbs.db",
+    ".DS_Store",
+    "desktop.ini",
+    # release 目录自身
         "release"
         # CLAUDE.md (项目开发用，非用户文档)
         # 保留，用户可能想看
@@ -383,7 +341,6 @@ else {
 
     # 清理临时目录
     Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-}
 
 Write-Host ""
 Write-Host "  ZIP 已创建: $ZipFilePath" -ForegroundColor Green
