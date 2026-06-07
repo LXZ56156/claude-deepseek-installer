@@ -1232,7 +1232,7 @@ function Main {
         $msg = "脚本执行过程中发生未预期的错误：$($_.Exception.Message)"
 
         if (Get-Command Write-FatalError -ErrorAction SilentlyContinue) {
-            Write-FatalError -Message $msg -ErrorRecord $_
+            Write-FatalError -Message $msg
         }
         else {
             Write-Host "[ERROR] $msg" -ForegroundColor Red

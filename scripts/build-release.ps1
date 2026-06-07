@@ -183,8 +183,7 @@ $safePlaceholders = @(
     "sk-xxxx",
     "__API_KEY__",
     "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    "sk-1234567890abcdef1234567890abcdef",  # scripts/check.ps1 的 Mask-ApiKey 单元测试 Key
-    "sk-leaktest"  # 发布前验收清单的泄漏测试 Key
+    "sk-1234567890abcdef1234567890abcdef"  # scripts/check.ps1 的 Mask-ApiKey 单元测试 Key
 )
 
 $dangerPatterns = @(
@@ -198,6 +197,49 @@ $textExtensions = @("*.ps1", "*.psm1", "*.sh", "*.json", "*.md", "*.txt", "*.cmd
                     "*.js", "*.ts", "*.py", "*.html", "*.css", "*.yaml", "*.yml",
                     "*.xml", "*.ini", "*.cfg", "*.conf", "*.env", "*.example")
 
+function Test-IsSafePlaceholderKey {
+    param([string]$KeyPart)
+
+    foreach ($safe in $safePlaceholders) {
+        if ($KeyPart -ceq $safe) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Add-ApiKeyHitsFromContent {
+    param(
+        [string]$Content,
+        [string]$DisplayPath,
+        [System.Collections.Generic.List[object]]$Hits
+    )
+
+    if (-not $Content) { return }
+
+    foreach ($pattern in $dangerPatterns) {
+        $matches = [regex]::Matches($Content, $pattern)
+        foreach ($m in $matches) {
+            $candidate = $m.Value.Trim()
+            $keyMatches = [regex]::Matches($candidate, 'sk-[A-Za-z0-9]{20,}')
+
+            foreach ($keyMatch in $keyMatches) {
+                $keyPart = $keyMatch.Value
+                if (Test-IsSafePlaceholderKey -KeyPart $keyPart) {
+                    continue
+                }
+
+                [void]$Hits.Add([PSCustomObject]@{
+                    File    = $DisplayPath
+                    Pattern = $pattern
+                    Match   = ($candidate.Substring(0, [Math]::Min(60, $candidate.Length)) + "...")
+                })
+            }
+        }
+    }
+}
+
 Write-Host ""
 Write-Host "[3.4/5] 源目录 API Key 预扫描..." -ForegroundColor Cyan
 
@@ -210,31 +252,7 @@ function Test-SourceFileForApiKey {
 
     try {
         $content = Get-Content -Path $FilePath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-        if (-not $content) { return }
-
-        foreach ($pattern in $dangerPatterns) {
-            $matches = [regex]::Matches($content, $pattern)
-            foreach ($m in $matches) {
-                $candidate = $m.Value.Trim()
-                $isSafe = $false
-                foreach ($safe in $safePlaceholders) {
-                    if ($candidate -match [regex]::Escape($safe)) {
-                        $isSafe = $true
-                        break
-                    }
-                }
-                if (-not $isSafe) {
-                    $keyPart = $candidate -replace '^.*?(sk-[A-Za-z0-9]{20,})', '$1'
-                    if ($keyPart.Length -ge 32) {
-                        [void]$sourceApiHits.Add([PSCustomObject]@{
-                            File    = $DisplayPath
-                            Pattern = $pattern
-                            Match   = ($candidate.Substring(0, [Math]::Min(60, $candidate.Length)) + "...")
-                        })
-                    }
-                }
-            }
-        }
+        Add-ApiKeyHitsFromContent -Content $content -DisplayPath $DisplayPath -Hits $sourceApiHits
     }
     catch { }
 }
@@ -444,37 +462,7 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
 
         try {
             $content = Get-Content -Path $FilePath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-            if (-not $content) { return }
-
-            foreach ($pattern in $dangerPatterns) {
-                $matches = [regex]::Matches($content, $pattern)
-                foreach ($m in $matches) {
-                    $candidate = $m.Value.Trim()
-
-                    # 检查是否为安全占位符
-                    $isSafe = $false
-                    foreach ($safe in $safePlaceholders) {
-                        if ($candidate -match [regex]::Escape($safe)) {
-                            $isSafe = $true
-                            break
-                        }
-                    }
-
-                    if (-not $isSafe) {
-                        # 提取纯 Key 部分（去掉前缀如 ANTHROPIC_AUTH_TOKEN=）
-                        $keyPart = $candidate -replace '^.*?(sk-[A-Za-z0-9]{20,})', '$1'
-
-                        # 如果 Key 看起来像真实 Key（足够长且复杂）
-                        if ($keyPart.Length -ge 32) {
-                            [void]$apiKeyHits.Add([PSCustomObject]@{
-                                File    = $DisplayPath
-                                Pattern = $pattern
-                                Match   = ($candidate.Substring(0, [Math]::Min(60, $candidate.Length)) + "...")
-                            })
-                        }
-                    }
-                }
-            }
+            Add-ApiKeyHitsFromContent -Content $content -DisplayPath $DisplayPath -Hits $apiKeyHits
         }
         catch {
             Write-Host "    [WARN] 无法扫描: $DisplayPath" -ForegroundColor DarkGray

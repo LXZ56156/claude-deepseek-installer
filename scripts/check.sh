@@ -56,6 +56,12 @@ for marker in ("[OK]", "[WARN]", "[ERROR]", "[SKIP]"):
         break
 else:
     raise SystemExit("report example does not contain ASCII status markers")
+
+logger = Path("lib/logger.ps1").read_text(encoding="utf-8")
+bad_logger = ["✅", "⚠", "❌", "⏭", "\ufe0f"]
+found_logger = [ch for ch in bad_logger if ch in logger]
+if found_logger:
+    raise SystemExit(f"logger.ps1 contains non-ASCII status icons: {found_logger}")
 PY
 
 echo "[check] sensitive-output guardrails"

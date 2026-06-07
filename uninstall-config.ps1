@@ -141,7 +141,7 @@ switch ($choice) {
         }
     }
     "3" {
-        Write-Warning "️  即将删除整个配置文件: $(Get-ClaudeConfigFile)"
+        Write-Warning "即将删除整个配置文件: $(Get-ClaudeConfigFile)"
         Write-Warning "这将移除所有 Claude Code 配置（不仅是 DeepSeek 相关）。"
         if (Confirm-UserChoice -Message "确认删除整个配置文件？此操作不可恢复！") {
             $configPath = Get-ClaudeConfigFile
@@ -179,7 +179,7 @@ catch {
     $msg = "脚本执行过程中发生未预期的错误：$($_.Exception.Message)"
 
     if (Get-Command Write-FatalError -ErrorAction SilentlyContinue) {
-        Write-FatalError -Message $msg -ErrorRecord $_
+        Write-FatalError -Message $msg
     }
     else {
         Write-Host "[ERROR] $msg" -ForegroundColor Red

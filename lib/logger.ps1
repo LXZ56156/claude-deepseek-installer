@@ -128,24 +128,12 @@ function Write-FatalError {
         输出入口脚本顶层异常兜底信息。
     #>
     param(
-        [Parameter(Mandatory = $true)]
         [string]$Message,
-        [object]$ErrorRecord = $null
+        [int]$ExitCode = 1
     )
 
     Write-Error-Msg $Message
-    if ($ErrorRecord) {
-        Write-Log "ERROR" $ErrorRecord
-    }
-
-    if (Get-Command Get-LogFilePath -ErrorAction SilentlyContinue) {
-        $logFile = Get-LogFilePath
-        if ($logFile) {
-            Write-Info "日志文件: $logFile"
-        }
-    }
-
-    Write-Info "如问题持续，请运行「一键诊断.cmd」并将 report.txt 发给技术支持。"
+    exit $ExitCode
 }
 
 function Write-Step {
@@ -180,13 +168,6 @@ function Write-Result {
         [string]$Detail = ""
     )
 
-    $icon = switch ($Status) {
-        "OK"    { "" }
-        "WARN"  { "️ " }
-        "ERROR" { "" }
-        "SKIP"  { "⏭️ " }
-    }
-
     $color = switch ($Status) {
         "OK"    { "Green" }
         "WARN"  { "Yellow" }
@@ -194,7 +175,7 @@ function Write-Result {
         "SKIP"  { "DarkGray" }
     }
 
-    $output = "[$icon] $Name"
+    $output = "[$Status] $Name"
     if ($Detail) {
         $output += " - $Detail"
     }

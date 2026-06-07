@@ -669,7 +669,7 @@ function Main {
     Write-Host "  检测总结: 共 $totalCount 项" -ForegroundColor White
     Write-Host "   正常: $okCount 项" -ForegroundColor Green
     if ($warnCount -gt 0) {
-        Write-Host "  ️  警告: $warnCount 项" -ForegroundColor Yellow
+        Write-Host "  [WARN] 警告: $warnCount 项" -ForegroundColor Yellow
     }
     if ($errCount -gt 0) {
         Write-Host "   错误: $errCount 项" -ForegroundColor Red
@@ -736,7 +736,7 @@ catch {
     $msg = "脚本执行过程中发生未预期的错误：$($_.Exception.Message)"
 
     if (Get-Command Write-FatalError -ErrorAction SilentlyContinue) {
-        Write-FatalError -Message $msg -ErrorRecord $_
+        Write-FatalError -Message $msg
     }
     else {
         Write-Host "[ERROR] $msg" -ForegroundColor Red
