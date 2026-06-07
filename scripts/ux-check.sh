@@ -19,6 +19,7 @@ FAKE_KEY="sk-fake1234567890abcdef1234567890abcdef1234567890ab"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
@@ -30,6 +31,10 @@ pass() {
 fail() {
     echo -e "${RED}  [FAIL]${NC} $*"
     TOTAL_FAILED=$((TOTAL_FAILED + 1))
+}
+
+warn() {
+    echo -e "${YELLOW}  [WARN]${NC} $*"
 }
 
 section() {
@@ -100,6 +105,16 @@ PRE_LOG_LINES=$( (cat "$REAL_LOGS_DIR"/*.log 2>/dev/null || true) | wc -l)
 PRE_REPORT_LINES=$( (cat "$REAL_REPORTS_DIR"/*.txt 2>/dev/null || true) | wc -l)
 PRE_REPORT_TXT_LINES=$( (cat "$REAL_REPORT_TXT" 2>/dev/null || true) | wc -l)
 
+# 记录执行前真实 ~/.claude/settings.json 状态（用于污染检测）
+REAL_HOME="$(getent passwd "$(whoami)" | cut -d: -f6)"
+REAL_SETTINGS="$REAL_HOME/.claude/settings.json"
+REAL_BEFORE_EXISTS=0
+REAL_BEFORE_HASH=""
+if [ -f "$REAL_SETTINGS" ]; then
+    REAL_BEFORE_EXISTS=1
+    REAL_BEFORE_HASH="$(sha256sum "$REAL_SETTINGS" | awk '{print $1}')"
+fi
+
 # 真正执行 install_wsl.sh --mode configure（从项目根目录，SCRIPT_DIR 指向正确位置）
 cd "$ROOT_DIR"
 set +e
@@ -166,19 +181,18 @@ else
     pass "日志和报告未泄露完整假 Key"
 fi
 
-# 验证未污染真实 ~/.claude/
-REAL_CLAUDE_DIR="$HOME/.claude"  # HOME 已被覆盖，需用原始值
-REAL_HOME=$(eval echo ~$(whoami))
-REAL_SETTINGS="$REAL_HOME/.claude/settings.json"
+# 验证未污染真实 ~/.claude/settings.json（前后哈希对比）
+REAL_AFTER_EXISTS=0
+REAL_AFTER_HASH=""
 if [ -f "$REAL_SETTINGS" ]; then
-    # 如果真实 settings.json 存在，检查它没有被本次测试修改
-    # 通过时间戳判断：如果文件修改时间在测试开始前，则未被修改
-    REAL_SETTINGS_MTIME=$(stat -c %Y "$REAL_SETTINGS" 2>/dev/null || echo "0")
-    SANDBOX_MTIME=$(stat -c %Y "$CONFIG_FILE" 2>/dev/null || echo "0")
-    # 真实配置文件的修改时间应该早于沙盒文件（或不受本次影响）
-    pass "真实 ~/.claude/settings.json 存在但本次测试写入的是隔离路径"
+    REAL_AFTER_EXISTS=1
+    REAL_AFTER_HASH="$(sha256sum "$REAL_SETTINGS" | awk '{print $1}')"
+fi
+
+if [ "$REAL_BEFORE_EXISTS" = "$REAL_AFTER_EXISTS" ] && [ "$REAL_BEFORE_HASH" = "$REAL_AFTER_HASH" ]; then
+    pass "未污染真实 ~/.claude/settings.json"
 else
-    pass "真实 ~/.claude/settings.json 不存在，隔离测试未创建它"
+    fail "真实 ~/.claude/settings.json 被修改或创建"
 fi
 
 # ============================================================
