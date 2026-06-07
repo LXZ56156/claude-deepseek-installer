@@ -155,9 +155,9 @@ function Write-Result {
     )
 
     $icon = switch ($Status) {
-        "OK"    { "✅" }
-        "WARN"  { "⚠️ " }
-        "ERROR" { "❌" }
+        "OK"    { "" }
+        "WARN"  { "️ " }
+        "ERROR" { "" }
         "SKIP"  { "⏭️ " }
     }
 

@@ -53,9 +53,9 @@ $script:ReportPath = $null
 function Write-Step {
     param([string]$Title)
     Write-Host ""
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "------------------------------------------------------------" -ForegroundColor Cyan
     Write-Host "  $Title" -ForegroundColor Cyan
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "------------------------------------------------------------" -ForegroundColor Cyan
     Write-Host ""
 }
 
@@ -106,9 +106,9 @@ function Show-Disclaimer {
 
     Clear-Host
     Write-Host ""
-    Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║   Claude Code + DeepSeek API 本地配置助手 v$ScriptVersion            ║" -ForegroundColor Cyan
-    Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host "   Claude Code + DeepSeek API 本地配置助手 v$ScriptVersion            " -ForegroundColor Cyan
+    Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  本工具将帮助你完成：" -ForegroundColor White
     Write-Host "    1. 检查系统环境" -ForegroundColor White
@@ -119,12 +119,12 @@ function Show-Disclaimer {
     Write-Host "    6. 创建测试项目" -ForegroundColor White
     Write-Host ""
     Write-Host "  【重要声明】" -ForegroundColor Yellow
-    Write-Host "    ❌ 本工具不提供 Claude 账号" -ForegroundColor Red
-    Write-Host "    ❌ 本工具不提供 DeepSeek API Key" -ForegroundColor Red
-    Write-Host "    ❌ 本工具不做 API 中转" -ForegroundColor Red
-    Write-Host "    ✅ API Key 只写入本机 Claude Code 配置" -ForegroundColor Green
-    Write-Host "    ✅ 如进行 API 测试，Key 只发送到 DeepSeek 官方接口" -ForegroundColor Green
-    Write-Host "    ✅ API 调用费用由用户和 DeepSeek 官方结算" -ForegroundColor Green
+    Write-Host "     本工具不提供 Claude 账号" -ForegroundColor Red
+    Write-Host "     本工具不提供 DeepSeek API Key" -ForegroundColor Red
+    Write-Host "     本工具不做 API 中转" -ForegroundColor Red
+    Write-Host "     API Key 只写入本机 Claude Code 配置" -ForegroundColor Green
+    Write-Host "     如进行 API 测试，Key 只发送到 DeepSeek 官方接口" -ForegroundColor Green
+    Write-Host "     API 调用费用由用户和 DeepSeek 官方结算" -ForegroundColor Green
     Write-Host ""
 
     if (-not $SkipDisclaimer) {
@@ -380,7 +380,16 @@ function Step-InstallClaudeCode {
         }
         else {
             Write-Warning "安装脚本已执行但 claude 命令未找到。"
-            Write-Warning "（新安装的软件需要重启终端才能被识别，就像刚装完 App 要点一下图标一样）"
+            Write-Warning "正在尝试刷新 PATH 并重新检测..."
+            Refresh-CurrentProcessPath
+            $newVersion = Test-ClaudeInstalled
+            if ($newVersion) {
+                Write-Success "Claude Code 安装验证通过（PATH 刷新后）: $newVersion"
+                $script:ClaudeInstalled = $true
+                $script:ClaudeInstallMethod = "Native Install"
+                return $true
+            }
+            Write-Warning "PATH 刷新后仍未检测到 claude，将继续尝试 npm fallback。"
         }
     }
 
@@ -468,13 +477,19 @@ function Step-InstallClaudeCode {
         return $true
     }
     else {
-        Write-Warning "claude 命令未找到！"
-        Write-Warning "这可能是因为 PowerShell 的 PATH 没有刷新。"
-        Write-Warning "（新安装的软件需要重启终端才能被识别）"
-        Write-Info "请尝试:"
-        Write-Info "  1. 关闭并重新打开 PowerShell / 命令提示符"
-        Write-Info "  2. 或运行: refreshenv (如果安装了 Chocolatey)"
-        Write-Info "  3. 或手动将 npm 全局 bin 目录添加到 PATH"
+        Write-Warning "claude 命令未找到，正在刷新 PATH 并重新检测..."
+        Refresh-CurrentProcessPath
+        $newVersion = Test-ClaudeInstalled
+        if ($newVersion) {
+            Write-Success "Claude Code 检测成功（PATH 刷新后）: $newVersion"
+            $script:ClaudeInstalled = $true
+            $script:ClaudeInstallMethod = "npm fallback"
+            return $true
+        }
+
+        Write-Warning "Claude Code 可能已安装，但当前终端还没有刷新 PATH。"
+        Write-Info "请关闭此窗口后重新双击 [开始安装.cmd]。"
+        Write-Info "如果仍不行，请运行 [一键诊断.cmd] 获取诊断报告。"
 
         $npmPrefix = Invoke-CommandSafe -Command "npm" -Arguments @("prefix", "-g")
         if ($npmPrefix.Success) {
@@ -482,6 +497,7 @@ function Step-InstallClaudeCode {
         }
 
         $script:ClaudeInstalled = $false
+        $script:ClaudeInstallMethod = "可能已安装（PATH 未刷新）"
         return $false
     }
 }
@@ -543,14 +559,14 @@ function Step-GetApiKey {
     }
 
     # 提示获取方式
-    Write-Host "  ┌─────────────────────────────────────────────────────────┐" -ForegroundColor Cyan
-    Write-Host "  │  获取 API Key 步骤:                                     │" -ForegroundColor Cyan
-    Write-Host "  │  1. 打开 https://platform.deepseek.com/api_keys          │" -ForegroundColor Cyan
-    Write-Host "  │  2. 注册/登录 DeepSeek 账号                              │" -ForegroundColor Cyan
-    Write-Host "  │  3. 点击「创建 API Key」                                 │" -ForegroundColor Cyan
-    Write-Host "  │  4. 复制生成的 Key（通常以 sk- 开头）                    │" -ForegroundColor Cyan
-    Write-Host "  │  5. 回到此窗口粘贴                                       │" -ForegroundColor Cyan
-    Write-Host "  └─────────────────────────────────────────────────────────┘" -ForegroundColor Cyan
+    Write-Host "  ---------------------------------------------------------" -ForegroundColor Cyan
+    Write-Host "    获取 API Key 步骤:                                     " -ForegroundColor Cyan
+    Write-Host "    1. 打开 https://platform.deepseek.com/api_keys          " -ForegroundColor Cyan
+    Write-Host "    2. 注册/登录 DeepSeek 账号                              " -ForegroundColor Cyan
+    Write-Host "    3. 点击「创建 API Key」                                 " -ForegroundColor Cyan
+    Write-Host "    4. 复制生成的 Key（通常以 sk- 开头）                    " -ForegroundColor Cyan
+    Write-Host "    5. 回到此窗口粘贴                                       " -ForegroundColor Cyan
+    Write-Host "  ---------------------------------------------------------" -ForegroundColor Cyan
     Write-Host ""
 
     # 自动打开 DeepSeek API Key 页面
@@ -882,11 +898,11 @@ function Show-CompletionPage {
     Write-Host ""
 
     if ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestPassed) {
-        Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Green
-        Write-Host "║                                                              ║" -ForegroundColor Green
-        Write-Host "║                 安装流程全部完成！                            ║" -ForegroundColor Green
-        Write-Host "║                                                              ║" -ForegroundColor Green
-        Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Green
+        Write-Host "==============================================================" -ForegroundColor Green
+        Write-Host "                                                              " -ForegroundColor Green
+        Write-Host "                 安装流程全部完成！                            " -ForegroundColor Green
+        Write-Host "                                                              " -ForegroundColor Green
+        Write-Host "==============================================================" -ForegroundColor Green
         Write-Host ""
         Write-Success "Claude Code 已安装"
         Write-Success "DeepSeek 配置已写入"
@@ -904,11 +920,11 @@ function Show-CompletionPage {
         Write-Info "如遇问题请运行「一键诊断.cmd」"
     }
     elseif ($script:ClaudeInstalled -and $script:ConfigWritten) {
-        Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Yellow
-        Write-Host "║                                                              ║" -ForegroundColor Yellow
-        Write-Host "║            安装部分完成（API 测试未通过）                     ║" -ForegroundColor Yellow
-        Write-Host "║                                                              ║" -ForegroundColor Yellow
-        Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Yellow
+        Write-Host "==============================================================" -ForegroundColor Yellow
+        Write-Host "                                                              " -ForegroundColor Yellow
+        Write-Host "            安装部分完成（API 测试未通过）                     " -ForegroundColor Yellow
+        Write-Host "                                                              " -ForegroundColor Yellow
+        Write-Host "==============================================================" -ForegroundColor Yellow
         Write-Host ""
         Write-Success "Claude Code 已安装"
         Write-Success "DeepSeek 配置已写入"
@@ -923,18 +939,18 @@ function Show-CompletionPage {
         Write-Info "安装完成报告: $($script:ReportPath)"
     }
     elseif ($script:ClaudeInstalled) {
-        Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Yellow
-        Write-Host "║            安装部分完成                                      ║" -ForegroundColor Yellow
-        Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Yellow
+        Write-Host "==============================================================" -ForegroundColor Yellow
+        Write-Host "            安装部分完成                                      " -ForegroundColor Yellow
+        Write-Host "==============================================================" -ForegroundColor Yellow
         Write-Host ""
         Write-Success "Claude Code 已安装"
         Write-Warning "DeepSeek 配置未完成"
         Write-Info "请稍后运行 configure-deepseek.ps1 配置 API Key。"
     }
     else {
-        Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Red
-        Write-Host "║            安装未完成                                        ║" -ForegroundColor Red
-        Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Red
+        Write-Host "==============================================================" -ForegroundColor Red
+        Write-Host "            安装未完成                                        " -ForegroundColor Red
+        Write-Host "==============================================================" -ForegroundColor Red
         Write-Host ""
         Write-Error-Msg "Claude Code 安装未成功。"
         Write-Info "请尝试以下操作:"
@@ -1112,18 +1128,18 @@ function Start-UninstallMenu {
 
 function Show-MainMenu {
     Write-Host ""
-    Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║                    请选择要执行的操作                        ║" -ForegroundColor Cyan
-    Write-Host "╠══════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
-    Write-Host "║  [1] 懒人一键安装（推荐）                                    ║" -ForegroundColor Green
-    Write-Host "║      自动检测 → 安装 → 配置 → 测试 → 生成报告               ║" -ForegroundColor White
-    Write-Host "║  [2] 仅配置 DeepSeek API                                    ║" -ForegroundColor White
-    Write-Host "║      （Claude Code 已安装的情况）                            ║" -ForegroundColor White
-    Write-Host "║  [3] 仅运行环境诊断（不安装任何东西）                        ║" -ForegroundColor White
-    Write-Host "║  [4] 配置 WSL Ubuntu 环境（高级选项）                        ║" -ForegroundColor White
-    Write-Host "║  [5] 恢复或卸载配置                                          ║" -ForegroundColor White
-    Write-Host "║  [6] 退出                                                    ║" -ForegroundColor White
-    Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host "                    请选择要执行的操作                        " -ForegroundColor Cyan
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host "  [1] 懒人一键安装（推荐）                                    " -ForegroundColor Green
+    Write-Host "      自动检测 → 安装 → 配置 → 测试 → 生成报告               " -ForegroundColor White
+    Write-Host "  [2] 仅配置 DeepSeek API                                    " -ForegroundColor White
+    Write-Host "      （Claude Code 已安装的情况）                            " -ForegroundColor White
+    Write-Host "  [3] 仅运行环境诊断（不安装任何东西）                        " -ForegroundColor White
+    Write-Host "  [4] 配置 WSL Ubuntu 环境（高级选项）                        " -ForegroundColor White
+    Write-Host "  [5] 恢复或卸载配置                                          " -ForegroundColor White
+    Write-Host "  [6] 退出                                                    " -ForegroundColor White
+    Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host ""
 
     $choice = Read-Host "请输入选项编号 (1-6，直接回车默认选 1)"

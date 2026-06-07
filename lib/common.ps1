@@ -401,6 +401,30 @@ function Get-ApiKeyFromEnvironment {
 }
 
 # ============================================================
+# PATH 刷新
+# ============================================================
+
+function Refresh-CurrentProcessPath {
+    <#
+    .SYNOPSIS
+        将 Machine 和 User 级别的 PATH 环境变量合并到当前进程。
+        用于 Native Install / npm / winget 安装后刷新 PATH。
+    #>
+    try {
+        $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        $combined = @()
+        if ($userPath) { $combined += $userPath }
+        if ($machinePath) { $combined += $machinePath }
+        $env:Path = ($combined -join ";") + ";" + $env:Path
+        Write-Log "INFO" "PATH 已刷新（合并 Machine + User 到当前进程）"
+    }
+    catch {
+        Write-Log "WARN" "PATH 刷新失败: $_"
+    }
+}
+
+# ============================================================
 # 命令检测函数
 # ============================================================
 

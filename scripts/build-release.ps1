@@ -35,9 +35,9 @@ $ZipFilePath = Join-Path $OutputDir $ZipFileName
 $Sha256FilePath = "$ZipFilePath.sha256"
 
 Write-Host ""
-Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║            Release ZIP 打包脚本 v$Version                        ║" -ForegroundColor Cyan
-Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "==============================================================" -ForegroundColor Cyan
+Write-Host "            Release ZIP 打包脚本 v$Version                        " -ForegroundColor Cyan
+Write-Host "==============================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "项目目录: $ProjectRoot"
 Write-Host "输出目录: $OutputDir"
@@ -127,29 +127,37 @@ Write-Host ""
 
 # 白名单：只有这些文件/目录可以进入 release ZIP
 # 任何未列出的文件都会被排除，防止本地临时文件误入商品包
+# docs/ 和 examples/ 使用文件级白名单，防止截图/草稿/内部文档误入
 $AllowedEntries = @(
-    # 入口文件
+    # === 入口文件 ===
     "开始安装.cmd",
     "一键诊断.cmd",
     "恢复或卸载配置.cmd",
     "Start-Install.cmd",
     "Run-Diagnostics.cmd",
     "Restore-Config.cmd",
-    # 主脚本
+    # === 主脚本 ===
     "Start-Here.ps1",
     "install.ps1",
     "configure-deepseek.ps1",
     "doctor.ps1",
     "uninstall-config.ps1",
     "install_wsl.sh",
-    # 目录（复制全部内容）
+    # === lib 目录（随迭代增减，允许整目录复制） ===
     "lib",
-    "docs",
-    "examples",
-    # 特定脚本文件
+    # === docs 文件级白名单 ===
+    "docs/用户使用教程.md",
+    "docs/常见问题FAQ.md",
+    "docs/闲鱼商品说明.md",
+    "docs/测试清单.md",
+    "docs/视频教程脚本.md",
+    # === examples 文件级白名单 ===
+    "examples/settings.deepseek.example.json",
+    "examples/report.example.txt",
+    # === scripts 文件级白名单 ===
     "scripts/check.ps1",
     "scripts/check.sh",
-    # 文档
+    # === 根目录文档 ===
     "README.md",
     "QUICK_START.md",
     "LICENSE"
@@ -175,7 +183,8 @@ $safePlaceholders = @(
     "sk-xxxx",
     "__API_KEY__",
     "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    "sk-1234567890abcdef1234567890abcdef"  # scripts/check.ps1 的 Mask-ApiKey 单元测试 Key
+    "sk-1234567890abcdef1234567890abcdef",  # scripts/check.ps1 的 Mask-ApiKey 单元测试 Key
+    "sk-leaktest"  # 发布前验收清单的泄漏测试 Key
 )
 
 $dangerPatterns = @(
@@ -279,8 +288,11 @@ foreach ($entry in $AllowedEntries) {
     $destPath = Join-Path $stagingDir $entry
 
     if (-not (Test-Path $sourcePath)) {
-        Write-Host "  [WARN] 白名单条目不存在，跳过: $entry" -ForegroundColor Yellow
-        continue
+        Write-Host "  错误: 白名单条目不存在: $entry" -ForegroundColor Red
+        Write-Host "  正式 release 不允许缺失必要文件，请检查项目完整性。" -ForegroundColor Yellow
+        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path $OutputDir) { Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue }
+        exit 1
     }
 
     if (Test-Path $sourcePath -PathType Container) {
@@ -567,9 +579,9 @@ Write-Host "  验证通过，没有不应包含的条目。" -ForegroundColor Gr
 # ============================================================
 
 Write-Host ""
-Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Green
-Write-Host "║                     打包完成！                               ║" -ForegroundColor Green
-Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Green
+Write-Host "==============================================================" -ForegroundColor Green
+Write-Host "                     打包完成！                               " -ForegroundColor Green
+Write-Host "==============================================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Release ZIP: $ZipFilePath" -ForegroundColor Cyan
 Write-Host "  文件大小:    $([math]::Round((Get-Item $ZipFilePath).Length / 1KB, 1)) KB" -ForegroundColor Cyan

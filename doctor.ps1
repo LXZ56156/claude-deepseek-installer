@@ -629,9 +629,9 @@ function Write-ReportFooter {
 
 function Main {
     Write-Host ""
-    Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║           Claude Code 环境诊断工具 v$ScriptVersion                   ║" -ForegroundColor Cyan
-    Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host "           Claude Code 环境诊断工具 v$ScriptVersion                   " -ForegroundColor Cyan
+    Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host ""
     Write-Info "正在全面检测您的环境配置..."
     if ($SkipApiTest) {
@@ -660,21 +660,21 @@ function Main {
 
     # 输出到控制台摘要
     Write-Host ""
-    Write-Host ("═" * 60) -ForegroundColor Cyan
+    Write-Host ("=" * 60) -ForegroundColor Cyan
     $okCount = ($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "OK" }).Count
     $warnCount = ($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "WARN" }).Count
     $errCount = ($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "ERROR" }).Count
     $totalCount = $script:DoctorState.CheckResults.Count
 
     Write-Host "  检测总结: 共 $totalCount 项" -ForegroundColor White
-    Write-Host "  ✅ 正常: $okCount 项" -ForegroundColor Green
+    Write-Host "   正常: $okCount 项" -ForegroundColor Green
     if ($warnCount -gt 0) {
-        Write-Host "  ⚠️  警告: $warnCount 项" -ForegroundColor Yellow
+        Write-Host "  ️  警告: $warnCount 项" -ForegroundColor Yellow
     }
     if ($errCount -gt 0) {
-        Write-Host "  ❌ 错误: $errCount 项" -ForegroundColor Red
+        Write-Host "   错误: $errCount 项" -ForegroundColor Red
     }
-    Write-Host ("═" * 60) -ForegroundColor Cyan
+    Write-Host ("=" * 60) -ForegroundColor Cyan
 
     # 保存报告文件
     if ($NoSaveReport) {

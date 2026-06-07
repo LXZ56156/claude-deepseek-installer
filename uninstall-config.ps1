@@ -18,9 +18,9 @@ if (-not $EntryScriptDir) { $EntryScriptDir = (Get-Location).Path }
 $ScriptDir = Initialize-CcdiScript -ScriptName "uninstall-config"
 
 Write-Host ""
-Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║           配置恢复/卸载工具                                  ║" -ForegroundColor Cyan
-Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "==============================================================" -ForegroundColor Cyan
+Write-Host "           配置恢复/卸载工具                                  " -ForegroundColor Cyan
+Write-Host "==============================================================" -ForegroundColor Cyan
 Write-Host ""
 
 Write-Info "此工具可以帮助您:"
@@ -139,7 +139,7 @@ switch ($choice) {
         }
     }
     "3" {
-        Write-Warning "⚠️  即将删除整个配置文件: $(Get-ClaudeConfigFile)"
+        Write-Warning "️  即将删除整个配置文件: $(Get-ClaudeConfigFile)"
         Write-Warning "这将移除所有 Claude Code 配置（不仅是 DeepSeek 相关）。"
         if (Confirm-UserChoice -Message "确认删除整个配置文件？此操作不可恢复！") {
             $configPath = Get-ClaudeConfigFile

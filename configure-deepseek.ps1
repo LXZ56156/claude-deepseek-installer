@@ -23,9 +23,9 @@ if (-not $EntryScriptDir) { $EntryScriptDir = (Get-Location).Path }
 $ScriptDir = Initialize-CcdiScript -ScriptName "configure-deepseek"
 
 Write-Host ""
-Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║           DeepSeek API 配置工具                              ║" -ForegroundColor Cyan
-Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "==============================================================" -ForegroundColor Cyan
+Write-Host "           DeepSeek API 配置工具                              " -ForegroundColor Cyan
+Write-Host "==============================================================" -ForegroundColor Cyan
 Write-Host ""
 
 # 检查 Claude Code 是否已安装

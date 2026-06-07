@@ -61,9 +61,9 @@ function Show-Disclaimer {
 
     Clear-Host
     Write-Host ""
-    Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║     Claude Code + DeepSeek 一键安装配置助手 v$ScriptVersion         ║" -ForegroundColor Cyan
-    Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host "     Claude Code + DeepSeek 一键安装配置助手 v$ScriptVersion         " -ForegroundColor Cyan
+    Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "【重要免责声明】" -ForegroundColor Yellow
     Write-Host ""
@@ -73,17 +73,17 @@ function Show-Disclaimer {
     Write-Host "    3. 诊断环境问题" -ForegroundColor White
     Write-Host ""
     Write-Host "  本工具不提供以下内容:" -ForegroundColor Yellow
-    Write-Host "    ❌ 不出售 Claude 账号" -ForegroundColor Red
-    Write-Host "    ❌ 不出售 Anthropic API Key" -ForegroundColor Red
-    Write-Host "    ❌ 不出售 DeepSeek API Key" -ForegroundColor Red
-    Write-Host "    ❌ 不做 API 中转/代理服务" -ForegroundColor Red
-    Write-Host "    ❌ 不做账号共享" -ForegroundColor Red
-    Write-Host "    ❌ 不做任何破解或绕过限制" -ForegroundColor Red
+    Write-Host "     不出售 Claude 账号" -ForegroundColor Red
+    Write-Host "     不出售 Anthropic API Key" -ForegroundColor Red
+    Write-Host "     不出售 DeepSeek API Key" -ForegroundColor Red
+    Write-Host "     不做 API 中转/代理服务" -ForegroundColor Red
+    Write-Host "     不做账号共享" -ForegroundColor Red
+    Write-Host "     不做任何破解或绕过限制" -ForegroundColor Red
     Write-Host ""
     Write-Host "  您需要自行准备:" -ForegroundColor Green
-    Write-Host "    ✅ 一台 Windows 10/11 电脑" -ForegroundColor Green
-    Write-Host "    ✅ 自己的 DeepSeek API Key (在 platform.deepseek.com 获取)" -ForegroundColor Green
-    Write-Host "    ✅ 基本的网络连接" -ForegroundColor Green
+    Write-Host "     一台 Windows 10/11 电脑" -ForegroundColor Green
+    Write-Host "     自己的 DeepSeek API Key (在 platform.deepseek.com 获取)" -ForegroundColor Green
+    Write-Host "     基本的网络连接" -ForegroundColor Green
     Write-Host ""
     Write-Host "  API 费用、余额、限流由 DeepSeek 官方管理，与本站无关。" -ForegroundColor Yellow
     Write-Host "  本工具不会把您的 API Key 发送给第三方或服务提供者。" -ForegroundColor Yellow
@@ -387,20 +387,23 @@ function Step-InstallClaudeCode {
         $script:ClaudeInstalled = $true
     }
     else {
-        Write-Warning "claude 命令未找到！"
-        Write-Warning "这可能是因为 PowerShell 的 PATH 没有刷新。"
-        Write-Warning "（新安装的软件需要重启终端才能被识别，就像刚装完 App 要点一下图标一样）"
-        Write-Warning "请尝试:"
-        Write-Warning "  1. 关闭并重新打开 PowerShell"
-        Write-Warning "  2. 或运行: refreshenv (如果安装了 Chocolatey)"
-        Write-Warning "  3. 或手动将 npm 全局 bin 目录添加到 PATH"
+        Write-Warning "claude 命令未找到，正在刷新 PATH 并重新检测..."
+        Refresh-CurrentProcessPath
+        $newVersion = Test-ClaudeInstalled
+        if ($newVersion) {
+            Write-Success "Claude Code 检测成功（PATH 刷新后）: $newVersion"
+            $script:ClaudeInstalled = $true
+            return $true
+        }
 
-        # 尝试找到 npm 全局安装路径
+        Write-Warning "Claude Code 可能已安装，但当前终端还没有刷新 PATH。"
+        Write-Warning "请关闭此窗口后重新打开 PowerShell，或运行 [开始安装.cmd]。"
+        Write-Info "如果仍不行，请运行 [一键诊断.cmd] 获取诊断报告。"
+
         $npmPrefix = Invoke-CommandSafe -Command "npm" -Arguments @("prefix", "-g")
         if ($npmPrefix.Success) {
             $npmBinPath = $npmPrefix.Output.Trim()
             Write-Info "npm 全局安装路径: $npmBinPath"
-            Write-Info "请将以下路径添加到系统 PATH 环境变量: $npmBinPath"
         }
 
         $script:ClaudeInstalled = $false
@@ -556,15 +559,15 @@ function Step-ConfigureDeepSeek {
 
 function Show-Menu {
     Write-Host ""
-    Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║                    请选择要执行的操作                        ║" -ForegroundColor Cyan
-    Write-Host "╠══════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
-    Write-Host "║  [1] 仅安装 Claude Code（不配置 DeepSeek）                   ║" -ForegroundColor White
-    Write-Host "║  [2] 安装 Claude Code 并配置 DeepSeek API（推荐）            ║" -ForegroundColor White
-    Write-Host "║  [3] 仅运行环境诊断（不安装任何东西）                        ║" -ForegroundColor White
-    Write-Host "║  [4] 仅配置 DeepSeek API（Claude Code 已安装的情况）         ║" -ForegroundColor White
-    Write-Host "║  [5] 退出                                                    ║" -ForegroundColor White
-    Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host "                    请选择要执行的操作                        " -ForegroundColor Cyan
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host "  [1] 仅安装 Claude Code（不配置 DeepSeek）                   " -ForegroundColor White
+    Write-Host "  [2] 安装 Claude Code 并配置 DeepSeek API（推荐）            " -ForegroundColor White
+    Write-Host "  [3] 仅运行环境诊断（不安装任何东西）                        " -ForegroundColor White
+    Write-Host "  [4] 仅配置 DeepSeek API（Claude Code 已安装的情况）         " -ForegroundColor White
+    Write-Host "  [5] 退出                                                    " -ForegroundColor White
+    Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host ""
 
     $choice = Read-Host "请输入选项编号 (1-5)"
@@ -632,29 +635,29 @@ function Show-FinalSummary {
 
     # 根据状态显示真实结果
     if ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestPassed) {
-        Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Green
-        Write-Host "║                     安装流程全部完成！                       ║" -ForegroundColor Green
-        Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Green
+        Write-Host "==============================================================" -ForegroundColor Green
+        Write-Host "                     安装流程全部完成！                       " -ForegroundColor Green
+        Write-Host "==============================================================" -ForegroundColor Green
     }
     elseif ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestSkipped) {
-        Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Yellow
-        Write-Host "║           安装完成（未验证 API 可用）                        ║" -ForegroundColor Yellow
-        Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Yellow
+        Write-Host "==============================================================" -ForegroundColor Yellow
+        Write-Host "           安装完成（未验证 API 可用）                        " -ForegroundColor Yellow
+        Write-Host "==============================================================" -ForegroundColor Yellow
     }
     elseif ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestFailed) {
-        Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Yellow
-        Write-Host "║           安装部分完成（API 测试未通过）                      ║" -ForegroundColor Yellow
-        Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Yellow
+        Write-Host "==============================================================" -ForegroundColor Yellow
+        Write-Host "           安装部分完成（API 测试未通过）                      " -ForegroundColor Yellow
+        Write-Host "==============================================================" -ForegroundColor Yellow
     }
     elseif ($script:ClaudeInstalled) {
-        Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Yellow
-        Write-Host "║           安装部分完成                                      ║" -ForegroundColor Yellow
-        Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Yellow
+        Write-Host "==============================================================" -ForegroundColor Yellow
+        Write-Host "           安装部分完成                                      " -ForegroundColor Yellow
+        Write-Host "==============================================================" -ForegroundColor Yellow
     }
     else {
-        Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Red
-        Write-Host "║           安装未完成，请检查上述错误                          ║" -ForegroundColor Red
-        Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Red
+        Write-Host "==============================================================" -ForegroundColor Red
+        Write-Host "           安装未完成，请检查上述错误                          " -ForegroundColor Red
+        Write-Host "==============================================================" -ForegroundColor Red
     }
     Write-Host ""
 
