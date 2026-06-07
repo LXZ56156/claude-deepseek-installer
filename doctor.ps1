@@ -25,7 +25,7 @@ if (-not $EntryScriptDir) { $EntryScriptDir = (Get-Location).Path }
 . (Join-Path $EntryScriptDir "lib\bootstrap.ps1")
 $ScriptDir = Initialize-CcdiScript -ScriptName "doctor"
 
-$ScriptVersion = "1.0.0"
+$ScriptVersion = "1.3.1"
 
 # 报告状态集中放在脚本级对象中，避免函数作用域下 += 丢失内容。
 $script:DoctorState = @{
@@ -89,11 +89,78 @@ function Write-ReportHeader {
 }
 
 # ============================================================
-# 1. 系统信息
+# 1. 最低要求检查
+# ============================================================
+
+function Check-MinimumRequirements {
+    Write-Step "诊断项目 1/8：最低要求检查"
+
+    $minReq = Test-MinimumRequirements
+
+    # Windows 版本
+    $winInfo = $minReq.Details["Windows"]
+    if ($winInfo.IsSupported) {
+        $osLabel = if ($winInfo.IsWindows11) { "Windows 11" } else { "Windows 10" }
+        Add-CheckResult "Windows 版本" "OK" "$osLabel (Build $($winInfo.Build))"
+    }
+    else {
+        if ($winInfo.IsWindows10) {
+            Add-CheckResult "Windows 版本" "ERROR" "$($winInfo.Version) (Build $($winInfo.Build) < 17763)"
+            Add-Suggestion "Windows 10 Build 需要 >= 17763 (1809)。请通过 Windows Update 升级系统，或升级到 Windows 11。"
+        }
+        else {
+            Add-CheckResult "Windows 版本" "ERROR" "不支持的操作系统: $($winInfo.Version)"
+            Add-Suggestion "需要 Windows 10 1809+ 或 Windows 11。当前系统版本不满足要求。"
+        }
+    }
+
+    # 系统架构
+    $archInfo = $minReq.Details["Architecture"]
+    if ($archInfo.IsSupported) {
+        Add-CheckResult "系统架构" "OK" $archInfo.Architecture
+    }
+    else {
+        Add-CheckResult "系统架构" "ERROR" "$($archInfo.Architecture) - 需要 x64 或 ARM64"
+        Add-Suggestion "当前系统架构不支持。Claude Code 需要 64 位系统（x64 或 ARM64）。"
+    }
+
+    # 物理内存
+    $memInfo = $minReq.Details["Memory"]
+    if ($memInfo.IsSufficient) {
+        Add-CheckResult "物理内存" "OK" "$($memInfo.TotalGB) GB（满足 >= 4GB 要求）"
+    }
+    else {
+        Add-CheckResult "物理内存" "ERROR" "$($memInfo.TotalGB) GB（需要 4GB 以上）"
+        Add-Suggestion "物理内存不足 4GB。请关闭其他程序释放内存，或考虑升级硬件。"
+    }
+
+    # PowerShell 版本
+    $psInfo = $minReq.Details["PowerShell"]
+    if ($psInfo.IsSupported) {
+        Add-CheckResult "PowerShell" "OK" "$($psInfo.Version)"
+    }
+    else {
+        Add-CheckResult "PowerShell" "ERROR" "$($psInfo.Version) - 需要 5.1+"
+        Add-Suggestion "PowerShell 版本过低。请从 https://aka.ms/PSWindows 升级。"
+    }
+
+    # 总体最低要求判断
+    if ($minReq.IsSupported) {
+        Add-CheckResult "最低要求" "OK" "满足安装的最低系统要求"
+    }
+    else {
+        Add-CheckResult "最低要求" "ERROR" "不满足（错误数: $($minReq.Errors.Count)）"
+        $totalErrors = $minReq.Errors.Count
+        Add-Suggestion "共有 $totalErrors 项不满足最低要求。请逐项解决后重新检测。"
+    }
+}
+
+# ============================================================
+# 2. 系统信息
 # ============================================================
 
 function Check-SystemInfo {
-    Write-Step "诊断项目 1/7：系统信息"
+    Write-Step "诊断项目 2/8：系统信息"
 
     $winInfo = Get-WindowsVersionInfo
     Add-CheckResult "Windows 版本" $(if ($winInfo.IsSupported) { "OK" } else { "ERROR" }) "$($winInfo.Version) (Build $($winInfo.Build))"
@@ -120,7 +187,7 @@ function Check-SystemInfo {
 # ============================================================
 
 function Check-Commands {
-    Write-Step "诊断项目 2/7：命令检测"
+    Write-Step "诊断项目 3/8：命令检测"
 
     # Node.js 检测
     $nodeInfo = Test-NodeJsInstalled
@@ -205,7 +272,7 @@ function Check-Commands {
 # ============================================================
 
 function Check-Files {
-    Write-Step "诊断项目 3/7：配置文件检测"
+    Write-Step "诊断项目 4/8：配置文件检测"
 
     $configPath = Get-ClaudeConfigFile
     $configDir = Get-ClaudeConfigDir
@@ -328,7 +395,7 @@ function Check-Files {
 # ============================================================
 
 function Check-Network {
-    Write-Step "诊断项目 4/7：网络检测"
+    Write-Step "诊断项目 5/8：网络检测"
 
     # DNS 检测
     try {
@@ -374,7 +441,7 @@ function Check-Network {
 # ============================================================
 
 function Check-DeepSeekApi {
-    Write-Step "诊断项目 5/7：DeepSeek API 测试（Anthropic Format）"
+    Write-Step "诊断项目 6/8：DeepSeek API 测试（Anthropic Format）"
 
     if ($SkipApiTest) {
         Add-CheckResult "DeepSeek API 测试" "SKIP" "已按参数跳过"
@@ -446,7 +513,7 @@ function Check-DeepSeekApi {
 # ============================================================
 
 function Check-VSCode {
-    Write-Step "诊断项目 6/7：VS Code 检测"
+    Write-Step "诊断项目 7/8：VS Code 检测"
 
     $codeVersion = Test-CodeInstalled
     if ($codeVersion) {
@@ -472,7 +539,7 @@ function Check-VSCode {
 # ============================================================
 
 function Check-WSL {
-    Write-Step "诊断项目 7/7：WSL 检测"
+    Write-Step "诊断项目 8/8：WSL 检测"
 
     $wslInfo = Test-WslInstalled
     if (-not $wslInfo.Installed) {
@@ -644,6 +711,7 @@ function Main {
     Write-Host ""
 
     # 执行所有检测
+    Check-MinimumRequirements
     Check-SystemInfo
     Check-Commands
     Check-Files
@@ -686,56 +754,62 @@ function Main {
         return
     }
 
-    $reportContent = $script:DoctorState.ReportLines -join "`r`n"
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 
-    $savedPaths = @()
-    $supportReportPath = $null
     if ($OutputPath) {
-        $outputPath = $OutputPath
-        $outputDir = Split-Path -Parent $outputPath
+        # 指定输出路径：写入分享版报告
+        $reportContent = $script:DoctorState.ReportLines -join "`r`n"
+        $shareContent = Sanitize-ReportText -Text $reportContent
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+        $outputDir = Split-Path -Parent $OutputPath
         if ($outputDir -and -not (Test-Path $outputDir)) {
             New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
         }
-        [System.IO.File]::WriteAllText($outputPath, $reportContent, $utf8NoBom)
-        $savedPaths += $outputPath
-        $supportReportPath = $outputPath
+        [System.IO.File]::WriteAllText($OutputPath, $shareContent, $utf8NoBom)
+
+        $fullOutputPath = (Resolve-Path $OutputPath -ErrorAction SilentlyContinue).Path
+        if (-not $fullOutputPath) { $fullOutputPath = $OutputPath }
+        Write-Success "诊断报告已保存到: $fullOutputPath"
     }
     else {
-        $reportsDir = Join-Path $ScriptDir "reports"
-        if (-not (Test-Path $reportsDir)) {
-            New-Item -ItemType Directory -Path $reportsDir -Force | Out-Null
-        }
+        # 使用双报告机制
+        $reportResult = Write-DiagnosticReports -ReportLines $script:DoctorState.ReportLines -ScriptDir $ScriptDir -Timestamp $timestamp
 
-        $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-        $outputPath = Join-Path $reportsDir "report-$timestamp.txt"
-        $latestReportPath = Join-Path $ScriptDir "report.txt"
+        $fullSharePath = (Resolve-Path $reportResult.SharePath -ErrorAction SilentlyContinue).Path
+        if (-not $fullSharePath) { $fullSharePath = $reportResult.SharePath }
 
-        [System.IO.File]::WriteAllText($outputPath, $reportContent, $utf8NoBom)
-        [System.IO.File]::WriteAllText($latestReportPath, $reportContent, $utf8NoBom)
-        $savedPaths += $outputPath
-        $savedPaths += $latestReportPath
-        $supportReportPath = $latestReportPath
+        $fullHistoryPath = (Resolve-Path $reportResult.HistoryPath -ErrorAction SilentlyContinue).Path
+        if (-not $fullHistoryPath) { $fullHistoryPath = $reportResult.HistoryPath }
+
+        $fullLocalPath = (Resolve-Path $reportResult.FullPath -ErrorAction SilentlyContinue).Path
+        if (-not $fullLocalPath) { $fullLocalPath = $reportResult.FullPath }
+
+        Write-Host ""
+        Write-Success "已生成诊断报告:"
+        Write-Info "  分享版报告（可发送）: $fullSharePath"
+        Write-Info "  分享版历史: $fullHistoryPath"
+        Write-Info "  完整版报告（仅本地保存）: $fullLocalPath"
+        Write-Host ""
+        Write-Info "请发送 report.txt 给技术支持。"
+        Write-Warning "不要发送 full-report-xxx.txt（包含完整路径信息）！"
+        Write-Warning "不要发送您的 API Key！报告中已自动脱敏处理。"
+        Write-Warning "不要截图包含 API Key 的窗口！"
     }
 
-    $fullOutputPath = (Resolve-Path $outputPath -ErrorAction SilentlyContinue).Path
-    if (-not $fullOutputPath) { $fullOutputPath = $outputPath }
-    $fullSupportReportPath = (Resolve-Path $supportReportPath -ErrorAction SilentlyContinue).Path
-    if (-not $fullSupportReportPath) { $fullSupportReportPath = $supportReportPath }
-    Write-Host ""
-    Write-Success "诊断报告已保存到: $fullOutputPath"
-    if (-not $OutputPath) {
-        Write-Info "最新报告快捷文件: $(Join-Path $ScriptDir "report.txt")"
-    }
     Write-Info "日志文件: $(Get-LogFilePath)"
-    Write-Host ""
-    Write-Info "请发送此诊断报告给技术支持: $fullSupportReportPath"
-    Write-Warning "请不要发送您的 API Key！报告中已自动脱敏处理。"
+
+    if ($OutputPath) {
+        $supportPathForClipboard = $OutputPath
+    }
+    else {
+        $supportPathForClipboard = $reportResult.SharePath
+    }
 
     if ($env:CCDI_TEST_MODE -ne "1") {
         if (Get-Command Set-Clipboard -ErrorAction SilentlyContinue) {
             try {
-                Set-Clipboard -Value $fullSupportReportPath
+                Set-Clipboard -Value $supportPathForClipboard
                 Write-Info "报告路径已复制到剪贴板。"
             }
             catch {
@@ -745,7 +819,7 @@ function Main {
 
         if (-not $NoOpenReport) {
             try {
-                Start-Process -FilePath "explorer.exe" -ArgumentList "/select,`"$fullSupportReportPath`"" -ErrorAction Stop
+                Start-Process -FilePath "explorer.exe" -ArgumentList "/select,`"$supportPathForClipboard`"" -ErrorAction Stop
                 Write-Info "已为您打开报告所在位置。"
             }
             catch {

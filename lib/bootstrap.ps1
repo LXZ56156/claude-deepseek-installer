@@ -12,6 +12,7 @@ function Get-CcdiProjectRoot {
 
 . (Join-Path $script:CcdiLibDir "logger.ps1")
 . (Join-Path $script:CcdiLibDir "common.ps1")
+. (Join-Path $script:CcdiLibDir "state.ps1")
 . (Join-Path $script:CcdiLibDir "env-check.ps1")
 . (Join-Path $script:CcdiLibDir "config-writer.ps1")
 

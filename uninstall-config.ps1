@@ -25,13 +25,45 @@ Write-Host "           配置恢复/卸载工具                                
 Write-Host "==============================================================" -ForegroundColor Cyan
 Write-Host ""
 
+# 读取安装状态
+$state = Read-CcdiState
+
+if ($state) {
+    Write-Info "本工具记录的安装信息:"
+    Write-Info "  安装方式: $($state.claudeInstallMethod)"
+    Write-Info "  Claude Code 原本已安装: $(if ($state.claudeWasAlreadyInstalled) { "是" } else { "否" })"
+    Write-Info "  安装状态: $($state.claudeInstallStatus)"
+    Write-Info "  安装时间: $($state.installedAt)"
+    Write-Host ""
+}
+
 Write-Info "此工具可以帮助您:"
 Write-Info "  1. 从备份恢复之前的配置文件"
 Write-Info "  2. 移除本工具写入的 DeepSeek 配置（保留您自己的其他 env 和配置）"
 Write-Info "  3. 删除整个配置文件"
 Write-Info ""
-Write-Warning "注意: 此工具不会卸载 Claude Code，仅管理配置文件。"
-Write-Warning "卸载 Claude Code 请运行: npm uninstall -g @anthropic-ai/claude-code"
+
+# 根据安装方式给出不同提示
+if ($state) {
+    if ($state.claudeWasAlreadyInstalled -eq $true) {
+        Write-Warning "Claude Code 原本已存在（非本工具安装），不建议卸载 Claude Code。"
+        Write-Info "本工具仅管理 DeepSeek 配置的恢复/清理。"
+    }
+    elseif ($state.claudeInstallMethod -eq "npm") {
+        Write-Info "Claude Code 通过 npm 安装。如需卸载，可运行: npm uninstall -g @anthropic-ai/claude-code"
+    }
+    elseif ($state.claudeInstallMethod -eq "native") {
+        Write-Info "Claude Code 通过官方 Native Install 安装。本工具暂不自动卸载。"
+        Write-Info "卸载请参考 Claude Code 官方文档。本工具仅管理配置。"
+    }
+    elseif ($state.claudeInstallMethod -eq "node-via-winget") {
+        Write-Info "Node.js 通过 winget 安装（Claude Code 尚未完成安装）。"
+    }
+}
+else {
+    Write-Warning "未找到安装状态记录，无法确认 Claude Code 是否由本工具安装。"
+    Write-Warning "为避免误删，仅提供配置恢复/清理功能。"
+}
 Write-Host ""
 
 # 显示当前配置

@@ -1,5 +1,5 @@
 ﻿# ============================================================
-# Start-Here.ps1 - Claude Code + DeepSeek 一键安装总控入口 (v1.3.0)
+# Start-Here.ps1 - Claude Code + DeepSeek 一键安装总控入口 (v1.3.1)
 #
 # 用法:
 #   双击 "开始安装.cmd" 或:
@@ -34,7 +34,7 @@ if (-not $EntryScriptDir) { $EntryScriptDir = (Get-Location).Path }
 . (Join-Path $EntryScriptDir "lib\bootstrap.ps1")
 $ScriptDir = Initialize-CcdiScript -ScriptName "start-here"
 
-$ScriptVersion = "1.3.0"
+$ScriptVersion = "1.3.1"
 
 # 状态变量
 $script:ClaudeInstalled = $false
@@ -47,6 +47,7 @@ $script:ApiTestFailed = $false
 $script:ApiTestFailReason = ""
 $script:TestProjectPath = $null
 $script:ReportPath = $null
+$script:UnsupportedSystem = $false
 
 # ============================================================
 # 辅助函数
@@ -154,18 +155,46 @@ function Step-CheckEnvironment {
     Write-Info "正在检查您的系统环境（只检测，不修改）..."
     Write-Host ""
 
+    # ============================================================
+    # 最低要求检测（硬性判断）
+    # ============================================================
+    Write-Info "【最低系统要求检测】"
+    Write-Host ""
+
+    $minReq = Test-MinimumRequirements
+
     # Windows 版本
-    $winInfo = Get-WindowsVersionInfo
+    $winInfo = $minReq.Details["Windows"]
     if ($winInfo.IsSupported) {
         $osLabel = if ($winInfo.IsWindows11) { "Windows 11" } else { "Windows 10" }
         Write-ResultLine "Windows 版本" "OK" "$osLabel (Build $($winInfo.Build))"
     }
     else {
-        Write-ResultLine "Windows 版本" "ERROR" "不支持的系统: $($winInfo.Version)"
+        Write-ResultLine "Windows 版本" "ERROR" "不支持的系统: $($winInfo.Version) (Build $($winInfo.Build))"
+        Write-Warning "需要 Windows 10 1809+ (Build >= 17763) 或 Windows 11"
+    }
+
+    # 系统架构
+    $archInfo = $minReq.Details["Architecture"]
+    if ($archInfo.IsSupported) {
+        Write-ResultLine "系统架构" "OK" $archInfo.Architecture
+    }
+    else {
+        Write-ResultLine "系统架构" "ERROR" "不支持: $($archInfo.Architecture)（需要 x64 或 ARM64）"
+    }
+
+    # 物理内存
+    $memInfo = $minReq.Details["Memory"]
+    if ($memInfo.IsSufficient) {
+        Write-ResultLine "物理内存" "OK" "$($memInfo.TotalGB) GB"
+    }
+    else {
+        Write-ResultLine "物理内存" "ERROR" "$($memInfo.TotalGB) GB（需要 4GB 以上）"
+        Write-Warning "请关闭其他程序释放内存，或升级硬件。"
     }
 
     # PowerShell 版本
-    $psInfo = Get-PowerShellVersionInfo
+    $psInfo = $minReq.Details["PowerShell"]
     if ($psInfo.IsSupported) {
         Write-ResultLine "PowerShell 版本" "OK" "$($psInfo.Version)"
     }
@@ -180,6 +209,35 @@ function Step-CheckEnvironment {
     else {
         Write-ResultLine "管理员权限" "OK" "普通用户权限（推荐）"
     }
+
+    Write-Host ""
+
+    # 如果硬性要求不满足，停止后续流程
+    if (-not $minReq.IsSupported) {
+        Write-Host ""
+        Write-Error-Msg "当前电脑不满足最低系统要求，无法继续安装。"
+        Write-Host ""
+        foreach ($err in $minReq.Errors) {
+            Write-Warning $err
+        }
+        Write-Host ""
+        Write-Info "建议:"
+        Write-Info "  - 升级到 Windows 10 1809 或更高版本"
+        Write-Info "  - 确保系统为 64 位（x64 或 ARM64）"
+        Write-Info "  - 确保至少 4GB 内存"
+        Write-Info "  - 升级 PowerShell 到 5.1 或更高版本"
+        Write-Info "  - 运行「一键诊断.cmd」获取详细诊断报告"
+        $script:UnsupportedSystem = $true
+        return @{
+            DeepSeekReachable = $false
+            ClaudeExists      = $false
+            WslInstalled      = $false
+            MinReqFailed      = $true
+        }
+    }
+
+    Write-Info "【其他环境检测】"
+    Write-Host ""
 
     # 网络检测
     Write-Info "检测网络连通性..."
@@ -288,6 +346,7 @@ function Step-CheckEnvironment {
         DeepSeekReachable = $netDeepSeek.Reachable
         ClaudeExists      = ($null -ne $claudeVersion)
         WslInstalled      = $wslInfo.Installed
+        MinReqFailed      = $false
     }
 }
 
@@ -324,8 +383,13 @@ function Step-InstallClaudeCode {
         }
 
         $script:ClaudeInstalled = $true
-        $script:ClaudeInstallMethod = "已存在"
+        $script:ClaudeInstallMethod = "existing"
         $script:ClaudeInstallStatus = "AlreadyInstalled"
+        Update-CcdiState -Updates @{
+            claudeWasAlreadyInstalled = $true
+            claudeInstallMethod       = "existing"
+            claudeInstallStatus       = "AlreadyInstalled"
+        } | Out-Null
         return $true
     }
 
@@ -380,8 +444,13 @@ function Step-InstallClaudeCode {
         if ($newVersion) {
             Write-Success "Claude Code 安装验证通过: $newVersion"
             $script:ClaudeInstalled = $true
-            $script:ClaudeInstallMethod = "Native Install"
+            $script:ClaudeInstallMethod = "native"
             $script:ClaudeInstallStatus = "Installed"
+            Update-CcdiState -Updates @{
+                claudeWasAlreadyInstalled = $false
+                claudeInstallMethod       = "native"
+                claudeInstallStatus       = "Installed"
+            } | Out-Null
             return $true
         }
         else {
@@ -392,8 +461,13 @@ function Step-InstallClaudeCode {
             if ($newVersion) {
                 Write-Success "Claude Code 安装验证通过（PATH 刷新后）: $newVersion"
                 $script:ClaudeInstalled = $true
-                $script:ClaudeInstallMethod = "Native Install"
+                $script:ClaudeInstallMethod = "native"
                 $script:ClaudeInstallStatus = "Installed"
+                Update-CcdiState -Updates @{
+                    claudeWasAlreadyInstalled = $false
+                    claudeInstallMethod       = "native"
+                    claudeInstallStatus       = "Installed"
+                } | Out-Null
                 return $true
             }
             Write-Warning "PATH 刷新后仍未检测到 claude，将继续尝试 npm fallback。"
@@ -429,8 +503,12 @@ function Step-InstallClaudeCode {
                     Write-Success "Node.js 安装完成！"
                     Write-Warning "请关闭并重新打开 PowerShell/命令提示符，然后重新运行本脚本。"
                     Write-Warning "这样 Node.js 和 npm 命令才能被正确识别。"
-                    $script:ClaudeInstallMethod = "Node.js via winget"
+                    $script:ClaudeInstallMethod = "node-via-winget"
                     $script:ClaudeInstallStatus = "NeedsRestart"
+                    Update-CcdiState -Updates @{
+                        claudeInstallMethod = "node-via-winget"
+                        claudeInstallStatus = "NeedsRestart"
+                    } | Out-Null
                 }
                 else {
                     Write-Error-Msg "Node.js 自动安装失败。"
@@ -462,6 +540,8 @@ function Step-InstallClaudeCode {
 
     if ($installResult.Success) {
         Write-Success "npm 安装 Claude Code 成功！"
+        $script:ClaudeInstallMethod = "npm"
+        $script:ClaudeInstallStatus = "Installed"
     }
     else {
         Write-Error-Msg "npm 安装过程中出现错误:"
@@ -486,8 +566,13 @@ function Step-InstallClaudeCode {
             Write-Host $doctorResult.Output
         }
         $script:ClaudeInstalled = $true
-        $script:ClaudeInstallMethod = "npm fallback"
+        $script:ClaudeInstallMethod = "npm"
         $script:ClaudeInstallStatus = "Installed"
+        Update-CcdiState -Updates @{
+            claudeWasAlreadyInstalled = $false
+            claudeInstallMethod       = "npm"
+            claudeInstallStatus       = "Installed"
+        } | Out-Null
         return $true
     }
     else {
@@ -497,8 +582,13 @@ function Step-InstallClaudeCode {
         if ($newVersion) {
             Write-Success "Claude Code 检测成功（PATH 刷新后）: $newVersion"
             $script:ClaudeInstalled = $true
-            $script:ClaudeInstallMethod = "npm fallback"
+            $script:ClaudeInstallMethod = "npm"
             $script:ClaudeInstallStatus = "Installed"
+            Update-CcdiState -Updates @{
+                claudeWasAlreadyInstalled = $false
+                claudeInstallMethod       = "npm"
+                claudeInstallStatus       = "Installed"
+            } | Out-Null
             return $true
         }
 
@@ -512,8 +602,12 @@ function Step-InstallClaudeCode {
         }
 
         $script:ClaudeInstalled = $false
-        $script:ClaudeInstallMethod = "可能已安装（PATH 未刷新）"
+        $script:ClaudeInstallMethod = "npm"
         $script:ClaudeInstallStatus = "NeedsRestart"
+        Update-CcdiState -Updates @{
+            claudeInstallMethod = "npm"
+            claudeInstallStatus = "NeedsRestart"
+        } | Out-Null
         return $false
     }
 }
@@ -640,6 +734,10 @@ function Step-WriteConfig {
         Write-Success "DeepSeek 配置写入成功！"
         Write-Info "API Key: $(Mask-ApiKey -Key $ApiKey)"
         $script:ConfigWritten = $true
+        Update-CcdiState -Updates @{
+            configPath     = $writeResult.ConfigPath
+            lastBackupPath = if ($writeResult.BackupPath) { $writeResult.BackupPath } else { "" }
+        } | Out-Null
         return $true
     }
     else {
@@ -662,6 +760,7 @@ function Step-TestApi {
         Write-ResultLine "API 测试" "SKIP" "已按参数跳过"
         Write-Info "注意: 未验证 API 是否可用。可稍后运行 doctor.ps1 测试。"
         $script:ApiTestSkipped = $true
+        Update-CcdiState -Updates @{ lastApiTest = "skipped" } | Out-Null
         return
     }
 
@@ -678,6 +777,7 @@ function Step-TestApi {
             Write-Info "模型返回: $($apiTest.Content)"
         }
         $script:ApiTestPassed = $true
+        Update-CcdiState -Updates @{ lastApiTest = "passed" } | Out-Null
     }
     else {
         Write-ResultLine "API 测试" "WARN" $apiTest.Error
@@ -698,6 +798,7 @@ function Step-TestApi {
         Write-Info "配置已写入但 API 测试未通过。以下步骤将继续，但安装报告会标注「部分成功」。"
         $script:ApiTestFailed = $true
         $script:ApiTestFailReason = $apiTest.Error
+        Update-CcdiState -Updates @{ lastApiTest = "failed" } | Out-Null
     }
 }
 
@@ -913,7 +1014,21 @@ function Show-CompletionPage {
     Write-Host ""
     Write-Host ""
 
-    if ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestPassed) {
+    if ($script:UnsupportedSystem) {
+        Write-Host "==============================================================" -ForegroundColor Red
+        Write-Host "                                                              " -ForegroundColor Red
+        Write-Host "           当前电脑不满足最低要求，未继续安装                  " -ForegroundColor Red
+        Write-Host "                                                              " -ForegroundColor Red
+        Write-Host "==============================================================" -ForegroundColor Red
+        Write-Host ""
+        Write-Info "建议:"
+        Write-Info "  - 升级到 Windows 10 1809 或更高版本"
+        Write-Info "  - 确保系统为 64 位（x64 或 ARM64）"
+        Write-Info "  - 确保至少 4GB 内存"
+        Write-Info "  - 升级 PowerShell 到 5.1 或更高版本"
+        Write-Info "  - 运行「一键诊断.cmd」获取详细诊断报告"
+    }
+    elseif ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestPassed) {
         Write-Host "==============================================================" -ForegroundColor Green
         Write-Host "                                                              " -ForegroundColor Green
         Write-Host "                 安装流程全部完成！                            " -ForegroundColor Green
@@ -992,8 +1107,20 @@ function Show-CompletionPage {
 function Start-LazyInstall {
     Write-Log "INFO" "开始一键安装流程"
 
+    # 初始化/更新状态文件
+    Initialize-CcdiState -ScriptVersion $ScriptVersion | Out-Null
+
     # Step 1: 环境检查
     $envResult = Step-CheckEnvironment
+
+    # 硬性要求不满足，停止安装
+    if ($envResult.MinReqFailed) {
+        Write-Error-Msg "当前电脑不满足最低系统要求，已停止安装。"
+        Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
+        $script:UnsupportedSystem = $true
+        Show-CompletionPage
+        return
+    }
 
     Pause-ForUser
 
@@ -1097,24 +1224,58 @@ function Start-WslSetup {
         return
     }
 
-    Write-Info "检测到 WSL Ubuntu。"
+    # 检查 WSL Ubuntu 版本
+    $wslUbuntuVer = Get-WslUbuntuVersionInfo
+    if ($wslUbuntuVer.Exists) {
+        if ($wslUbuntuVer.IsSupported) {
+            Write-ResultLine "WSL Ubuntu" "OK" "版本 $($wslUbuntuVer.Version)"
+        }
+        elseif ($wslUbuntuVer.IsUbuntu) {
+            Write-ResultLine "WSL Ubuntu" "ERROR" "版本 $($wslUbuntuVer.Version) 低于 20.04"
+            Write-Warning "建议升级 Ubuntu 到 20.04 或更高版本。"
+        }
+        else {
+            Write-ResultLine "WSL 发行版" "WARN" "非 Ubuntu，未充分测试"
+        }
+    }
+
+    Write-Host ""
     Write-Info "有两种配置方式:"
     Write-Host ""
-    Write-Host "  方式 A（推荐）: 在 WSL 终端中手动运行" -ForegroundColor Cyan
+    Write-Host "  方式 A（推荐）: 在 WSL 终端中手动运行" -ForegroundColor Green
     Write-Host "    1. 打开 WSL 终端（开始菜单搜索 'Ubuntu'）" -ForegroundColor White
     Write-Host "    2. cd 到本项目目录" -ForegroundColor White
     Write-Host "    3. 运行: chmod +x install_wsl.sh && ./install_wsl.sh" -ForegroundColor White
     Write-Host ""
-    Write-Host "  方式 B: Windows 端调用 WSL" -ForegroundColor Cyan
-    Write-Host "    （将自动转换路径并执行）" -ForegroundColor White
+    Write-Host "  方式 B（实验性，不推荐新手使用）: Windows 端调用 WSL" -ForegroundColor DarkGray
+    Write-Host "    （将自动转换路径并执行，但可能因路径/权限问题失败）" -ForegroundColor White
 
-    if (Confirm-UserChoice -Message "是否使用方式 B 自动在 WSL 中运行安装脚本？") {
-        # Windows 路径转 WSL 路径
-        $winPath = $ScriptDir
-        $wslPath = $winPath -replace '\\', '/' -replace '^([A-Za-z]):', '/mnt/$1'
-        $wslPath = $wslPath.ToLower() -replace '^/mnt/([a-z])/', { "/mnt/$($_.Groups[1].Value.ToLower())/" }
+    if (-not (Confirm-UserChoice -Message "是否使用方式 A（推荐）在 WSL 终端中手动运行？")) {
+        # 方式 B：二次确认
+        Write-Warning "您选择了方式 B（实验性，不推荐新手使用）。"
+        Write-Warning "此方式可能因路径含特殊字符、WSL 配置差异等原因失败。"
+        if (-not (Confirm-UserChoice -Message "确认使用方式 B（实验性）？建议选择 N 改用方式 A")) {
+            Write-Info "请在 WSL 终端中手动运行 install_wsl.sh。"
+            return
+        }
+
+        # 安全检查：路径是否包含危险字符
+        if (-not (Test-WslPathSafe -WindowsPath $ScriptDir)) {
+            Write-Error-Msg "无法安全地自动传递路径到 WSL。"
+            Write-Info "请改用方式 A：在 WSL 终端中手动运行 install_wsl.sh。"
+            return
+        }
+
+        # 使用 wslpath 转换路径
+        $wslPath = Convert-WindowsPathToWslPath -WindowsPath $ScriptDir
+        if ($null -eq $wslPath) {
+            Write-Error-Msg "无法自动转换 Windows 路径到 WSL 路径。"
+            Write-Info "请改用方式 A：在 WSL 终端中手动运行 install_wsl.sh。"
+            return
+        }
 
         Write-Info "正在 WSL 中执行 install_wsl.sh（可能需要几分钟）..."
+        Write-Info "WSL 路径: $wslPath"
         $wslResult = Invoke-CommandSafe -Command "wsl" -Arguments @(
             "bash", "-lc",
             "cd '$wslPath' && chmod +x install_wsl.sh && ./install_wsl.sh"
@@ -1125,13 +1286,16 @@ function Start-WslSetup {
             Write-Host $wslResult.Output
         }
         else {
-            Write-Error-Msg "WSL 配置过程中出现错误:"
-            Write-Host $wslResult.Error -ForegroundColor Red
-            Write-Info "请尝试方式 A（在 WSL 终端中手动运行）。"
+            Write-Error-Msg "WSL 自动配置过程中出现错误。"
+            Write-Info "请改用方式 A：在 WSL 终端中手动运行 install_wsl.sh。"
+            Write-Info "具体方法: 打开 Ubuntu 终端，cd 到本项目目录，运行:"
+            Write-Host "  chmod +x install_wsl.sh && ./install_wsl.sh" -ForegroundColor Cyan
         }
     }
     else {
         Write-Info "请在 WSL 终端中手动运行 install_wsl.sh。"
+        Write-Info "具体方法: 打开 Ubuntu 终端，cd 到本项目目录，运行:"
+        Write-Host "  chmod +x install_wsl.sh && ./install_wsl.sh" -ForegroundColor Cyan
     }
 }
 

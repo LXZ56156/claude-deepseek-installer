@@ -35,11 +35,20 @@ $requiredCommands = @(
     "Write-FatalError",
     "Invoke-CommandSafe",
     "Read-ApiKeyWithMaskedConfirmation",
+    "Sanitize-ReportText",
+    "Sanitize-PathForReport",
+    "Convert-WindowsPathToWslPath",
     "Get-DesktopPath",
     "Get-WindowsVersionInfo",
+    "Get-SystemArchitectureInfo",
+    "Get-MemoryInfo",
+    "Test-MinimumRequirements",
     "Test-ClaudeInstalled",
     "Write-DeepSeekConfig",
-    "Get-DeepSeekConfigStatus"
+    "Get-DeepSeekConfigStatus",
+    "Initialize-CcdiState",
+    "Update-CcdiState",
+    "Read-CcdiState"
 )
 
 foreach ($cmd in $requiredCommands) {

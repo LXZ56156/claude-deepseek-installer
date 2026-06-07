@@ -11,7 +11,7 @@
 # ============================================================
 
 param(
-    [string]$Version = "1.3.0",
+    [string]$Version = "1.3.1",
     [string]$OutputDir = $null,
     [switch]$SkipSha256
 )
@@ -144,19 +144,29 @@ $AllowedEntries = @(
     "uninstall-config.ps1",
     "install_wsl.sh",
     # === lib 目录（随迭代增减，允许整目录复制） ===
-    "lib",
+    "lib/bootstrap.ps1",
+    "lib/common.ps1",
+    "lib/env-check.ps1",
+    "lib/config-writer.ps1",
+    "lib/logger.ps1",
+    "lib/state.ps1",
+    "lib/deepseek-env.defaults.json",
     # === docs 文件级白名单 ===
     "docs/用户使用教程.md",
     "docs/常见问题FAQ.md",
     "docs/闲鱼商品说明.md",
     "docs/测试清单.md",
     "docs/视频教程脚本.md",
+    "docs/用户体验验证清单.md",
+    "docs/售后排查话术.md",
     # === examples 文件级白名单 ===
     "examples/settings.deepseek.example.json",
     "examples/report.example.txt",
     # === scripts 文件级白名单 ===
     "scripts/check.ps1",
     "scripts/check.sh",
+    "scripts/ux-check.ps1",
+    "scripts/ux-check.sh",
     # === 根目录文档 ===
     "README.md",
     "QUICK_START.md",
@@ -183,7 +193,10 @@ $safePlaceholders = @(
     "sk-xxxx",
     "__API_KEY__",
     "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    "sk-1234567890abcdef1234567890abcdef"  # scripts/check.ps1 的 Mask-ApiKey 单元测试 Key
+    "sk-1234567890abcdef1234567890abcdef",  # scripts/check.ps1 Mask-ApiKey test
+    "sk-test1234567890abcdef1234567890abcdef1234567890ab",  # ux-check.ps1/test scripts
+    "sk-fake1234567890abcdef1234567890abcdef1234567890ab",  # ux-check.sh test key
+    "sk-1234567890abcdef1234567890abcdef1234567890ab"       # ux-check.ps1 test key
 )
 
 $dangerPatterns = @(
@@ -466,11 +479,20 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
             "Write-FatalError",
             "Invoke-CommandSafe",
             "Read-ApiKeyWithMaskedConfirmation",
+            "Sanitize-ReportText",
+            "Sanitize-PathForReport",
+            "Convert-WindowsPathToWslPath",
             "Get-DesktopPath",
             "Get-WindowsVersionInfo",
+            "Get-SystemArchitectureInfo",
+            "Get-MemoryInfo",
+            "Test-MinimumRequirements",
             "Test-ClaudeInstalled",
             "Write-DeepSeekConfig",
-            "Get-DeepSeekConfigStatus"
+            "Get-DeepSeekConfigStatus",
+            "Initialize-CcdiState",
+            "Update-CcdiState",
+            "Read-CcdiState"
         )
 
         foreach ($cmd in $requiredCommands) {

@@ -1,4 +1,4 @@
-# 快速开始指南 (v1.3)
+# 快速开始指南 (v1.3.1)
 
 ## 一、解压即用（推荐方式）
 
@@ -61,9 +61,13 @@ claude
 
 ## 二、遇到问题？
 
-双击 **`一键诊断.cmd`**，把项目目录下生成的 `report.txt` 文件发给技术支持。历史报告保存在 `reports/`。
+双击 **`一键诊断.cmd`**，把项目根目录下生成的 `report.txt`（分享版）文件发给技术支持。历史报告保存在 `reports/`。
 
-**注意：诊断报告中不包含完整 API Key，可以放心发送。**
+**注意：**
+- **只发送 `report.txt`**（分享版，已脱敏路径和 Key）
+- **不要发送 `reports/full-report-xxx.txt`**（完整版，包含真实路径）
+- 诊断报告中的 API Key 已自动脱敏，可以放心发送
+- 不要截图包含 API Key 的窗口
 
 ---
 
@@ -124,11 +128,13 @@ Remove-Item Env:\CCDI_API_KEY
 powershell -ExecutionPolicy Bypass -File .\doctor.ps1
 ```
 
-### WSL 用户
+### WSL 用户（推荐在 WSL 终端中手动运行）
 
 ```bash
-# 在 WSL Ubuntu 终端中
-cd /mnt/c/Users/你的用户名/Downloads/claude-deepseek-installer
+# 在 WSL Ubuntu 终端中（推荐方式）
+cd /mnt/c/Users/你的用户名/路径/claude-deepseek-installer
 chmod +x install_wsl.sh
 ./install_wsl.sh
 ```
+
+Windows 端自动调用 WSL 为实验性高级选项，不推荐新手使用。

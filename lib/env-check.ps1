@@ -35,16 +35,20 @@ function Get-WindowsVersionInfo {
         $info.Version = $os.Caption
         $info.Build = $os.Version
 
-        # 判断 Windows 10/11
+        # 判断 Windows 10/11，并检查最低版本要求
         if ($os.Version -match '^10\.0\.(\d+)') {
             $buildNumber = [int]$Matches[1]
             if ($buildNumber -ge 22000) {
                 $info.IsWindows11 = $true
                 $info.IsSupported = $true
             }
-            elseif ($buildNumber -ge 10240) {
+            elseif ($buildNumber -ge 17763) {
                 $info.IsWindows10 = $true
                 $info.IsSupported = $true
+            }
+            elseif ($buildNumber -ge 10240) {
+                $info.IsWindows10 = $true
+                $info.IsSupported = $false
             }
         }
     }
@@ -76,6 +80,235 @@ function Get-PowerShellVersionInfo {
     }
 
     return $info
+}
+
+function Get-SystemArchitectureInfo {
+    <#
+    .SYNOPSIS
+        获取 CPU/OS 架构信息
+    .RETURNS
+        包含 Architecture, IsSupported 的哈希表
+    #>
+    $info = @{
+        Architecture = "Unknown"
+        IsSupported  = $false
+    }
+
+    try {
+        # 优先使用 RuntimeInformation（PowerShell 5.1+）
+        $arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
+        $info.Architecture = $arch.ToString()
+        switch ($arch) {
+            "X64"   { $info.IsSupported = $true }
+            "Arm64" { $info.IsSupported = $true }
+            default { $info.IsSupported = $false }
+        }
+    }
+    catch {
+        # 回退到环境变量
+        try {
+            $envArch = $env:PROCESSOR_ARCHITECTURE
+            if ($envArch) {
+                $info.Architecture = $envArch
+                switch -Wildcard ($envArch) {
+                    "AMD64"  { $info.IsSupported = $true; $info.Architecture = "X64" }
+                    "ARM64"  { $info.IsSupported = $true; $info.Architecture = "Arm64" }
+                    default  { $info.IsSupported = $false }
+                }
+            }
+        }
+        catch {
+            Write-Log "ERROR" "无法获取系统架构信息: $_"
+        }
+    }
+
+    Write-Log "DEBUG" "系统架构: $($info.Architecture), 支持: $($info.IsSupported)"
+    return $info
+}
+
+function Get-MemoryInfo {
+    <#
+    .SYNOPSIS
+        获取物理内存信息
+    .RETURNS
+        包含 TotalGB, IsSufficient 的哈希表
+    #>
+    $info = @{
+        TotalGB      = 0
+        IsSufficient = $false
+    }
+
+    try {
+        if (Test-CommandAvailable -CommandName "Get-CimInstance") {
+            $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+        }
+        else {
+            $os = Get-WmiObject -Class Win32_OperatingSystem -ErrorAction Stop
+        }
+
+        if ($os.TotalVisibleMemorySize) {
+            $totalKB = [double]$os.TotalVisibleMemorySize
+            $info.TotalGB = [Math]::Round($totalKB / 1048576, 1)
+            $info.IsSufficient = ($info.TotalGB -ge 3.8)  # 略低于 4GB 也放行（3.8GB+）
+        }
+        elseif ($os.TotalVisibleMemorySize -eq 0) {
+            Write-Log "WARN" "TotalVisibleMemorySize 为 0，可能为虚拟机或异常环境"
+            $info.TotalGB = 0
+            $info.IsSufficient = $false
+        }
+    }
+    catch {
+        Write-Log "ERROR" "获取内存信息失败: $_"
+        $info.IsSufficient = $false
+    }
+
+    Write-Log "DEBUG" "物理内存: $($info.TotalGB) GB, 满足最低要求: $($info.IsSufficient)"
+    return $info
+}
+
+function Get-WslUbuntuVersionInfo {
+    <#
+    .SYNOPSIS
+        检测 WSL Ubuntu 版本（仅 WSL 流程或诊断使用）
+    .RETURNS
+        包含 Exists, Version, IsUbuntu, IsSupported, ErrorMessage 的哈希表
+    #>
+    $info = @{
+        Exists        = $false
+        Version       = ""
+        IsUbuntu      = $false
+        IsSupported   = $false
+        ErrorMessage  = ""
+    }
+
+    $ubuntuInfo = Test-UbuntuInWsl
+    if (-not $ubuntuInfo.Exists) {
+        $info.ErrorMessage = "WSL 中未检测到 Ubuntu 发行版"
+        return $info
+    }
+
+    $info.Exists = $true
+
+    try {
+        # 获取 Ubuntu 版本号
+        $distroName = ($ubuntuInfo | Where-Object { $_ -is [string] -and $_ -match "Ubuntu" })
+        # 从 WSL 发行版列表中获取 Ubuntu 发行版名称
+        $wslInfo = Test-WslInstalled
+        $ubuntuDistroName = $null
+        foreach ($distro in $wslInfo.Distributions) {
+            if ($distro.Name -match "Ubuntu") {
+                $ubuntuDistroName = $distro.Name
+                break
+            }
+        }
+
+        if (-not $ubuntuDistroName) {
+            $info.ErrorMessage = "无法确定 Ubuntu 发行版名称"
+            return $info
+        }
+
+        # 使用 wsl 获取 Ubuntu 版本
+        $versionResult = Invoke-CommandSafe -Command "wsl" -Arguments @(
+            "-d", $ubuntuDistroName, "bash", "-c",
+            "cat /etc/os-release 2>/dev/null | grep '^ID=' | cut -d= -f2"
+        )
+
+        if ($versionResult.Success) {
+            $distroId = $versionResult.Output.Trim().ToLower()
+            if ($distroId -eq "ubuntu") {
+                $info.IsUbuntu = $true
+            }
+            else {
+                $info.ErrorMessage = "检测到的发行版不是 Ubuntu: $distroId"
+                return $info
+            }
+        }
+
+        # 获取版本号
+        $verResult = Invoke-CommandSafe -Command "wsl" -Arguments @(
+            "-d", $ubuntuDistroName, "bash", "-c",
+            "lsb_release -rs 2>/dev/null || grep '^VERSION_ID=' /etc/os-release 2>/dev/null | cut -d= -f2"
+        )
+
+        if ($verResult.Success) {
+            $version = $verResult.Output.Trim()
+            $info.Version = $version
+
+            try {
+                $verNum = [double]$version
+                if ($verNum -ge 20.04) {
+                    $info.IsSupported = $true
+                }
+                else {
+                    $info.ErrorMessage = "Ubuntu 版本 $version 低于最低要求 20.04"
+                }
+            }
+            catch {
+                $info.ErrorMessage = "无法解析 Ubuntu 版本号: $version"
+            }
+        }
+        else {
+            $info.ErrorMessage = "无法获取 Ubuntu 版本信息"
+        }
+    }
+    catch {
+        $info.ErrorMessage = "获取 WSL Ubuntu 版本信息失败: $_"
+        Write-Log "ERROR" "获取 WSL Ubuntu 版本失败: $_"
+    }
+
+    Write-Log "DEBUG" "WSL Ubuntu: Exists=$($info.Exists), Version=$($info.Version), IsSupported=$($info.IsSupported)"
+    return $info
+}
+
+function Test-MinimumRequirements {
+    <#
+    .SYNOPSIS
+        聚合所有最低系统要求检测
+    .RETURNS
+        包含 IsSupported, Errors, Warnings, Details 的哈希表
+    #>
+    $result = @{
+        IsSupported = $true
+        Errors      = [System.Collections.ArrayList]::new()
+        Warnings    = [System.Collections.ArrayList]::new()
+        Details     = @{}
+    }
+
+    # 1. Windows 版本
+    $winInfo = Get-WindowsVersionInfo
+    $result.Details["Windows"] = $winInfo
+    if (-not $winInfo.IsSupported) {
+        $result.IsSupported = $false
+        $winBuild = $winInfo.Build
+        [void]$result.Errors.Add("Windows 版本不满足最低要求。需要 Windows 10 1809+ (Build >= 17763) 或 Windows 11。当前: $($winInfo.Version) (Build $winBuild)")
+    }
+
+    # 2. 系统架构
+    $archInfo = Get-SystemArchitectureInfo
+    $result.Details["Architecture"] = $archInfo
+    if (-not $archInfo.IsSupported) {
+        $result.IsSupported = $false
+        [void]$result.Errors.Add("系统架构不支持。需要 x64 或 ARM64。当前: $($archInfo.Architecture)")
+    }
+
+    # 3. 物理内存
+    $memInfo = Get-MemoryInfo
+    $result.Details["Memory"] = $memInfo
+    if (-not $memInfo.IsSufficient) {
+        $result.IsSupported = $false
+        [void]$result.Errors.Add("物理内存不足。需要 4GB 以上。当前: $($memInfo.TotalGB) GB")
+    }
+
+    # 4. PowerShell 版本
+    $psInfo = Get-PowerShellVersionInfo
+    $result.Details["PowerShell"] = $psInfo
+    if (-not $psInfo.IsSupported) {
+        $result.IsSupported = $false
+        [void]$result.Errors.Add("PowerShell 版本过低。需要 5.1+。当前: $($psInfo.Version)")
+    }
+
+    Write-Log "INFO" "最低要求检测: IsSupported=$($result.IsSupported), Errors=$($result.Errors.Count), Warnings=$($result.Warnings.Count)"
+    return $result
 }
 
 function Test-IsAdministrator {
@@ -687,6 +920,8 @@ function Get-FullEnvironmentReport {
     $report = @{
         Timestamp          = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
         Windows            = Get-WindowsVersionInfo
+        Architecture       = Get-SystemArchitectureInfo
+        Memory             = Get-MemoryInfo
         PowerShell         = Get-PowerShellVersionInfo
         IsAdmin            = Test-IsAdministrator
         ExecutionPolicy    = Get-ExecutionPolicyInfo

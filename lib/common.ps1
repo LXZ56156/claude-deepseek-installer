@@ -715,3 +715,259 @@ function Get-SafeConfigContent {
 
     return ($clone | ConvertTo-Json -Depth 10)
 }
+
+# ============================================================
+# 报告脱敏函数
+# ============================================================
+
+function Get-UserNameForSanitize {
+    <#
+    .SYNOPSIS
+        获取当前用户名（用于报告脱敏），支持 CCDI_TEST_USERNAME 覆盖
+    #>
+    if ($env:CCDI_TEST_MODE -eq "1" -and $env:CCDI_TEST_USERNAME) {
+        return $env:CCDI_TEST_USERNAME
+    }
+    return $env:USERNAME
+}
+
+function Sanitize-PathForReport {
+    <#
+    .SYNOPSIS
+        将报告中的路径替换为环境变量占位符
+    .PARAMETER Text
+        原始文本
+    .RETURNS
+        脱敏后的文本
+    #>
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $Text
+    }
+
+    $result = $Text
+    $userName = Get-UserNameForSanitize
+
+    if (-not [string]::IsNullOrWhiteSpace($userName)) {
+        # C:\Users\具体用户名\ → %USERPROFILE%\
+        $result = $result -replace [regex]::Escape("C:\Users\$userName\"), '%USERPROFILE%\'
+        $result = $result -replace [regex]::Escape("C:\Users\$userName"), '%USERPROFILE%'
+        $result = $result -replace [regex]::Escape("C:\\Users\\$userName\\"), '%USERPROFILE%\'
+        $result = $result -replace [regex]::Escape("C:\\Users\\$userName"), '%USERPROFILE%'
+
+        # /home/具体用户名/ → ~/
+        $result = $result -replace "/home/$userName/", '~/'
+        $result = $result -replace "/home/$userName", '~'
+    }
+
+    return $result
+}
+
+function Sanitize-SecretLikeText {
+    <#
+    .SYNOPSIS
+        脱敏文本中的疑似 API Key 和 Token
+    .PARAMETER Text
+        原始文本
+    .RETURNS
+        脱敏后的文本
+    #>
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $Text
+    }
+
+    $result = $Text
+
+    # 脱敏完整 DeepSeek Key: sk-[A-Za-z0-9]{20,}
+    $keyPattern = 'sk-[A-Za-z0-9]{20,}'
+    $matches = [regex]::Matches($result, $keyPattern)
+    foreach ($m in $matches) {
+        $result = $result.Replace($m.Value, (Mask-ApiKey -Key $m.Value))
+    }
+
+    # 脱敏 env 变量值中的 Key（如 ANTHROPIC_AUTH_TOKEN=sk-xxx）
+    $tokenPatterns = @(
+        'ANTHROPIC_AUTH_TOKEN["\s:=]+(sk-[A-Za-z0-9]+)',
+        'DEEPSEEK_API_KEY["\s:=]+(sk-[A-Za-z0-9]+)',
+        'CCDI_API_KEY["\s:=]+(sk-[A-Za-z0-9]+)',
+        'x-api-key["\s:=]+(sk-[A-Za-z0-9]+)',
+        'Authorization["\s:=]+Bearer\s+(sk-[A-Za-z0-9]+)'
+    )
+
+    foreach ($pattern in $tokenPatterns) {
+        $tokenMatches = [regex]::Matches($result, $pattern)
+        foreach ($tm in $tokenMatches) {
+            if ($tm.Groups.Count -gt 1) {
+                $fullMatch = $tm.Groups[0].Value
+                $keyPart = $tm.Groups[1].Value
+                $masked = $fullMatch.Replace($keyPart, (Mask-ApiKey -Key $keyPart))
+                $result = $result.Replace($fullMatch, $masked)
+            }
+        }
+    }
+
+    return $result
+}
+
+function Sanitize-ReportText {
+    <#
+    .SYNOPSIS
+        综合脱敏报告文本：路径 + 密钥
+    .PARAMETER Text
+        原始报告文本
+    .RETURNS
+        完全脱敏后的文本（适合分享）
+    #>
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $Text
+    }
+
+    $result = $Text
+    $result = Sanitize-PathForReport -Text $result
+    $result = Sanitize-SecretLikeText -Text $result
+
+    return $result
+}
+
+# ============================================================
+# 诊断报告输出
+# ============================================================
+
+function Write-DiagnosticReports {
+    <#
+    .SYNOPSIS
+        写入诊断报告（分享版 + 完整版）
+    .PARAMETER ReportLines
+        报告行数组（ArrayList 或 string[]）
+    .PARAMETER ScriptDir
+        项目根目录
+    .PARAMETER Timestamp
+        时间戳字符串
+    .RETURNS
+        包含 SharePath, HistoryPath, FullPath 的哈希表
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        $ReportLines,
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptDir,
+        [string]$Timestamp = $null
+    )
+
+    if (-not $Timestamp) {
+        $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    }
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $reportContent = ($ReportLines -join "`r`n")
+
+    $result = @{
+        SharePath   = $null
+        HistoryPath = $null
+        FullPath    = $null
+    }
+
+    # 确保 reports 目录存在
+    $reportsDir = Join-Path $ScriptDir "reports"
+    if (-not (Test-Path $reportsDir)) {
+        New-Item -ItemType Directory -Path $reportsDir -Force | Out-Null
+    }
+
+    # 1. 分享版报告（脱敏后）
+    $shareContent = Sanitize-ReportText -Text $reportContent
+
+    # report.txt（项目根目录）
+    $shareRootPath = Join-Path $ScriptDir "report.txt"
+    [System.IO.File]::WriteAllText($shareRootPath, $shareContent, $utf8NoBom)
+    $result.SharePath = $shareRootPath
+
+    # reports/report-YYYYMMDD-HHMMSS.txt（分享版历史）
+    $historyPath = Join-Path $reportsDir "report-$Timestamp.txt"
+    [System.IO.File]::WriteAllText($historyPath, $shareContent, $utf8NoBom)
+    $result.HistoryPath = $historyPath
+
+    # 2. 本地完整版（轻度脱敏：仅脱敏 API Key，保留路径）
+    $fullContent = Sanitize-SecretLikeText -Text $reportContent
+    $fullPath = Join-Path $reportsDir "full-report-$Timestamp.txt"
+    [System.IO.File]::WriteAllText($fullPath, $fullContent, $utf8NoBom)
+    $result.FullPath = $fullPath
+
+    Write-Log "INFO" "诊断报告已保存: 分享版=$shareRootPath, 完整版=$fullPath"
+    return $result
+}
+
+# ============================================================
+# WSL 路径转换
+# ============================================================
+
+function Convert-WindowsPathToWslPath {
+    <#
+    .SYNOPSIS
+        使用 wsl wslpath 将 Windows 路径转换为 WSL 路径。
+        不使用手写字符串替换。
+    .PARAMETER WindowsPath
+        Windows 文件系统路径
+    .RETURNS
+        WSL 路径字符串，失败返回 $null
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$WindowsPath
+    )
+
+    # 安全检查：路径中包含危险字符时拒绝处理
+    if ($WindowsPath -match "['`n`r]") {
+        Write-Log "WARN" "WSL 路径转换: Windows 路径包含单引号或换行符，拒绝处理"
+        return $null
+    }
+
+    try {
+        $result = Invoke-CommandSafe -Command "wsl" -Arguments @(
+            "wslpath", "-a", $WindowsPath
+        )
+
+        if ($result.Success -and -not [string]::IsNullOrWhiteSpace($result.Output)) {
+            $wslPath = $result.Output.Trim()
+            Write-Log "INFO" "WSL 路径转换: $WindowsPath -> $wslPath"
+            return $wslPath
+        }
+        else {
+            Write-Log "WARN" "wslpath 转换失败: $($result.Error)"
+            return $null
+        }
+    }
+    catch {
+        Write-Log "ERROR" "WSL 路径转换异常: $_"
+        return $null
+    }
+}
+
+function Test-WslPathSafe {
+    <#
+    .SYNOPSIS
+        检查 Windows 路径是否可以安全地传递给 WSL 命令
+    .PARAMETER WindowsPath
+        Windows 路径
+    .RETURNS
+        是否安全
+    #>
+    param([string]$WindowsPath)
+
+    if ($WindowsPath -match "'") {
+        Write-Warning "Windows 路径包含单引号，无法安全传递给 WSL 命令。"
+        Write-Warning "请改用方式 A：在 WSL 终端中手动运行。"
+        return $false
+    }
+
+    if ($WindowsPath -match "`n|`r") {
+        Write-Warning "Windows 路径包含换行符，无法安全传递。"
+        return $false
+    }
+
+    return $true
+}

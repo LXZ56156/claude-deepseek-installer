@@ -4,7 +4,7 @@
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-blue)](https://www.microsoft.com/windows)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)](https://learn.microsoft.com/powershell/)
-[![Version](https://img.shields.io/badge/Version-1.3.0-green)]()
+[![Version](https://img.shields.io/badge/Version-1.3.1-green)]()
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ---
@@ -31,7 +31,8 @@
 
 ---
 
-> **遇到问题？** 双击「一键诊断.cmd」→ 把 report.txt 发给技术支持。
+> **遇到问题？** 双击「一键诊断.cmd」→ 把 report.txt（分享版）发给技术支持。
+> **不要发送** full-report-xxx.txt（包含完整路径信息）！
 >
 > **想修改配置？** 双击「恢复或卸载配置.cmd」。
 
@@ -58,6 +59,20 @@
 | [OK] 配置文件备份恢复 | [NO] 账号共享 |
 | [OK] 纯脚本，可审计 | [NO] 破解/绕过限制 |
 | [OK] 代码开源透明 | [NO] 打包 exe 或混淆 |
+
+---
+
+## 最低系统要求
+
+| 项目 | 要求 | 说明 |
+|------|------|------|
+| 操作系统 | Windows 10 1809+ / Windows 11 | Build >= 17763 |
+| 系统架构 | x64 或 ARM64 | 64 位系统 |
+| 内存 | 4 GB 以上 | 物理内存 |
+| PowerShell | 5.1+ | 预装在 Windows 10/11 |
+| WSL (高级) | Ubuntu 20.04+ | 仅高级用户需要 |
+
+不满足最低要求时，脚本会明确提示并停止安装，不会继续操作。
 
 ---
 
@@ -137,13 +152,18 @@ powershell -ExecutionPolicy Bypass -File .\configure-deepseek.ps1 -NonInteractiv
 Remove-Item Env:\CCDI_API_KEY
 ```
 
-### WSL 安装
+### WSL 安装（推荐手动运行）
+
+在 WSL Ubuntu 终端中手动运行（推荐方式）：
 
 ```bash
 # 在 WSL Ubuntu 终端中
+cd /mnt/c/Users/你的用户名/路径/claude-deepseek-installer
 chmod +x install_wsl.sh
 ./install_wsl.sh
 ```
+
+Windows 端自动调用 WSL 为实验性高级选项，不推荐新手使用。
 
 ### 诊断
 
@@ -171,16 +191,22 @@ powershell -ExecutionPolicy Bypass -File .\doctor.ps1
 
 ### 第 1 步：双击「一键诊断.cmd」
 
-这会生成项目目录下的 `report.txt` 最新诊断报告，并在 `reports/` 中保留带时间戳的历史报告。
+这会生成 3 个文件：
+- `report.txt` — **分享版**（已脱敏，可发送给售后）
+- `reports/report-YYYYMMDD-HHMMSS.txt` — 分享版历史记录
+- `reports/full-report-YYYYMMDD-HHMMSS.txt` — **完整版**（仅本地保存）
 
-### 第 2 步：发送报告
+### 第 2 步：发送 report.txt
 
-将项目目录下的 `report.txt` 发送给卖家/技术支持。
+将项目根目录的 `report.txt`（分享版）发送给卖家/技术支持。
+
+**不要发送 `full-report-xxx.txt`（包含完整路径信息）！**
 
 ### 第 3 步：不要发送 API Key
 
 **报告中的 API Key 已自动脱敏处理。**
 请**不要**单独发送您的 API Key 给任何人！
+**不要截图包含 API Key 的窗口！**
 
 ---
 
@@ -218,6 +244,12 @@ A: 关闭 PowerShell 窗口后重新打开，让 PATH 环境变量刷新。
 
 ### Q: 401 错误？
 A: API Key 不正确。请到 [platform.deepseek.com](https://platform.deepseek.com) 重新获取。
+
+### Q: 不满足最低系统要求怎么办？
+A: 脚本会明确提示哪项不满足。通常是 Windows 版本过低（需要 Win10 1809+）、内存不足（需 4GB+）或系统不是 64 位。按提示升级系统或更换电脑。
+
+### Q: 如何卸载 Claude Code？
+A: 本工具默认只管理配置，不自动卸载 Claude Code。如果 Claude Code 原本已存在，不建议卸载。如果是 npm 安装的，可运行 `npm uninstall -g @anthropic-ai/claude-code`。Native Install 方式请参考官方文档。
 
 ### Q: 402 错误？
 A: DeepSeek 账户余额不足，请充值。
