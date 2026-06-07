@@ -23,6 +23,20 @@ bash scripts/check.sh
 powershell -ExecutionPolicy Bypass -File .\doctor.ps1 -NoSaveReport -SkipApiTest
 ```
 
+## Entry Points（v1.3）
+
+用户第一屏是双击 .cmd 文件，不是 PowerShell 命令：
+
+| 入口 | 用途 |
+|------|------|
+| `开始安装.cmd` / `Start-Install.cmd` | 懒人安装（双击） |
+| `一键诊断.cmd` / `Run-Diagnostics.cmd` | 诊断报告（双击） |
+| `恢复或卸载配置.cmd` / `Restore-Config.cmd` | 配置管理（双击） |
+
+所有 .cmd 必须纯 ASCII 无 BOM。中文提示在 .ps1 中。
+
+`Start-Here.ps1` 是 v1.3 主入口（6 选项菜单 + 7 步安装流程），`install.ps1` 保留向后兼容。
+
 ## Architecture
 
 ### Lib Loading Order
@@ -66,18 +80,24 @@ bootstrap.ps1
 
 | 文件 | 职责 |
 |------|------|
-| `install.ps1` | 主入口：免责声明 → 环境检测 → 菜单或 `-Mode` 直达安装/配置/诊断 |
+| `开始安装.cmd` / `Start-Install.cmd` | 双击启动懒人安装（纯 ASCII，无 BOM，含文件存在性检查） |
+| `一键诊断.cmd` / `Run-Diagnostics.cmd` | 双击启动诊断（同上编码约束） |
+| `恢复或卸载配置.cmd` / `Restore-Config.cmd` | 双击启动配置管理（同上编码约束） |
+| `Start-Here.ps1` | v1.3 主入口：6 选项菜单 + 7 步懒人安装（Native Install 优先 + npm fallback） |
+| `install.ps1` | 旧版安装脚本，向后兼容，支持 `-Mode` 直达安装/配置/诊断 |
 | `doctor.ps1` | 7 类诊断（系统/命令/文件/网络/API/VS Code/WSL）→ 生成 ASCII report.txt |
 | `configure-deepseek.ps1` | 独立的 API Key 输入或环境变量读取 → 配置写入 → API 连接测试 |
 | `uninstall-config.ps1` | 配置备份恢复 / API Key 移除 / 配置文件删除 |
 | `install_wsl.sh` | WSL Ubuntu 内安装 Claude Code + 配置 DeepSeek，支持 `--mode` / `--non-interactive` |
 | `lib/bootstrap.ps1` | 入口脚本统一初始化、库加载、日志初始化 |
-| `lib/common.ps1` | 路径/备份/JSON/Key脱敏/命令执行/用户交互 |
+| `lib/common.ps1` | 路径/备份/JSON/Key脱敏/命令执行/用户交互/PATH 刷新 |
 | `lib/env-check.ps1` | 系统/命令/文件/网络/DeepSeek API 检测 |
 | `lib/config-writer.ps1` | DeepSeek 配置读取/写入/合并/恢复 |
 | `lib/logger.ps1` | 日志初始化、彩色输出、日志文件管理 |
 | `lib/deepseek-env.defaults.json` | PowerShell/WSL 共用 DeepSeek env 默认模板 |
-| `scripts/check.*` | 无外部依赖的轻量语法、安全和模板一致性检查 |
+| `scripts/build-release.ps1` | Release ZIP 打包：allow-list → 源预扫描 → staging → BOM 规范化 → .cmd 校验 → ZIP → SHA256 |
+| `scripts/check.ps1` | PowerShell 语法/库加载/配置合并/状态守卫/.cmd 编码检查 |
+| `scripts/check.sh` | Bash 语法/JSON 模板/报告标记/敏感输出守卫检查 |
 
 ## DeepSeek Configuration Format
 
@@ -108,10 +128,22 @@ bootstrap.ps1
 - `*.settings.json`（除 `examples/`） — 用户实际配置
 - `report*.txt`（除 `examples/`） — 诊断报告
 
+## Encoding Rules（v1.3 关键约束）
+
+- **.ps1 / .psm1**：必须保存为 UTF-8 with BOM（EF BB BF）。PowerShell 5.1 在中文 Windows 上按 ANSI/GBK 读取无 BOM 文件导致乱码。
+- **.cmd**：必须保存为纯 ASCII（无 BOM，无 >0x7F 字节）。CMD 在中文 Windows 上按 GBK 解析导致 UTF-8 中文乱码。
+- **.sh**：UTF-8（LF 换行），不需要 BOM。
+- build-release.ps1 的 Step 3.45 自动为 staging 中 .ps1 补 BOM，验证 .cmd 纯 ASCII。违反则 exit 1。
+
 ## Common Pitfalls
 
 - **lib 文件不应互相 dot-source**：新增 lib 依赖时，只在 `bootstrap.ps1` 中添加，不在其他 lib 文件内部添加。
 - **`Invoke-CommandSafe` 的临时文件**：使用 `$PID` + `Get-Random` 生成唯一文件名。不要硬编码 `cmd_stdout.tmp`。
+- **`Invoke-CommandSafe` 安装类调用必须设 TimeoutSec**：下载 180s、执行 600s、winget 900s、npm 900s。默认 60s 在慢网环境会误判失败。
 - **`Write-Result` 的 `$Status` 参数**：值 `OK`/`SKIP` 必须被 `Write-Log` 的 `ValidateSet` 支持（已扩展）。
 - **`Read-Host -AsSecureString`**：返回 SecureString，需要用 `Marshal` 转换为明文。已封装在 `Read-SecretInput` 中，直接使用即可。
+- **API Key 扫描用 `[List[object]]::new().Add()`**：不要用 `+=` 在函数内追加，PowerShell 函数作用域会创建局部变量导致外层变量不更新。
+- **控制台不要用 emoji/框线**：`✅❌⚠╔═║━┌│` 在老终端/远程工具/缺字体环境显示为方块。统一用 `[OK]`/`[WARN]`/`[ERROR]`/`[SKIP]`/`[INFO]`。
+- **安装后检测 claude 前先调 `Refresh-CurrentProcessPath`**：Native Install/npm 安装后 PATH 可能已写入但当前进程未刷新。
+- **Release allow-list**：docs/ examples/ 是文件级白名单，不是整目录。新增/删除 docs 文件必须同步更新 `$AllowedEntries`。
 - **安装 Node.js 后 PATH 不刷新**：提示用户"关闭并重新打开 PowerShell"时，附带原因解释（类比手机装 App 后点图标）。

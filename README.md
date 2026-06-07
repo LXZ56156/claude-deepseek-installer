@@ -92,41 +92,44 @@
 ```
 claude-deepseek-installer/
 ├── 开始安装.cmd                  # 懒人一键安装入口（双击）
+├── Start-Install.cmd             # 英文备用安装入口（双击）
 ├── 一键诊断.cmd                  # 一键诊断入口（双击）
+├── Run-Diagnostics.cmd           # 英文备用诊断入口（双击）
 ├── 恢复或卸载配置.cmd            # 配置管理入口（双击）
-├── Start-Here.ps1                # v1.3 主入口脚本
+├── Restore-Config.cmd            # 英文备用配置入口（双击）
+├── Start-Here.ps1                # v1.3 主入口脚本（菜单 + 7 步安装）
 ├── README.md                     # 项目说明（本文件）
 ├── QUICK_START.md                # 快速开始指南
-├── install.ps1                   # 安装脚本（高级用法）
+├── install.ps1                   # 安装脚本（向后兼容 / 高级用法）
 ├── configure-deepseek.ps1        # DeepSeek API 独立配置脚本
 ├── doctor.ps1                    # 环境诊断脚本
 ├── uninstall-config.ps1          # 配置恢复/卸载脚本
 ├── install_wsl.sh                # WSL Ubuntu 安装脚本
 ├── .gitignore                    # Git 忽略规则
 ├── lib/                          # 公共库
-│   ├── common.ps1                # 通用工具函数
+│   ├── common.ps1                # 通用工具函数（含 PATH 刷新）
 │   ├── env-check.ps1             # 环境检测函数
 │   ├── config-writer.ps1         # 配置读写函数
 │   ├── logger.ps1                # 日志和输出
 │   ├── bootstrap.ps1             # 入口初始化和库加载
 │   └── deepseek-env.defaults.json # DeepSeek 默认 env 模板
-├── scripts/                      # 轻量自检脚本
-│   ├── check.sh
-│   ├── check.ps1
-│   └── build-release.ps1         # Release 打包脚本
-├── docs/                         # 文档
-│   ├── 闲鱼商品说明.md
+├── scripts/                      # 开发和自检脚本
+│   ├── check.sh                  # Bash 语法/模板检查
+│   ├── check.ps1                 # PowerShell 语法/库/.cmd 编码检查
+│   └── build-release.ps1         # Release ZIP 打包（allow-list + 安全扫描）
+├── docs/                         # 文档（仅 5 个进入 release）
 │   ├── 用户使用教程.md
 │   ├── 常见问题FAQ.md
-│   ├── 售后排查话术.md
-│   ├── 视频教程脚本.md
-│   └── 测试清单.md
-├── examples/                     # 示例文件
+│   ├── 闲鱼商品说明.md
+│   ├── 测试清单.md
+│   └── 视频教程脚本.md
+├── examples/                     # 示例文件（仅 2 个进入 release）
 │   ├── settings.deepseek.example.json
 │   └── report.example.txt
 ├── logs/                         # 运行日志（不提交 Git）
 ├── backup/                       # 配置备份（不提交 Git）
-└── reports/                      # 安装报告（不提交 Git）
+├── reports/                      # 安装报告（不提交 Git）
+└── release/                      # Release 产物（不提交 Git）
 ```
 
 ---
