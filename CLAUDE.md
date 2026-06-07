@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Running Scripts
 
-没有 build 步骤 — 这是纯脚本项目，直接交付给用户运行。轻量自检脚本在 `scripts/` 下。
+没有编译 build 步骤 — 纯脚本项目，直接交付给用户运行。Release ZIP 打包用 `scripts/build-release.ps1`。轻量自检脚本在 `scripts/check.ps1` 和 `scripts/check.sh`。
 
 ```powershell
 # Windows PowerShell / PowerShell 7 自检
