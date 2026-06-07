@@ -225,7 +225,8 @@ $ExcludePatterns = @(
         "sk-你的DeepSeekKey",
         "sk-xxxx",
         "__API_KEY__",
-        "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "sk-1234567890abcdef1234567890abcdef"  # scripts/check.ps1 的 Mask-ApiKey 单元测试 Key
     )
 
     # 危险的 API Key 模式
@@ -236,7 +237,7 @@ $ExcludePatterns = @(
         'CCDI_API_KEY.*sk-'
     )
 
-    $apiKeyHits = @()
+    $apiKeyHits = [System.Collections.Generic.List[object]]::new()
 
     function Test-ContainsRealApiKey {
         param([string]$FilePath, [string]$DisplayPath)
@@ -259,18 +260,17 @@ $ExcludePatterns = @(
                         }
                     }
 
-                    # 额外的安全判断: 明显是文档中的示例（不超过 32 字符 + 出现在 markdown 或注释中）
                     if (-not $isSafe) {
                         # 提取纯 Key 部分（去掉前缀如 ANTHROPIC_AUTH_TOKEN=）
                         $keyPart = $candidate -replace '^.*?(sk-[A-Za-z0-9]{20,})', '$1'
 
                         # 如果 Key 看起来像真实 Key（足够长且复杂）
                         if ($keyPart.Length -ge 32) {
-                            $apiKeyHits += @{
+                            [void]$apiKeyHits.Add([PSCustomObject]@{
                                 File    = $DisplayPath
                                 Pattern = $pattern
                                 Match   = ($candidate.Substring(0, [Math]::Min(60, $candidate.Length)) + "...")
-                            }
+                            })
                         }
                     }
                 }
