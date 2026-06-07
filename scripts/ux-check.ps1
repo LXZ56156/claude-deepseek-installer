@@ -285,23 +285,47 @@ try {
     # ============================================================
     Write-CheckHeader "8. 配置写入隔离测试"
 
-    # 加载库
+    # ---- 记录真实配置状态（测试前） ----
+    $realUserProfile = [System.Environment]::GetFolderPath('UserProfile')
+    $realSettingsPath = Join-Path $realUserProfile ".claude\settings.json"
+    $realBeforeExists = Test-Path $realSettingsPath
+    $realBeforeHash = if ($realBeforeExists) {
+        (Get-FileHash $realSettingsPath -Algorithm SHA256).Hash
+    }
+    else {
+        $null
+    }
+
+    # 加载库（CCDI_TEST_USERPROFILE 已设为沙盒，dot-source 不影响真实目录）
     . (Join-Path $ScriptRoot "lib\bootstrap.ps1")
     Initialize-CcdiScript -ScriptName "ux-check" | Out-Null
 
+    # 记录到日志（此时 logger 已加载）
+    Write-Log "DEBUG" "真实配置前状态: Exists=$realBeforeExists, Hash=$realBeforeHash"
+
     $testConfigPath = Join-Path $SandboxDir ".claude\settings.json"
-    $realUserProfile = [System.Environment]::GetFolderPath('UserProfile')
-    $realClaudeDir = Join-Path $realUserProfile ".claude"
 
     # 验证 CCDI_TEST_USERPROFILE 重定向生效
     $configDir = Get-ClaudeConfigDir
     Assert "CCDI_TEST_USERPROFILE 重定向生效" { $configDir -eq (Join-Path $SandboxDir ".claude") } "配置目录未重定向: $configDir"
 
-    # 测试配置写入
+    # 测试配置写入（写入沙盒，不写真实目录）
     $writeResult = Write-DeepSeekConfig -ApiKey $TestApiKey -ConfigPath $testConfigPath -NonInteractive
     Assert "配置写入成功" { $writeResult.Success } "写入失败: $($writeResult.Error)"
 
-    Assert "未污染真实目录" { -not (Test-Path (Join-Path $realClaudeDir "settings.json")) -or $env:CCDI_TEST_MODE -eq "1" } "真实配置目录被修改"
+    # ---- 验证真实配置未被修改（测试后） ----
+    $realAfterExists = Test-Path $realSettingsPath
+    $realAfterHash = if ($realAfterExists) {
+        (Get-FileHash $realSettingsPath -Algorithm SHA256).Hash
+    }
+    else {
+        $null
+    }
+    Write-Log "DEBUG" "真实配置后状态: Exists=$realAfterExists, Hash=$realAfterHash"
+
+    Assert "未污染真实 settings.json" {
+        ($realBeforeExists -eq $realAfterExists) -and ($realBeforeHash -eq $realAfterHash)
+    } "真实 settings.json 被修改或创建（前: Exists=$realBeforeExists Hash=$realBeforeHash, 后: Exists=$realAfterExists Hash=$realAfterHash）"
 
     # ============================================================
     # 9. 损坏 settings.json 备份重建
