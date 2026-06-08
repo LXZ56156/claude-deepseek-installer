@@ -290,7 +290,7 @@ function Install-ClaudeCodeNative {
         Error   = ""
     }
 
-    if ($TestSafe) {
+    if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
         Write-Log "INFO" "TestSafe: 跳过 Native Install 执行"
         return $result
     }
@@ -364,7 +364,7 @@ function Install-ClaudeCodeNpmMirror {
         Error   = ""
     }
 
-    if ($TestSafe) {
+    if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
         Write-Log "INFO" "TestSafe: 跳过 npm mirror 安装"
         return $result
     }

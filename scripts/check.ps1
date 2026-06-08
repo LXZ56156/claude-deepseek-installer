@@ -159,9 +159,20 @@ foreach ($cmdFile in $cmdFiles) {
 Write-Host "[check] .cmd launchers: no BOM, pure ASCII"
 
 # ============================================================
-# 决策树 mock 测试（全部在 CCDI_TEST_MODE=1 下运行）
+# 安装安全与返回结构检查（全部在 CCDI_TEST_MODE=1 下运行）
+#
+# 覆盖内容:
+#   函数存在性检查 + TestSafe 安全检查 + 字段 shape 检查
+#   + 少量真实网络 shape 检查
+#
+# 未覆盖的完整网络 fallback 分支（需真机或后续 mock 验证）:
+#   官方不可用 → npm_npmmirror
+#   官方安装失败 → fallback npm_npmmirror
+#   Node/npm 缺失 → failed_missing_node_or_npm
+#   npmmirror 不可达 → failed_npmmirror_unreachable
+#   existing_broken → 进入修复路径
 # ============================================================
-Write-Host "[check] Claude install decision-tree mock tests (TestSafe mode)"
+Write-Host "[check] Claude install safety and structure checks (TestSafe mode)"
 
 # 保存原始环境变量，测试结束后恢复
 $origTestMode = $env:CCDI_TEST_MODE
@@ -273,6 +284,14 @@ try {
     }
     Write-Host "[check]     Success=$($t6.Success) (correctly skipped)"
 
+    # Test 6b: Install-ClaudeCodeNative without -TestSafe BUT CCDI_TEST_MODE=1
+    Write-Host "[check]   Test 6b: Install-ClaudeCodeNative (no TestSafe, CCDI_TEST_MODE=1 auto-protect)"
+    $t6b = Install-ClaudeCodeNative
+    if ($t6b.Success) {
+        throw "Install-ClaudeCodeNative with CCDI_TEST_MODE=1 should auto-skip, got Success=true"
+    }
+    Write-Host "[check]     Auto-protected by CCDI_TEST_MODE=1, Success=$($t6b.Success)"
+
     # ----------------------------------------------------------
     # Test 7: Install-ClaudeCodeNpmMirror -TestSafe skips real install
     # ----------------------------------------------------------
@@ -282,6 +301,14 @@ try {
         throw "Install-ClaudeCodeNpmMirror -TestSafe should return Success=false"
     }
     Write-Host "[check]     Success=$($t7.Success) (correctly skipped)"
+
+    # Test 7b: Install-ClaudeCodeNpmMirror without -TestSafe BUT CCDI_TEST_MODE=1
+    Write-Host "[check]   Test 7b: Install-ClaudeCodeNpmMirror (no TestSafe, CCDI_TEST_MODE=1 auto-protect)"
+    $t7b = Install-ClaudeCodeNpmMirror
+    if ($t7b.Success) {
+        throw "Install-ClaudeCodeNpmMirror with CCDI_TEST_MODE=1 should auto-skip, got Success=true"
+    }
+    Write-Host "[check]     Auto-protected by CCDI_TEST_MODE=1, Success=$($t7b.Success)"
 
     # ----------------------------------------------------------
     # Test 8: Install-ClaudeCodeNative without -TestSafe BUT CCDI_TEST_MODE=1
@@ -321,7 +348,7 @@ try {
     Write-Host "[check]     Valid Methods: $($validMethods -join ', ')"
     Write-Host "[check]     Valid Statuses: $($validStatuses -join ', ')"
 
-    Write-Host "[check]   All decision-tree mock tests passed"
+    Write-Host "[check]   All safety and structure checks passed"
 }
 finally {
     # 恢复环境变量
