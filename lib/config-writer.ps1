@@ -88,6 +88,7 @@ function Write-DeepSeekConfig {
         BackupPath = $null
         ConfigPath = $null
         Error      = ""
+        RebuiltFromDamagedJson = $false
     }
 
     if (-not $ConfigPath) {
@@ -113,8 +114,10 @@ function Write-DeepSeekConfig {
 
         # 检查旧文件是否有效
         if (-not (Test-JsonValid -FilePath $ConfigPath)) {
+            $result.RebuiltFromDamagedJson = $true
             Write-Warning "旧配置文件 JSON 格式无效！已备份到: $backupPath"
             Write-Warning "将创建新的配置文件来替换。"
+            Write-Warning "注意：由于旧 JSON 无法解析，permissions 等非 env 字段可能无法自动保留。"
 
             if (-not $NonInteractive -and -not (Confirm-UserChoice -Message "是否继续创建新配置？旧文件已备份")) {
                 Write-Info "用户取消。旧文件已备份，未做任何修改。"
@@ -179,6 +182,12 @@ function Write-DeepSeekConfig {
 
     Write-Success "DeepSeek 配置已成功写入！"
     Write-Log "INFO" "配置写入成功，备份: $($result.BackupPath)"
+
+    # 如果是从损坏 JSON 重建，额外警告
+    if ($result.RebuiltFromDamagedJson) {
+        Write-Warning "本次配置是从损坏 JSON 重建的。旧配置中的非 env 字段（如 permissions）可能未保留。"
+        Write-Warning "如需恢复，请从 backup/ 目录手动合并。"
+    }
 
     # 输出脱敏后的配置摘要
     $maskedKey = Mask-ApiKey -Key $ApiKey

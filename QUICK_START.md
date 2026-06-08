@@ -6,6 +6,8 @@
 
 下载 ZIP 文件，右键解压到任意目录（桌面也可以）。
 
+> 如果系统自带解压后中文文件名乱码，请用 **7-Zip** 或 **WinRAR** 解压。不要在压缩包内直接双击运行！
+
 ### 第 2 步：双击「开始安装.cmd」
 
 在解压后的文件夹中找到 **`开始安装.cmd`**，双击运行。
@@ -96,11 +98,26 @@ claude
 
 ## 五、常用命令
 
+### Windows
+
 | 命令 | 作用 |
 |------|------|
 | `claude` | 启动 Claude Code |
 | `claude --version` | 查看版本 |
 | `claude doctor` | Claude Code 官方诊断 |
+| `.\doctor.ps1 -ShareSafe` | 生成可分享的诊断报告 |
+
+### WSL Ubuntu
+
+| 命令 | 作用 |
+|------|------|
+| `./install_wsl.sh` | 交互式安装/配置 |
+| `./install_wsl.sh --mode configure` | 仅配置 DeepSeek |
+| `./install_wsl.sh --mode doctor` | 仅诊断 |
+| `./install_wsl.sh --mode test-key` | 仅测试 Key |
+| `./install_wsl.sh --mode uninstall` | 移除 DeepSeek 配置 |
+| `./install_wsl.sh --mode restore` | 从备份恢复 |
+| `./install_wsl.sh --mode doctor --share-safe --yes` | 生成分享版诊断报告 |
 
 ---
 

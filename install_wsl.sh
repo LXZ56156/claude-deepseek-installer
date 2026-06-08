@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # install_wsl.sh - WSL Ubuntu 内 Claude Code 安装配置脚本
-# 版本: 1.3.0
+# 版本: 1.3.1
 #
 # 用法:
 #   chmod +x install_wsl.sh
@@ -26,12 +26,17 @@ BACKUP_DIR="$SCRIPT_DIR/backup"
 DEFAULTS_FILE="$SCRIPT_DIR/lib/deepseek-env.defaults.json"
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 LOG_FILE="$LOG_DIR/install_wsl-${TIMESTAMP}.log"
-SCRIPT_VERSION="1.3.0"
+SCRIPT_VERSION="1.3.1"
 MODE="menu"
 YES=0
 NON_INTERACTIVE=0
 SKIP_API_TEST=0
 INSTALL_DEPS=0
+SHARE_SAFE=0
+
+# 损坏 JSON 恢复标记
+CONFIG_JSON_DAMAGED=0
+CONFIG_REBUILT_FROM_DAMAGED=0
 
 # 状态变量（用于最终摘要）
 CLAUDE_OK=0
@@ -95,17 +100,21 @@ step() {
 usage() {
     cat <<EOF
 用法:
-  ./install_wsl.sh [--mode all|install|configure|doctor] [--yes] [--non-interactive] [--skip-api-test] [--install-deps]
+  ./install_wsl.sh [--mode all|install|configure|doctor|uninstall|restore|test-key] [--yes] [--non-interactive] [--skip-api-test] [--install-deps] [--share-safe]
 
 选项:
   --mode all              安装 Claude Code 并配置 DeepSeek
   --mode install          仅安装 Claude Code
   --mode configure        仅配置 DeepSeek
   --mode doctor           仅运行诊断（不修改系统）
+  --mode uninstall        移除 DeepSeek 配置（保留 Claude Code 和其他设置）
+  --mode restore          从最近备份恢复配置
+  --mode test-key         仅测试 DeepSeek API Key 是否可用（不写配置）
   --yes                   跳过免责声明确认
   --non-interactive       非交互模式，只从 CCDI_API_KEY 或 DEEPSEEK_API_KEY 读取 Key
   --skip-api-test         跳过 DeepSeek API 在线测试
   --install-deps          允许在非交互模式下自动安装系统依赖（Node.js 等）
+  --share-safe            诊断报告脱敏处理（替换用户名/路径）
   -h, --help              显示帮助
 EOF
 }
@@ -115,14 +124,16 @@ parse_args() {
         case "$1" in
             --mode)
                 if [ $# -lt 2 ]; then
-                    error "--mode 需要值: all|install|configure|doctor"
+                    error "--mode 需要值: all|install|configure|doctor|uninstall|restore|test-key"
                     exit 1
                 fi
                 MODE="$2"
                 case "$MODE" in
-                    all|install|configure|doctor) ;;
+                    all|install|configure|doctor|uninstall|restore|test-key) ;;
                     *)
                         error "无效 --mode: $MODE"
+                        info "支持: all | install | configure | doctor | uninstall | restore | test-key"
+                        info "如需卸载配置，也可在 Windows 端运行: uninstall-config.ps1"
                         exit 1
                         ;;
                 esac
@@ -143,6 +154,10 @@ parse_args() {
                 ;;
             --install-deps)
                 INSTALL_DEPS=1
+                shift
+                ;;
+            --share-safe)
+                SHARE_SAFE=1
                 shift
                 ;;
             -h|--help)
@@ -170,7 +185,21 @@ mask_api_key() {
     fi
 }
 
-# 备份文件（返回 0=成功, 1=失败）
+# ============================================================
+# 模式判断辅助函数（用于最终摘要）
+# ============================================================
+
+mode_needs_install() {
+    [ "$MODE" = "all" ] || [ "$MODE" = "install" ]
+}
+
+mode_needs_config() {
+    [ "$MODE" = "all" ] || [ "$MODE" = "configure" ]
+}
+
+# ============================================================
+# 备份与恢复函数
+# ============================================================
 backup_file() {
     local file="$1"
     if [ ! -f "$file" ]; then
@@ -272,52 +301,31 @@ merge_settings_json() {
 
     if command -v node &> /dev/null; then
         # 使用 Node.js 处理 JSON
-        node << 'NODEEOF'
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-
-const configFile = process.env.CCDI_CONFIG_FILE.replace(/^~/, os.homedir());
-const defaultsFile = process.env.CCDI_DEFAULTS_FILE;
-const apiKey = process.env.CCDI_INPUT_API_KEY;
-
-// 读取默认 env 模板
-const newEnv = JSON.parse(fs.readFileSync(defaultsFile, 'utf-8'));
-newEnv.ANTHROPIC_AUTH_TOKEN = apiKey;
-
-// 读取现有配置
-let existing = {};
-if (fs.existsSync(configFile)) {
-    try {
-        const content = fs.readFileSync(configFile, 'utf-8').trim();
-        if (content) {
-            existing = JSON.parse(content);
-        }
-    } catch (e) {
-        // JSON 无效，使用空配置（旧文件已备份）
-    }
-}
-
-// 合并 env: 保留已有 env 字段，只新增/覆盖本工具管理的字段
-let oldEnv = existing.env || {};
-if (typeof oldEnv !== 'object' || Array.isArray(oldEnv)) {
-    oldEnv = {};
-}
-
-// 用新值覆盖本工具管理的字段
-Object.assign(oldEnv, newEnv);
-existing.env = oldEnv;
-
-// 确保目录存在
-const configDir = path.dirname(configFile);
-if (!fs.existsSync(configDir)) {
-    fs.mkdirSync(configDir, { recursive: true });
-}
-
-// 写入
-fs.writeFileSync(configFile, JSON.stringify(existing, null, 2), 'utf-8');
-console.log('CONFIG_OK');
-NODEEOF
+        local _ccdi_node_out
+        _ccdi_node_out=$(node -e '
+var fs=require("fs"),path=require("path"),os=require("os");
+var cf=process.env.CCDI_CONFIG_FILE.replace(/^~/,os.homedir());
+var df=process.env.CCDI_DEFAULTS_FILE;
+var ak=process.env.CCDI_INPUT_API_KEY;
+var ne=JSON.parse(fs.readFileSync(df,"utf-8"));
+ne.ANTHROPIC_AUTH_TOKEN=ak;
+var ex={},jd=false;
+if(fs.existsSync(cf)){try{var ct=fs.readFileSync(cf,"utf-8").trim();if(ct)ex=JSON.parse(ct);}catch(e){jd=true;}}
+var oe=ex.env||{};
+if(typeof oe!=="object"||Array.isArray(oe))oe={};
+Object.assign(oe,ne);ex.env=oe;
+var cd=path.dirname(cf);
+if(!fs.existsSync(cd))fs.mkdirSync(cd,{recursive:true});
+fs.writeFileSync(cf,JSON.stringify(ex,null,2),"utf-8");
+if(jd)console.log("CONFIG_OK_DAMAGED_JSON");else console.log("CONFIG_OK");
+' 2>/dev/null)
+        if echo "$_ccdi_node_out" | grep -q "DAMAGED_JSON"; then
+            CONFIG_JSON_DAMAGED=1
+            CONFIG_REBUILT_FROM_DAMAGED=1
+            return 0
+        elif echo "$_ccdi_node_out" | grep -q "CONFIG_OK"; then
+            return 0
+        fi
         return $?
     elif command -v python3 &> /dev/null; then
         # 回退到 python3
@@ -334,6 +342,7 @@ with open(defaults_file, 'r', encoding='utf-8') as f:
 new_env["ANTHROPIC_AUTH_TOKEN"] = api_key
 
 existing = {}
+json_damaged = False
 if os.path.exists(config_file):
     try:
         with open(config_file, 'r') as f:
@@ -341,7 +350,7 @@ if os.path.exists(config_file):
             if content:
                 existing = json.loads(content)
     except json.JSONDecodeError:
-        pass
+        json_damaged = True
 
 old_env = existing.get("env", {})
 if not isinstance(old_env, dict):
@@ -356,6 +365,36 @@ with open(config_file, 'w') as f:
 
 print("CONFIG_OK")
 PYEOF
+        local _ccdi_py_out
+        _ccdi_py_out=$(python3 -c '
+import json,os
+cf=os.path.expanduser(os.environ.get("CCDI_CONFIG_FILE","~/.claude/settings.json"))
+df=os.environ.get("CCDI_DEFAULTS_FILE","")
+ak=os.environ.get("CCDI_INPUT_API_KEY","")
+with open(df,"r",encoding="utf-8") as f:ne=json.load(f)
+ne["ANTHROPIC_AUTH_TOKEN"]=ak
+ex={};jd=False
+if os.path.exists(cf):
+ try:
+  with open(cf,"r") as f:
+   ct=f.read().strip()
+   if ct:ex=json.loads(ct)
+ except json.JSONDecodeError:jd=True
+oe=ex.get("env",{})
+if not isinstance(oe,dict):oe={}
+oe.update(ne);ex["env"]=oe
+os.makedirs(os.path.dirname(cf),exist_ok=True)
+with open(cf,"w") as f:json.dump(ex,f,indent=2,ensure_ascii=False)
+if jd:print("CONFIG_OK_DAMAGED_JSON")
+else:print("CONFIG_OK")
+' 2>/dev/null)
+        if echo "$_ccdi_py_out" | grep -q "DAMAGED_JSON"; then
+            CONFIG_JSON_DAMAGED=1
+            CONFIG_REBUILT_FROM_DAMAGED=1
+            return 0
+        elif echo "$_ccdi_py_out" | grep -q "CONFIG_OK"; then
+            return 0
+        fi
         return $?
     else
         error "没有可用的 JSON 处理器。"
@@ -446,6 +485,297 @@ except Exception as e:
     else
         echo "UNKNOWN_FORMAT"
     fi
+}
+
+# ============================================================
+# 卸载 DeepSeek 配置（保留 Claude Code 和其他设置）
+# ============================================================
+
+uninstall_wsl_config() {
+    step "移除 DeepSeek 配置"
+
+    local config_file="$HOME/.claude/settings.json"
+
+    if [ ! -f "$config_file" ]; then
+        warn "未找到配置文件: $config_file"
+        info "无需卸载。"
+        return 0
+    fi
+
+    # 卸载前必须备份
+    if ! backup_file "$config_file"; then
+        error "备份失败，已停止卸载，避免破坏现有配置。"
+        error "请检查 backup/ 目录权限或磁盘空间。"
+        return 1
+    fi
+
+    local backup_ok=1
+
+    if command -v node &> /dev/null; then
+        node -e "
+const fs = require('fs');
+const path = '${config_file}';
+let config = {};
+try {
+    config = JSON.parse(fs.readFileSync(path, 'utf8'));
+} catch(e) {
+    console.error('CONFIG_PARSE_ERROR');
+    process.exit(2);
+}
+if (!config.env || typeof config.env !== 'object' || Array.isArray(config.env)) {
+    config.env = {};
+}
+const keys = [
+    'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL',
+    'ANTHROPIC_SMALL_FAST_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+    'CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_EFFORT_LEVEL',
+    'API_TIMEOUT_MS', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
+    'DISABLE_TELEMETRY', 'DISABLE_ERROR_REPORTING', 'DISABLE_AUTOUPDATER'
+];
+for (const k of keys) delete config.env[k];
+fs.writeFileSync(path, JSON.stringify(config, null, 2) + '\n', 'utf8');
+console.log('UNINSTALL_OK');
+" 2>/dev/null
+        local rc=$?
+        if [ $rc -eq 0 ]; then
+            backup_ok=1
+        elif [ $rc -eq 2 ]; then
+            error "配置文件 JSON 损坏，已备份但无法安全移除 DeepSeek 字段。"
+            error "请从备份文件手动恢复，或在 Windows 端运行 uninstall-config.ps1。"
+            return 1
+        else
+            error "配置移除失败。"
+            return 1
+        fi
+    elif command -v python3 &> /dev/null; then
+        python3 -c "
+import json, os
+config_file = os.path.expanduser('${config_file}')
+try:
+    with open(config_file, 'r') as f:
+        config = json.load(f)
+except json.JSONDecodeError:
+    print('CONFIG_PARSE_ERROR')
+    exit(2)
+env = config.get('env', {})
+if not isinstance(env, dict):
+    env = {}
+keys = [
+    'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL',
+    'ANTHROPIC_SMALL_FAST_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+    'CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_EFFORT_LEVEL',
+    'API_TIMEOUT_MS', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
+    'DISABLE_TELEMETRY', 'DISABLE_ERROR_REPORTING', 'DISABLE_AUTOUPDATER'
+]
+for k in keys:
+    env.pop(k, None)
+config['env'] = env
+with open(config_file, 'w') as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
+print('UNINSTALL_OK')
+" 2>/dev/null
+        local rc=$?
+        if [ $rc -eq 0 ]; then
+            backup_ok=1
+        elif [ $rc -eq 2 ]; then
+            error "配置文件 JSON 损坏，已备份但无法安全移除 DeepSeek 字段。"
+            error "请从备份文件手动恢复，或在 Windows 端运行 uninstall-config.ps1。"
+            return 1
+        else
+            error "配置移除失败。"
+            return 1
+        fi
+    else
+        error "未找到 node 或 python3，无法安全修改 JSON。"
+        return 1
+    fi
+
+    success "DeepSeek 配置已移除。Claude Code 和其他设置已保留。"
+    info "备份文件可在 backup/ 目录找到。"
+    return 0
+}
+
+# ============================================================
+# 从最近备份恢复配置
+# ============================================================
+
+restore_wsl_config() {
+    step "从备份恢复配置"
+
+    local config_file="$HOME/.claude/settings.json"
+
+    # 列出现有备份
+    local backups
+    backups=$(ls -1t "$BACKUP_DIR"/settings.json.*.bak 2>/dev/null || true)
+
+    if [ -z "$backups" ]; then
+        warn "未在 backup/ 目录找到 settings.json 备份文件。"
+        info "请确认之前运行过配置写入（会自动备份）。"
+        return 1
+    fi
+
+    local latest
+    latest=$(echo "$backups" | head -1)
+    local count
+    count=$(echo "$backups" | wc -l)
+
+    if [ "$NON_INTERACTIVE" -eq 1 ] || [ "$YES" -eq 1 ]; then
+        info "非交互模式：自动选择最近备份。"
+        info "备份文件: $latest"
+        info "备份时间: $(stat -c %y "$latest" 2>/dev/null || echo '未知')"
+    else
+        info "找到 $count 个备份文件："
+        local i=1
+        local IFS_OLD="$IFS"
+        IFS=$'\n'
+        for b in $backups; do
+            local bt
+            bt=$(stat -c %y "$b" 2>/dev/null || echo '未知时间')
+            echo "  [$i] $b ($bt)"
+            i=$((i+1))
+        done
+        IFS="$IFS_OLD"
+        echo ""
+        read -r -p "选择要恢复的备份编号 (1-$count，默认最近): " choice
+        if [ -n "$choice" ] && [ "$choice" -ge 1 ] 2>/dev/null && [ "$choice" -le "$count" ] 2>/dev/null; then
+            latest=$(echo "$backups" | sed -n "${choice}p")
+        fi
+    fi
+
+    # 恢复前备份当前配置
+    if [ -f "$config_file" ]; then
+        info "正在备份当前配置..."
+        backup_file "$config_file" || {
+            error "当前配置备份失败，已停止恢复。"
+            return 1
+        }
+    fi
+
+    # 执行恢复
+    cp "$latest" "$config_file" || {
+        error "恢复失败：无法写入 $config_file"
+        return 1
+    }
+
+    success "配置已从备份恢复: $latest"
+
+    # 验证
+    if validate_settings_json "$config_file"; then
+        success "恢复的配置文件 JSON 格式验证通过。"
+    else
+        warn "恢复的配置文件 JSON 格式可能无效，请检查。"
+    fi
+
+    return 0
+}
+
+# ============================================================
+# 仅测试 API Key 是否可用（不写配置）
+# ============================================================
+
+test_key_only() {
+    step "测试 DeepSeek API Key"
+
+    local api_key
+
+    if [ "$NON_INTERACTIVE" -eq 1 ]; then
+        if [ -n "${CCDI_API_KEY:-}" ]; then
+            api_key="$CCDI_API_KEY"
+        elif [ -n "${DEEPSEEK_API_KEY:-}" ]; then
+            api_key="$DEEPSEEK_API_KEY"
+        else
+            error "未检测到环境变量 CCDI_API_KEY 或 DEEPSEEK_API_KEY。"
+            info "用法: CCDI_API_KEY=sk-xxxx ./install_wsl.sh --mode test-key"
+            return 1
+        fi
+        info "已从环境变量读取 API Key: $(mask_api_key "$api_key")"
+    else
+        echo ""
+        info "此模式仅测试 Key 是否可用，不会修改任何配置文件。"
+        read -r -s -p "请粘贴 DeepSeek API Key: " api_key
+        echo ""
+    fi
+
+    if [ -z "$api_key" ]; then
+        error "API Key 不能为空！"
+        return 1
+    fi
+
+    info "API Key: $(mask_api_key "$api_key")"
+    info "正在使用 fast 模型测试 API 连通性，以降低成本。"
+    info "这不代表主模型不可用；主模型将在 Claude Code 实际使用时调用。"
+    info "正在测试 Anthropic Format 接口..."
+
+    local test_model="deepseek-v4-flash"
+    local messages_endpoint="https://api.deepseek.com/anthropic/messages"
+    local request_body="{\"model\":\"$test_model\",\"max_tokens\":16,\"messages\":[{\"role\":\"user\",\"content\":\"Reply OK only.\"}]}"
+
+    local hf
+    hf=$(mktemp)
+    printf 'x-api-key: %s\n' "$api_key" > "$hf"
+    printf 'Authorization: Bearer %s\n' "$api_key" >> "$hf"
+    printf 'Content-Type: application/json\n' >> "$hf"
+    printf 'anthropic-version: 2023-06-01\n' >> "$hf"
+
+    local response http_code curl_exit
+    _ccdi_errexit_saved=0
+    case $- in *e*) _ccdi_errexit_saved=1 ;; esac
+    set +e
+    response=$(curl -s -w "\n%{http_code}" -H @"$hf" --connect-timeout 15 --max-time 30 -X POST -d "$request_body" "$messages_endpoint" 2>&1)
+    curl_exit=$?
+    if [ "$_ccdi_errexit_saved" -eq 1 ]; then set -e; fi
+    rm -f "$hf"
+
+    http_code=$(echo "$response" | tail -1)
+
+    case $http_code in
+        200)
+            success "API Key 可用！测试通过 (HTTP 200)"
+            info "注意: 测试使用 fast 模型 ($test_model)，以节省成本。"
+            info "这不代表主模型不可用；主模型将在 Claude Code 实际使用时调用。"
+            return 0
+            ;;
+        401)
+            error "API Key 验证失败 (401 Unauthorized)"
+            info "请检查 Key 是否正确，到 platform.deepseek.com 重新获取。"
+            return 1
+            ;;
+        402)
+            error "账户余额不足或计费异常 (402 Payment Required)"
+            info "请到 platform.deepseek.com 检查余额。"
+            return 1
+            ;;
+        403)
+            error "API Key 无权限 (403 Forbidden)"
+            return 1
+            ;;
+        404)
+            error "接口或模型未找到 (404 Not Found)"
+            info "模型名可能已变更，请检查 DeepSeek 官方文档。"
+            return 1
+            ;;
+        429)
+            error "请求频率限制 (429 Too Many Requests)"
+            info "请稍等几分钟再试。"
+            return 1
+            ;;
+        5*)
+            error "DeepSeek 服务端错误 (HTTP $http_code)"
+            info "官方服务暂时异常，请稍后重试。"
+            return 1
+            ;;
+        *)
+            if [ -z "$http_code" ] || [ "$http_code" = "000" ] || [ "$curl_exit" -ne 0 ]; then
+                error "网络连接失败"
+                info "请检查网络、DNS、代理设置。"
+            else
+                error "未知错误 (HTTP $http_code)"
+            fi
+            return 1
+            ;;
+    esac
 }
 
 # ============================================================
@@ -540,6 +870,12 @@ check_environment() {
     fi
 
     # node / npm（仅检测，不安装）
+    # 先检测 nvm
+    local using_nvm=0
+    if command -v nvm &> /dev/null || [ -s "$HOME/.nvm/nvm.sh" ]; then
+        using_nvm=1
+    fi
+
     local node_ok=1
     if command -v node &> /dev/null; then
         local node_ver
@@ -550,7 +886,11 @@ check_environment() {
         if [ "$node_major" -lt 18 ] 2>/dev/null; then
             warn "Node.js 版本过旧 ($node_ver)，Claude Code 需要 Node.js >= 18"
             info "当前版本: $node_ver，需要: v18 或更高版本"
-            info "建议升级 Node.js 后重新运行本脚本。"
+            if [ "$using_nvm" -eq 1 ]; then
+                info "检测到 nvm，建议使用: nvm install --lts && nvm use --lts"
+            else
+                info "建议升级 Node.js 后重新运行本脚本。"
+            fi
             node_ok=0
             issues=$((issues + 1))
         else
@@ -559,11 +899,15 @@ check_environment() {
     else
         error "Node.js 未安装！Claude Code 需要 Node.js 18 或更高版本。"
         info "请先安装 Node.js LTS 后重新运行本脚本。"
-        info "安装方法:"
+        if [ "$using_nvm" -eq 1 ]; then
+            info "检测到 nvm，建议使用: nvm install --lts && nvm use --lts"
+        else
+            info "安装方法:"
         info "  方法1: curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -"
         info "          sudo apt-get install -y nodejs"
         info "  方法2: 使用 nvm (https://github.com/nvm-sh/nvm)"
-        info "  方法3: 从 https://nodejs.org 下载"
+            info "  方法3: 从 https://nodejs.org 下载"
+        fi
         node_ok=0
         issues=$((issues + 1))
     fi
@@ -877,6 +1221,15 @@ configure_deepseek() {
 
     if merge_settings_json "$config_file" "$DEFAULTS_FILE" "$api_key"; then
         success "DeepSeek 配置已写入！"
+
+        # 如果旧 JSON 损坏，明确提示用户
+        if [ "${CONFIG_REBUILT_FROM_DAMAGED:-0}" -eq 1 ]; then
+            warn ""
+            warn "注意：旧配置文件 JSON 损坏，已备份并重建。"
+            warn "旧配置中的非 env 字段（如 permissions）可能无法自动保留。"
+            warn "如需恢复，请从 backup/ 目录手动合并。"
+            warn ""
+        fi
 
         # 脱敏显示
         info "API Key: $(mask_api_key "$api_key")"
@@ -1214,6 +1567,61 @@ print(f'快速模型: {e.get(\"ANTHROPIC_SMALL_FAST_MODEL\", \"(未设置)\")}')
     fi
 
     echo ""
+
+    # 分享版脱敏处理
+    if [ "$SHARE_SAFE" -eq 1 ]; then
+        info "========== 生成分享版诊断报告 =========="
+        local share_report="$SCRIPT_DIR/report-share-safe.txt"
+        {
+            echo "============================================================"
+            echo "  Claude DeepSeek 诊断报告（分享版 - 已脱敏）"
+            echo "  生成时间: $(date)"
+            echo "============================================================"
+            echo ""
+            echo "系统信息:"
+            if [ -f /etc/os-release ]; then
+                . /etc/os-release 2>/dev/null
+                echo "  OS: ${NAME:-未知} ${VERSION:-}"
+            fi
+            echo "  WSL: $(if grep -qi microsoft /proc/version 2>/dev/null; then echo 是; else echo 否/不确定; fi)"
+            echo ""
+            echo "命令状态:"
+            echo "  Node.js: $(node --version 2>/dev/null || echo 未安装)"
+            echo "  npm: $(npm --version 2>/dev/null || echo 未安装)"
+            echo "  Claude Code: $(claude --version 2>/dev/null || echo 未安装)"
+            echo ""
+            echo "配置文件:"
+            if [ -f "$config_file" ]; then
+                echo "  settings.json: 存在"
+                if validate_settings_json "$config_file" 2>/dev/null; then
+                    echo "  JSON 格式: 有效"
+                    local st
+                    st=$(read_config_value "$config_file" "ANTHROPIC_AUTH_TOKEN" "" 2>/dev/null || echo "")
+                    echo "  API Key: $(mask_api_key "$st")"
+                    echo "  Base URL: $(read_config_value "$config_file" "ANTHROPIC_BASE_URL" "(未设置)" 2>/dev/null || echo "(未设置)")"
+                    echo "  主模型: $(read_config_value "$config_file" "ANTHROPIC_MODEL" "(未设置)" 2>/dev/null || echo "(未设置)")"
+                else
+                    echo "  JSON 格式: 无效"
+                fi
+            else
+                echo "  settings.json: 不存在"
+            fi
+            echo ""
+            echo "网络:"
+            if curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" "https://api.deepseek.com" 2>/dev/null | grep -q "200\|401\|402\|404\|405"; then
+                echo "  api.deepseek.com: 可访问"
+            else
+                echo "  api.deepseek.com: 无法访问"
+            fi
+            echo ""
+            echo "============================================================"
+            echo "注意: 本报告已自动脱敏（隐藏用户名和路径）。"
+        } > "$share_report"
+        success "分享版报告已生成: $share_report"
+        info "你可以将此文件发给卖家/技术支持，不会泄露个人路径信息。"
+    fi
+
+    echo ""
     info "诊断完成。"
 }
 
@@ -1224,26 +1632,79 @@ print(f'快速模型: {e.get(\"ANTHROPIC_SMALL_FAST_MODEL\", \"(未设置)\")}')
 print_final_summary() {
     echo ""
 
-    # 根据状态决定摘要标题
-    if [ "$CLAUDE_OK" -eq 1 ] && [ "$CONFIG_OK" -eq 1 ] && [ "$API_TEST_PASSED" -eq 1 ]; then
+    # doctor 模式不需要摘要
+    if [ "$MODE" = "doctor" ]; then
         echo -e "${GREEN}============================================================${NC}"
-        echo -e "${GREEN}  安装流程全部完成！${NC}"
+        echo -e "${GREEN}  诊断完成${NC}"
         echo -e "${GREEN}============================================================${NC}"
-    elif [ "$CLAUDE_OK" -eq 1 ] && [ "$CONFIG_OK" -eq 1 ] && [ "$API_TEST_SKIPPED" -eq 1 ]; then
-        echo -e "${YELLOW}============================================================${NC}"
-        echo -e "${YELLOW}  安装完成（未验证 API 可用）${NC}"
-        echo -e "${YELLOW}============================================================${NC}"
-    elif [ "$CLAUDE_OK" -eq 1 ] && [ "$CONFIG_OK" -eq 1 ] && [ "$API_TEST_FAILED" -eq 1 ]; then
-        echo -e "${YELLOW}============================================================${NC}"
-        echo -e "${YELLOW}  安装部分完成（API 测试未通过）${NC}"
-        echo -e "${YELLOW}============================================================${NC}"
-    elif [ "$CLAUDE_OK" -eq 1 ]; then
-        echo -e "${YELLOW}============================================================${NC}"
-        echo -e "${YELLOW}  安装部分完成${NC}"
-        echo -e "${YELLOW}============================================================${NC}"
+        echo ""
+        info "请查看上方诊断结果。"
+        echo ""
+        return 0
+    fi
+
+    # test-key 模式只需要 API 测试结果
+    if [ "$MODE" = "test-key" ]; then
+        echo ""
+        info "API Key 测试完成。未修改任何配置文件。"
+        echo ""
+        return 0
+    fi
+
+    # 根据本次任务目标判断成功/失败
+    local task_failed=0
+
+    if mode_needs_install && [ "${CLAUDE_OK:-0}" -ne 1 ]; then
+        task_failed=1
+    fi
+
+    if mode_needs_config && [ "${CONFIG_OK:-0}" -ne 1 ]; then
+        task_failed=1
+    fi
+
+    if [ "$MODE" = "uninstall" ] || [ "$MODE" = "restore" ]; then
+        # uninstall/restore 的结果由各自函数输出，这里只做状态展示
+        echo "============================================================"
+        if [ -f "$HOME/.claude/settings.json" ]; then
+            local token
+            token=$(read_config_value "$HOME/.claude/settings.json" "ANTHROPIC_AUTH_TOKEN" "")
+            if [ -n "$token" ]; then
+                success "DeepSeek 配置: 已配置 (Key: $(mask_api_key "$token"))"
+            else
+                success "DeepSeek 配置: 已移除"
+            fi
+        fi
+        echo "============================================================"
+        return 0
+    fi
+
+    if [ "$task_failed" -eq 0 ]; then
+        case "$MODE" in
+            configure)
+                echo -e "${GREEN}============================================================${NC}"
+                echo -e "${GREEN}  配置完成${NC}"
+                echo -e "${GREEN}============================================================${NC}"
+                if [ "${CONFIG_REBUILT_FROM_DAMAGED:-0}" -eq 1 ]; then
+                    warn "配置已从损坏 JSON 重建。非 env 字段可能未保留，请检查。"
+                fi
+                ;;
+            install)
+                echo -e "${GREEN}============================================================${NC}"
+                echo -e "${GREEN}  安装完成${NC}"
+                echo -e "${GREEN}============================================================${NC}"
+                ;;
+            all)
+                echo -e "${GREEN}============================================================${NC}"
+                echo -e "${GREEN}  安装和配置完成${NC}"
+                echo -e "${GREEN}============================================================${NC}"
+                if [ "${API_TEST_SKIPPED:-0}" -eq 1 ]; then
+                    warn "API 测试已跳过，未验证 Key 是否可用。"
+                fi
+                ;;
+        esac
     else
         echo -e "${RED}============================================================${NC}"
-        echo -e "${RED}  安装未完成，请检查上述错误${NC}"
+        echo -e "${RED}  本次操作未完成，请检查上方错误${NC}"
         echo -e "${RED}============================================================${NC}"
     fi
     echo ""
@@ -1251,23 +1712,29 @@ print_final_summary() {
     if command -v claude &> /dev/null; then
         success "Claude Code: $(claude --version 2>/dev/null || echo '已安装')"
     else
-        warn "Claude Code: 未安装或不可用"
+        if mode_needs_install; then
+            warn "Claude Code: 未安装或不可用"
+        else
+            info "Claude Code: $(claude --version 2>/dev/null || echo '已安装（本次未涉及安装）')"
+        fi
     fi
 
     # 检查配置状态
     local config_file="$HOME/.claude/settings.json"
-    if [ -f "$config_file" ]; then
-        local token
-        token=$(read_config_value "$config_file" "ANTHROPIC_AUTH_TOKEN" "")
-        if [ -n "$token" ]; then
-            local masked
-            masked=$(mask_api_key "$token")
-            success "DeepSeek 配置: 已配置 (Key: $masked)"
+    if mode_needs_config || [ "$MODE" = "all" ]; then
+        if [ -f "$config_file" ]; then
+            local token
+            token=$(read_config_value "$config_file" "ANTHROPIC_AUTH_TOKEN" "")
+            if [ -n "$token" ]; then
+                local masked
+                masked=$(mask_api_key "$token")
+                success "DeepSeek 配置: 已配置 (Key: $masked)"
+            else
+                warn "DeepSeek 配置: API Key 未设置"
+            fi
         else
-            warn "DeepSeek 配置: API Key 未设置"
+            warn "DeepSeek 配置: 未配置"
         fi
-    else
-        warn "DeepSeek 配置: 未配置"
     fi
 
     if [ "$API_TEST_PASSED" -eq 1 ]; then
@@ -1280,19 +1747,19 @@ print_final_summary() {
         info "  1. API Key 是否正确"
         info "  2. 账户余额是否充足"
         info "  3. 网络是否正常"
-        info "  4. 运行 doctor 获取详细信息"
+        info "  4. 运行 ./install_wsl.sh --mode doctor 获取详细信息"
     fi
 
     echo ""
     info "下一步:"
-    if [ "$CLAUDE_OK" -eq 1 ]; then
-        info "  1. 运行 claude 启动 Claude Code"
+    if mode_needs_install && [ "${CLAUDE_OK:-0}" -eq 1 ]; then
+        info "  1. 在当前终端运行: claude"
     fi
-    info "  2. 如有问题，在 Windows 端运行 doctor.ps1"
-    info "  3. 日志文件: $LOG_FILE"
+    info "  2. 如需诊断: ./install_wsl.sh --mode doctor"
+    info "  3. 如在 Windows 侧使用 Claude Code: 运行一键诊断.cmd"
+    info "  4. 日志文件: $LOG_FILE"
     echo ""
 }
-
 # ============================================================
 # 运行模式
 # ============================================================
@@ -1300,7 +1767,6 @@ print_final_summary() {
 run_mode() {
     case "$MODE" in
         all)
-            # 环境检测仅展示结果，不阻断流程
             check_environment || true
             if ! install_claude_code; then
                 error "Claude Code 安装失败，跳过配置步骤。"
@@ -1321,6 +1787,18 @@ run_mode() {
         doctor)
             run_doctor
             return 0
+            ;;
+        uninstall)
+            uninstall_wsl_config
+            return $?
+            ;;
+        restore)
+            restore_wsl_config
+            return $?
+            ;;
+        test-key)
+            test_key_only
+            return $?
             ;;
     esac
 }
@@ -1349,11 +1827,14 @@ main() {
     echo "  [1] 安装 Claude Code 并配置 DeepSeek（推荐）"
     echo "  [2] 仅安装 Claude Code"
     echo "  [3] 仅配置 DeepSeek API（Claude Code 已安装）"
-    echo "  [4] 仅运行诊断（不安装任何东西）"
-    echo "  [5] 退出"
+    echo "  [4] 仅运行诊断（不安装、不修改配置）"
+    echo "  [5] 测试 DeepSeek API Key 是否可用（不写配置）"
+    echo "  [6] 移除 DeepSeek 配置（保留 Claude Code）"
+    echo "  [7] 从备份恢复配置"
+    echo "  [0] 退出"
     echo ""
 
-    read -r -p "请输入选项 (1-5): " choice
+    read -r -p "请输入选项 (0-7): " choice
 
     case $choice in
         1)
@@ -1377,11 +1858,23 @@ main() {
             return 0
             ;;
         5)
+            test_key_only || true
+            return 0
+            ;;
+        6)
+            uninstall_wsl_config || true
+            return 0
+            ;;
+        7)
+            restore_wsl_config || true
+            return 0
+            ;;
+        0)
             info "已退出。"
             exit 0
             ;;
         *)
-            error "无效选项。请输入 1-5。"
+            error "无效选项。请输入 0-7。"
             main
             return 0
             ;;

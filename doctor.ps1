@@ -14,6 +14,8 @@ param(
     [switch]$NoSaveReport, # 不保存 report.txt，仅输出控制台摘要
     [switch]$SkipApiTest,  # 跳过 DeepSeek API 在线测试
     [switch]$NoOpenReport, # 不自动打开或选中诊断报告
+    [switch]$ShareSafe,    # 生成脱敏版报告（替换用户名/路径，可安全分享）
+    [switch]$Anonymize,    # ShareSafe 的别名
     [string]$OutputPath    # 报告输出路径，默认为当前目录 report.txt
 )
 
@@ -779,23 +781,31 @@ function Main {
         $fullSharePath = (Resolve-Path $reportResult.SharePath -ErrorAction SilentlyContinue).Path
         if (-not $fullSharePath) { $fullSharePath = $reportResult.SharePath }
 
-        $fullHistoryPath = (Resolve-Path $reportResult.HistoryPath -ErrorAction SilentlyContinue).Path
-        if (-not $fullHistoryPath) { $fullHistoryPath = $reportResult.HistoryPath }
-
-        $fullLocalPath = (Resolve-Path $reportResult.FullPath -ErrorAction SilentlyContinue).Path
-        if (-not $fullLocalPath) { $fullLocalPath = $reportResult.FullPath }
-
         Write-Host ""
         Write-Success "已生成诊断报告:"
-        Write-Info "  分享版报告（可发送）: $fullSharePath"
-        Write-Info "  分享版历史: $fullHistoryPath"
-        Write-Info "  完整版报告（仅本地保存）: $fullLocalPath"
-        Write-Host ""
-        Write-Info "请发送 report.txt 给技术支持。"
-        Write-Warning "不要发送 full-report-xxx.txt（包含完整路径信息）！"
+
+        if ($ShareSafe -or $Anonymize) {
+            # 分享安全模式：仅输出脱敏版，不生成完整版路径提示
+            Write-Info "  分享版报告（可发送）: $fullSharePath"
+            Write-Host ""
+            Write-Info "已启用分享安全模式（-ShareSafe），仅生成脱敏报告。"
+            Write-Info "报告中已隐藏用户名和项目路径，可安全分享。"
+        }
+        else {
+            $fullHistoryPath = (Resolve-Path $reportResult.HistoryPath -ErrorAction SilentlyContinue).Path
+            if (-not $fullHistoryPath) { $fullHistoryPath = $reportResult.HistoryPath }
+
+            $fullLocalPath = (Resolve-Path $reportResult.FullPath -ErrorAction SilentlyContinue).Path
+            if (-not $fullLocalPath) { $fullLocalPath = $reportResult.FullPath }
+
+            Write-Info "  分享版报告（可发送）: $fullSharePath"
+            Write-Info "  分享版历史: $fullHistoryPath"
+            Write-Info "  完整版报告（仅本地保存）: $fullLocalPath"
+            Write-Host ""
+            Write-Info "请发送 report.txt 给技术支持。"
+            Write-Warning "不要发送 full-report-xxx.txt（包含完整路径信息）！"
+        }
         Write-Warning "不要发送您的 API Key！报告中已自动脱敏处理。"
-        Write-Warning "不要截图包含 API Key 的窗口！"
-    }
 
     Write-Info "日志文件: $(Get-LogFilePath)"
 

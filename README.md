@@ -15,6 +15,9 @@
 
 下载后右键解压到任意目录。
 
+> **注意**：请先完整解压后再运行，不要在压缩包内直接双击！
+> 如果系统自带解压后中文文件名显示乱码，请用 **7-Zip** 或 **WinRAR** 解压。
+
 ### 2. 双击「开始安装.cmd」
 
 双击项目目录中的 **`开始安装.cmd`**，按提示操作。
@@ -152,7 +155,7 @@ powershell -ExecutionPolicy Bypass -File .\configure-deepseek.ps1 -NonInteractiv
 Remove-Item Env:\CCDI_API_KEY
 ```
 
-### WSL 安装（推荐手动运行）
+### WSL 安装与配置（推荐手动运行）
 
 在 WSL Ubuntu 终端中手动运行（推荐方式）：
 
@@ -160,7 +163,19 @@ Remove-Item Env:\CCDI_API_KEY
 # 在 WSL Ubuntu 终端中
 cd /mnt/c/Users/你的用户名/路径/claude-deepseek-installer
 chmod +x install_wsl.sh
+
+# 一键安装 Claude Code + 配置 DeepSeek
 ./install_wsl.sh
+
+# 或使用命令行模式
+./install_wsl.sh --mode configure          # 仅配置 DeepSeek
+./install_wsl.sh --mode doctor             # 仅诊断（不修改系统）
+./install_wsl.sh --mode test-key           # 仅测试 Key 是否可用
+./install_wsl.sh --mode uninstall          # 移除 DeepSeek 配置
+./install_wsl.sh --mode restore            # 从备份恢复配置
+
+# 非交互模式（自动化部署）
+CCDI_API_KEY=sk-xxxx ./install_wsl.sh --mode configure --non-interactive --skip-api-test
 ```
 
 Windows 端自动调用 WSL 为实验性高级选项，不推荐新手使用。
@@ -168,7 +183,19 @@ Windows 端自动调用 WSL 为实验性高级选项，不推荐新手使用。
 ### 诊断
 
 ```powershell
+# Windows PowerShell
 powershell -ExecutionPolicy Bypass -File .\doctor.ps1
+
+# 生成分享版报告（隐藏用户路径，可发给技术支持）
+powershell -ExecutionPolicy Bypass -File .\doctor.ps1 -ShareSafe
+```
+
+```bash
+# WSL 终端
+./install_wsl.sh --mode doctor
+
+# 生成分享版报告
+./install_wsl.sh --mode doctor --share-safe --yes
 ```
 
 ---
