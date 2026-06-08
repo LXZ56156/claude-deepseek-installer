@@ -7,6 +7,40 @@ cd "$ROOT_DIR"
 echo "[check] bash syntax"
 bash -n install_wsl.sh
 
+echo "[check] claude-install.ps1 exists and has required functions"
+python3 - <<'PY'
+from pathlib import Path
+
+claude_install = Path("lib/claude-install.ps1").read_text(encoding="utf-8")
+required_functions_ps = [
+    "Test-ClaudeCommandExisting",
+    "Test-HttpEndpointReachable",
+    "Test-ClaudeOfficialInstallNetwork",
+    "Test-NpmMirrorClaudeCodeNetwork",
+    "Install-ClaudeCodeNative",
+    "Install-ClaudeCodeNpmMirror",
+    "Install-ClaudeCodeAuto",
+    "Invoke-ClaudeDoctorSafe",
+]
+for fn in required_functions_ps:
+    if ("function " + fn) not in claude_install:
+        raise SystemExit(f"claude-install.ps1 missing function: {fn}")
+
+# Check status values used
+statuses = [
+    "official_native",
+    "npm_npmmirror",
+    "existing",
+    "failed_official_and_mirror",
+    "failed_missing_node_or_npm",
+    "failed_npmmirror_unreachable",
+    "skipped_existing",
+]
+for s in statuses:
+    if s not in claude_install:
+        raise SystemExit(f"claude-install.ps1 missing status value: {s}")
+PY
+
 echo "[check] JSON templates"
 python3 -m json.tool lib/deepseek-env.defaults.json >/dev/null
 python3 -m json.tool examples/settings.deepseek.example.json >/dev/null
@@ -84,6 +118,44 @@ for path in release_docs:
     if risky:
         sample = " ".join(risky[:5])
         raise SystemExit(f"{path} contains terminal-risk characters: {sample}")
+PY
+
+echo "[check] install_wsl.sh new functions exist"
+python3 - <<'PY'
+from pathlib import Path
+
+install_wsl = Path("install_wsl.sh").read_text(encoding="utf-8")
+required_functions = [
+    "command_exists",
+    "check_url_reachable",
+    "check_official_claude_network",
+    "check_npmmirror_network",
+    "install_claude_official",
+    "install_claude_npmmirror",
+    "install_claude_auto",
+]
+for fn in required_functions:
+    if fn not in install_wsl:
+        raise SystemExit(f"install_wsl.sh missing function: {fn}")
+
+# Verify install_claude_code calls install_claude_auto
+if "install_claude_auto" not in install_wsl:
+    raise SystemExit("install_wsl.sh: install_claude_auto not found")
+if "install_claude_code()" not in install_wsl:
+    raise SystemExit("install_wsl.sh: install_claude_code function missing")
+
+# Check state variables
+for var in ["CLAUDE_INSTALL_METHOD", "CLAUDE_WAS_ALREADY_INSTALLED", "CLAUDE_INSTALL_STATUS"]:
+    if var not in install_wsl:
+        raise SystemExit(f"install_wsl.sh missing state variable: {var}")
+
+# Check npmmirror registry URL
+if "registry.npmmirror.com" not in install_wsl:
+    raise SystemExit("install_wsl.sh missing npmmirror registry URL")
+
+# Check official install.sh URL
+if "claude.ai/install.sh" not in install_wsl:
+    raise SystemExit("install_wsl.sh missing official install.sh URL")
 PY
 
 echo "[check] sensitive-output guardrails"

@@ -355,332 +355,52 @@ function Step-CheckEnvironment {
 }
 
 # ============================================================
-# Step 2: 安装 Claude Code（Native Install 优先）
+# Step 2: 安装 Claude Code（Install-ClaudeCodeAuto）
+#
+# 策略（由 lib/claude-install.ps1 实现）:
+#   1. claude 已存在 → 跳过（不覆盖、不重装、不自动更新）
+#   2. 官方 Native Install 可用 → 优先使用
+#   3. 官方不可用或安装失败 → 自动切换 npmmirror npm 镜像
+#   4. npm 镜像需要 Node.js >= 18 + npm
 # ============================================================
 
 function Step-InstallClaudeCode {
     Write-Step "Step 2/7：安装 Claude Code"
 
-    if ($script:TestSafeMode) {
-        Write-Warning "当前为测试安全模式：不会安装、更新或卸载 Claude Code。"
-        Write-Info "将只检查 claude 命令是否存在，并继续后续沙盒配置验证。"
-
-        $existingVersion = Test-ClaudeInstalled
-        if ($existingVersion) {
-            Write-Success "检测到 Claude Code: $existingVersion"
-            $script:ClaudeInstalled = $true
-            $script:ClaudeInstallMethod = "existing"
-            $script:ClaudeInstallStatus = "SkippedInstall-TestSafe-Existing"
-            Update-CcdiState -Updates @{
-                claudeWasAlreadyInstalled = $true
-                claudeInstallMethod       = "existing"
-                claudeInstallStatus       = "SkippedInstall-TestSafe-Existing"
-            } | Out-Null
-        }
-        else {
-            Write-Warning "未检测到 Claude Code。测试安全模式下不会尝试安装。"
-            $script:ClaudeInstalled = $false
-            $script:ClaudeInstallMethod = "none"
-            $script:ClaudeInstallStatus = "SkippedInstall-TestSafe-Missing"
-            Update-CcdiState -Updates @{
-                claudeWasAlreadyInstalled = $false
-                claudeInstallMethod       = "none"
-                claudeInstallStatus       = "SkippedInstall-TestSafe-Missing"
-            } | Out-Null
-        }
-
-        return $true
-    }
-
-    # 检查是否已安装
-    $existingVersion = Test-ClaudeInstalled
-    if ($existingVersion) {
-        Write-Success "Claude Code 已安装: $existingVersion"
-
-        if (-not $NonInteractive) {
-            $updateChoice = Read-Host "是否更新到最新版本？(Y/N，直接回车跳过)"
-            if ($updateChoice -eq "Y" -or $updateChoice -eq "y") {
-                Write-Info "正在更新 Claude Code..."
-                Update-ClaudeCode
-            }
-            else {
-                Write-Info "跳过更新，保持现有版本。"
-            }
-        }
-
-        Write-Info "运行 claude doctor..."
-        $doctorResult = Invoke-CommandSafe -Command "claude" -Arguments @("doctor") -TimeoutSec 180
-        if ($doctorResult.Success) {
-            Write-Host $doctorResult.Output
-        }
-        else {
-            Write-Log "DEBUG" "claude doctor 输出: $($doctorResult.Error)"
-        }
-
-        $script:ClaudeInstalled = $true
-        $script:ClaudeInstallMethod = "existing"
-        $script:ClaudeInstallStatus = "AlreadyInstalled"
-        Update-CcdiState -Updates @{
-            claudeWasAlreadyInstalled = $true
-            claudeInstallMethod       = "existing"
-            claudeInstallStatus       = "AlreadyInstalled"
-        } | Out-Null
-        return $true
-    }
-
-    # ============================================================
-    # 尝试 Native Install（官方推荐）
-    # ============================================================
-    Write-Info "默认采用 Claude 官方推荐的 Native Install 方式安装..."
-    Write-Info "如环境不兼容，将使用 npm 方式作为备用。"
+    # 显示安装策略说明
+    Write-Info "安装策略: 优先 Claude 官方 Native Install → 不可用时自动切换 npmmirror 镜像"
+    Write-Info "npm 镜像使用 Anthropic 官方发布的 @anthropic-ai/claude-code 包"
+    Write-Info "镜像只提高 Claude Code 下载成功率，不保证登录、鉴权、模型调用一定可用"
     Write-Host ""
 
-    $nativeOk = $false
-    try {
-        Write-Info "正在从 Claude 官方下载安装脚本..."
-        Write-Info "执行: irm https://claude.ai/install.ps1 | iex"
+    # 调用统一安装函数
+    $installResult = Install-ClaudeCodeAuto -TestSafe:$script:TestSafeMode -NonInteractive:$NonInteractive
 
-        $tempInstallScript = Join-Path $env:TEMP "claude_native_install_$PID.ps1"
-        $downloadResult = Invoke-CommandSafe -Command "powershell" -Arguments @(
-            "-NoProfile", "-Command",
-            "Invoke-RestMethod -Uri 'https://claude.ai/install.ps1' -OutFile '$tempInstallScript'"
-        ) -TimeoutSec 180 -ProgressMessage "仍在下载 Claude 官方安装脚本，请勿关闭窗口。"
+    # 映射结果到 script 级别变量
+    $script:ClaudeInstalled = $installResult.Success
+    $script:ClaudeInstallMethod = $installResult.Method
+    $script:ClaudeInstallStatus = $installResult.Status
 
-        if ($downloadResult.Success -and (Test-Path $tempInstallScript)) {
-            $installResult = Invoke-CommandSafe -Command "powershell" -Arguments @(
-                "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tempInstallScript
-            ) -TimeoutSec 600 -ProgressMessage "仍在安装 Claude Code，请勿关闭窗口。"
-            Remove-Item $tempInstallScript -Force -ErrorAction SilentlyContinue
+    Write-Log "INFO" "Claude Code 安装结果: Success=$($installResult.Success), Method=$($installResult.Method), Status=$($installResult.Status)"
 
-            if ($installResult.Success) {
-                Write-Success "Native Install 方式安装成功！"
-                $nativeOk = $true
-            }
-            else {
-                Write-Warning "Native Install 未成功完成。"
-                Write-Log "WARN" "Native Install 输出: $($installResult.Error)"
-            }
-        }
-        else {
-            Write-Warning "无法下载 Claude 官方安装脚本（网络问题或官方服务异常）"
-            Write-Log "WARN" "下载 install.ps1 失败: $($downloadResult.Error)"
-        }
-    }
-    catch {
-        Write-Warning "Native Install 尝试异常: $($_.Exception.Message)"
-        Write-Log "ERROR" "Native Install 异常: $_"
-    }
-
-    # ============================================================
-    # Native Install 成功，验证
-    # ============================================================
-    if ($nativeOk) {
-        $newVersion = Test-ClaudeInstalled
-        if ($newVersion) {
-            Write-Success "Claude Code 安装验证通过: $newVersion"
-            $script:ClaudeInstalled = $true
-            $script:ClaudeInstallMethod = "native"
-            $script:ClaudeInstallStatus = "Installed"
-            Update-CcdiState -Updates @{
-                claudeWasAlreadyInstalled = $false
-                claudeInstallMethod       = "native"
-                claudeInstallStatus       = "Installed"
-            } | Out-Null
-            return $true
-        }
-        else {
-            Write-Warning "安装脚本已执行但 claude 命令未找到。"
-            Write-Warning "正在尝试刷新 PATH 并重新检测..."
-            Refresh-CurrentProcessPath
-            $newVersion = Test-ClaudeInstalled
-            if ($newVersion) {
-                Write-Success "Claude Code 安装验证通过（PATH 刷新后）: $newVersion"
-                $script:ClaudeInstalled = $true
-                $script:ClaudeInstallMethod = "native"
-                $script:ClaudeInstallStatus = "Installed"
-                Update-CcdiState -Updates @{
-                    claudeWasAlreadyInstalled = $false
-                    claudeInstallMethod       = "native"
-                    claudeInstallStatus       = "Installed"
-                } | Out-Null
-                return $true
-            }
-            Write-Warning "PATH 刷新后仍未检测到 claude，将继续尝试 npm fallback。"
-        }
-    }
-
-    # ============================================================
-    # npm fallback
-    # ============================================================
-    Write-Info ""
-    Write-Info "正在使用 npm 备用方式安装 Claude Code..."
-    Write-Info "这种安装方式在 DeepSeek 官方集成文档中也有采用。"
-    Write-Host ""
-
-    # 检查 Node.js >= 18
-    $nodeInfo = Test-NodeJsInstalled
-    if (-not $nodeInfo.Installed -or -not $nodeInfo.IsSupported) {
-        Write-Warning "Claude Code 需要 Node.js 18 或更高版本。"
-
-        # 尝试 winget 安装
-        $wingetOk = Test-CommandAvailable -CommandName "winget"
-        if ($wingetOk) {
-            Write-Info "检测到 winget，可以自动安装 Node.js LTS。"
-            if ($NonInteractive -or (Confirm-UserChoice -Message "是否使用 winget 安装 Node.js LTS？（将修改系统环境）")) {
-                Write-Info "正在使用 winget 安装 Node.js LTS（可能需要几分钟）..."
-                $installResult = Invoke-CommandSafe -Command "winget" -Arguments @(
-                    "install", "OpenJS.NodeJS.LTS",
-                    "--accept-package-agreements",
-                    "--accept-source-agreements",
-                    "--silent"
-                ) -TimeoutSec 900 -ProgressMessage "仍在安装 Node.js LTS，请勿关闭窗口。"
-                if ($installResult.Success) {
-                    Write-Success "Node.js 安装完成！"
-                    Write-Warning "请关闭并重新打开 PowerShell/命令提示符，然后重新运行本脚本。"
-                    Write-Warning "这样 Node.js 和 npm 命令才能被正确识别。"
-                    $script:ClaudeInstallMethod = "node-via-winget"
-                    $script:ClaudeInstallStatus = "NeedsRestart"
-                    Update-CcdiState -Updates @{
-                        claudeInstallMethod = "node-via-winget"
-                        claudeInstallStatus = "NeedsRestart"
-                    } | Out-Null
-                }
-                else {
-                    Write-Error-Msg "Node.js 自动安装失败。"
-                    Write-Info "请手动下载安装: https://nodejs.org (选择 LTS 版本)"
-                    Write-Info "安装完成后重新运行本脚本。"
-                    $script:ClaudeInstallStatus = "Failed"
-                }
-            }
-            else {
-                Write-Info "请手动安装 Node.js 后重新运行本脚本。"
-                Write-Info "下载地址: https://nodejs.org (选择 LTS 版本)"
-                $script:ClaudeInstallStatus = "Failed"
-            }
-        }
-        else {
-            Write-Info "未检测到 winget，请手动安装 Node.js:"
-            Write-Info "下载地址: https://nodejs.org (选择 LTS 版本)"
-            Write-Info "安装完成后，关闭并重新打开终端，然后重新运行本脚本。"
-            $script:ClaudeInstallStatus = "Failed"
-        }
-
-        $script:ClaudeInstalled = $false
+    # 处理特殊状态
+    if ($installResult.Status -eq "node_installed_needs_restart" -or
+        $installResult.Status -eq "installed_needs_restart") {
+        Write-Warning "当前需要重开终端后继续，已跳过后续配置步骤。"
+        Write-Info "下一步: 关闭此窗口，重新双击「开始安装.cmd」。"
         return $false
     }
 
-    # npm 安装
-    Write-Info "执行: npm install -g @anthropic-ai/claude-code@latest（首次下载可能需要几分钟）"
-    $installResult = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest") -TimeoutSec 900 -ProgressMessage "仍在通过 npm 安装 Claude Code，请勿关闭窗口。"
-
-    if ($installResult.Success) {
-        Write-Success "npm 安装 Claude Code 成功！"
-        $script:ClaudeInstallMethod = "npm"
-        $script:ClaudeInstallStatus = "Installed"
-    }
-    else {
-        Write-Error-Msg "npm 安装过程中出现错误:"
-        Write-Host $installResult.Error -ForegroundColor Red
-
-        if ($installResult.Error -match "EACCES|permission|权限") {
-            Write-Warning "可能是 npm 全局安装权限问题。"
-            Write-Warning "建议使用 nvm 管理 Node.js，或使用官方 Native Install 方式。"
-        }
-        $script:ClaudeInstalled = $false
-        $script:ClaudeInstallStatus = "Failed"
+    if (-not $installResult.Success) {
+        Write-Error-Msg "Claude Code 安装未成功。"
+        Write-Info "请先解决安装问题后重新运行本脚本。"
+        Write-Info "如果仍不行，请运行「一键诊断.cmd」获取诊断报告。"
         return $false
     }
 
-    # 验证
-    $newVersion = Test-ClaudeInstalled
-    if ($newVersion) {
-        Write-Success "Claude Code 安装验证通过: $newVersion"
-        Write-Info "运行 claude doctor..."
-        $doctorResult = Invoke-CommandSafe -Command "claude" -Arguments @("doctor") -TimeoutSec 180
-        if ($doctorResult.Success) {
-            Write-Host $doctorResult.Output
-        }
-        $script:ClaudeInstalled = $true
-        $script:ClaudeInstallMethod = "npm"
-        $script:ClaudeInstallStatus = "Installed"
-        Update-CcdiState -Updates @{
-            claudeWasAlreadyInstalled = $false
-            claudeInstallMethod       = "npm"
-            claudeInstallStatus       = "Installed"
-        } | Out-Null
-        return $true
-    }
-    else {
-        Write-Warning "claude 命令未找到，正在刷新 PATH 并重新检测..."
-        Refresh-CurrentProcessPath
-        $newVersion = Test-ClaudeInstalled
-        if ($newVersion) {
-            Write-Success "Claude Code 检测成功（PATH 刷新后）: $newVersion"
-            $script:ClaudeInstalled = $true
-            $script:ClaudeInstallMethod = "npm"
-            $script:ClaudeInstallStatus = "Installed"
-            Update-CcdiState -Updates @{
-                claudeWasAlreadyInstalled = $false
-                claudeInstallMethod       = "npm"
-                claudeInstallStatus       = "Installed"
-            } | Out-Null
-            return $true
-        }
-
-        Write-Warning "Claude Code 可能已安装，但当前终端还没有刷新 PATH。"
-        Write-Info "请关闭此窗口后重新双击 [开始安装.cmd]。"
-        Write-Info "如果仍不行，请运行 [一键诊断.cmd] 获取诊断报告。"
-
-        $npmPrefix = Invoke-CommandSafe -Command "npm" -Arguments @("prefix", "-g")
-        if ($npmPrefix.Success) {
-            Write-Info "npm 全局安装路径: $($npmPrefix.Output.Trim())"
-        }
-
-        $script:ClaudeInstalled = $false
-        $script:ClaudeInstallMethod = "npm"
-        $script:ClaudeInstallStatus = "NeedsRestart"
-        Update-CcdiState -Updates @{
-            claudeInstallMethod = "npm"
-            claudeInstallStatus = "NeedsRestart"
-        } | Out-Null
-        return $false
-    }
+    return $true
 }
 
-function Update-ClaudeCode {
-    # 尝试 Native Install 方式更新
-    try {
-        Write-Info "尝试通过官方 Native Install 更新..."
-        $tempScript = Join-Path $env:TEMP "claude_update_$PID.ps1"
-        Invoke-CommandSafe -Command "powershell" -Arguments @(
-            "-NoProfile", "-Command",
-            "Invoke-RestMethod -Uri 'https://claude.ai/install.ps1' -OutFile '$tempScript'"
-        ) -TimeoutSec 180 -ProgressMessage "仍在下载 Claude 官方安装脚本，请勿关闭窗口。"
-        if (Test-Path $tempScript) {
-            $result = Invoke-CommandSafe -Command "powershell" -Arguments @(
-                "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tempScript
-            ) -TimeoutSec 600 -ProgressMessage "仍在更新 Claude Code，请勿关闭窗口。"
-            Remove-Item $tempScript -Force -ErrorAction SilentlyContinue
-            if ($result.Success) {
-                Write-Success "Claude Code 已更新（Native Install）。"
-                return
-            }
-        }
-    }
-    catch {
-        Write-Log "DEBUG" "Native Install 更新失败，尝试 npm: $_"
-    }
-
-    # npm fallback
-    Write-Info "使用 npm 更新..."
-    $result = Invoke-CommandSafe -Command "npm" -Arguments @("install", "-g", "@anthropic-ai/claude-code@latest") -TimeoutSec 900 -ProgressMessage "仍在通过 npm 更新 Claude Code，请勿关闭窗口。"
-    if ($result.Success) {
-        Write-Success "Claude Code 已更新（npm）。"
-    }
-    else {
-        Write-Warning "更新失败，将继续使用现有版本。"
-    }
-}
 
 # ============================================================
 # Step 3: DeepSeek API Key 获取和输入
@@ -1139,7 +859,7 @@ function Show-CompletionPage {
         Write-Warning "DeepSeek 配置未完成"
         Write-Info "请稍后运行 configure-deepseek.ps1 配置 API Key。"
     }
-    elseif ($script:ClaudeInstallStatus -eq "NeedsRestart") {
+    elseif ($script:ClaudeInstallStatus -match "needs_restart") {
         Write-Host "==============================================================" -ForegroundColor Yellow
         Write-Host "            需要重开终端后继续                                " -ForegroundColor Yellow
         Write-Host "==============================================================" -ForegroundColor Yellow
@@ -1188,7 +908,7 @@ function Start-LazyInstall {
     # Step 2: 安装 Claude Code
     $claudeOk = Step-InstallClaudeCode
     if (-not $claudeOk) {
-        if ($script:ClaudeInstallStatus -eq "NeedsRestart") {
+        if ($script:ClaudeInstallStatus -match "needs_restart") {
             Write-Warning "当前需要重开终端后继续，已跳过后续配置步骤。"
         }
         else {

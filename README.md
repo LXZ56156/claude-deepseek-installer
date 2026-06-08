@@ -106,6 +106,50 @@
 
 ---
 
+## 网络与安装策略 (v1.3.2)
+
+本工具采用**自动降级**的 Claude Code 安装策略：
+
+```
+检测 claude 是否已安装
+  -> 已安装: 跳过（不覆盖、不重装、不自动更新）
+  -> 未安装: 检测官方安装通道
+       -> 官方可用: Native Install（优先）
+            -> 安装失败: npm 镜像 fallback
+       -> 官方不可用: npm 镜像
+            -> Node.js >= 18 + npm 可用: 安装
+            -> Node.js/npm 缺失: 提示手动安装
+```
+
+### 策略要点
+
+| 要点 | 说明 |
+|------|------|
+| 默认官方安装 | 优先使用 `https://claude.ai/install.ps1`（Windows）或 `install.sh`（WSL） |
+| 自动切换镜像 | 官方不可达时，自动使用 `registry.npmmirror.com` 安装 |
+| 不覆盖已安装 | 已安装 Claude Code 时默认跳过，不自动更新 |
+| 官方包来源 | npm 镜像安装使用 **Anthropic 官方发布的** `@anthropic-ai/claude-code` 包 |
+| 不使用非官方包 | 不使用任何绿色版、魔改版、第三方二进制或 Docker 镜像 |
+
+### 镜像说明
+
+- **npm 镜像只解决下载问题**：提高在国内网络环境下 Claude Code 的下载成功率。
+- **不保证后续服务可用**：镜像安装不影响 Claude 登录、鉴权、模型调用。这些功能需要您的网络能正常访问相应服务。
+- **安装方式差异**：npm 镜像安装与官方 Native Install 的安装链路、更新方式不完全一致。
+
+### 常见安装失败原因
+
+| 症状 | 可能原因 | 建议 |
+|------|----------|------|
+| 无法安装 | 无法访问 `claude.ai` | 检查网络/VPN/代理设置 |
+| 无法安装 | 无法访问 `downloads.claude.ai` | 检查 DNS/防火墙 |
+| 切换镜像后仍失败 | 未安装 Node.js 18+ / npm | 从 https://nodejs.org 下载 LTS 版 |
+| 切换镜像后仍失败 | `registry.npmmirror.com` 不可达 | 检查网络，稍后重试 |
+| 安装后 claude 命令不存在 | npm optional dependencies 被禁用 | 检查 npm 配置 |
+| 安装后 claude 命令不存在 | PATH 未刷新 | 关闭并重新打开终端 |
+
+---
+
 ## 文件结构
 
 ```
@@ -125,6 +169,14 @@ claude-deepseek-installer/
 |-- uninstall-config.ps1          # 配置恢复/卸载脚本
 |-- install_wsl.sh                # WSL Ubuntu 安装脚本
 |-- lib/                          # 公共库
+|   |-- bootstrap.ps1             # 入口统一初始化
+|   |-- logger.ps1                # 日志和输出
+|   |-- common.ps1                # 公共工具函数
+|   |-- state.ps1                 # 安装状态管理
+|   |-- env-check.ps1             # 环境检测
+|   |-- config-writer.ps1         # 配置读写
+|   |-- claude-install.ps1        # Claude Code 安装（官方优先 + npm 镜像回退）
+|   `-- deepseek-env.defaults.json # DeepSeek 默认配置模板
 |-- scripts/                      # 开发和自检脚本
 |-- docs/                         # 用户文档
 |-- examples/                     # 示例文件

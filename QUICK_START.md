@@ -123,6 +123,28 @@ claude
 
 ---
 
+## 网络与安装策略 (v1.3.2)
+
+本工具会自动选择最优的 Claude Code 安装方式：
+
+1. **已安装则跳过**：不覆盖、不重装、不自动更新
+2. **优先官方安装**：检测 `claude.ai` 和 `downloads.claude.ai`，可用时使用官方 Native Install
+3. **自动切换镜像**：官方不可达或安装失败时，自动使用 `registry.npmmirror.com` 安装
+4. **只用官方包**：npm 镜像安装使用 Anthropic 官方发布的 `@anthropic-ai/claude-code` 包
+
+**注意**：镜像只提高 Claude Code 下载成功率，不保证 Claude 登录、鉴权、模型调用一定可用。
+
+### 常见安装失败
+
+| 原因 | 解决方法 |
+|------|----------|
+| 无法访问 claude.ai | 检查网络/VPN/代理 |
+| 未安装 Node.js/npm | 从 https://nodejs.org 下载 LTS 版 |
+| npmmirror 不可访问 | 检查网络，稍后重试 |
+| claude 命令不存在 | 关闭终端后重新打开 |
+
+---
+
 ## 六、高级用法
 
 > 以下为 PowerShell 命令行用法，适合高级用户或远程指导场景。

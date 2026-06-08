@@ -46,6 +46,11 @@ API_TEST_SKIPPED=0
 API_TEST_FAILED=0
 API_TEST_FAIL_REASON=""
 
+# Claude Code 安装状态变量
+CLAUDE_INSTALL_METHOD=""
+CLAUDE_WAS_ALREADY_INSTALLED=0
+CLAUDE_INSTALL_STATUS=""
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -1049,82 +1054,323 @@ ensure_nodejs_for_install() {
 }
 
 # ============================================================
-# 安装 Claude Code
+# Claude Code 网络检测和安装函数 (v1.3.2)
+# 安装策略:
+#   1. claude 已存在 → 跳过（不覆盖、不重装、不自动更新）
+#   2. 官方 install.sh 可用 → 优先使用
+#   3. 官方不可用或安装失败 → 自动切换 npmmirror npm 镜像
+#   4. npm 镜像需要 Node.js >= 18 + npm
+# ============================================================
+
+command_exists() {
+    command -v "$1" &> /dev/null
+}
+
+check_url_reachable() {
+    local url="$1"
+    local timeout="${2:-15}"
+    local method="${3:-HEAD}"
+
+    local http_code curl_exit
+    _ccdi_errexit_saved=0
+    case $- in *e*) _ccdi_errexit_saved=1 ;; esac
+    set +e
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" -X "$method" --connect-timeout "$timeout" --max-time "$((timeout + 5))" "$url" 2>/dev/null)
+    curl_exit=$?
+    if [ "$_ccdi_errexit_saved" -eq 1 ]; then set -e; fi
+
+    if [ "$curl_exit" -eq 0 ] && [ -n "$http_code" ]; then
+        # 403/404/401 表示网络可达（DNS/TLS/HTTP 有响应）
+        case "$http_code" in
+            403|404|401) return 0 ;;
+        esac
+        if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 500 ]; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+check_official_claude_network() {
+    log "INFO" "检测 Claude 官方安装通道..."
+    local ok=1
+
+    # 检测 install.sh
+    if curl -s --connect-timeout 15 --max-time 20 -o /dev/null "https://claude.ai/install.sh" 2>/dev/null; then
+        log "INFO" "claude.ai/install.sh 可达"
+    else
+        warn "无法下载 claude.ai/install.sh（网络问题或官方服务异常）"
+        log "WARN" "claude.ai/install.sh 不可达"
+        ok=0
+    fi
+
+    # 检测 downloads.claude.ai（有响应即可，403/404 算可达）
+    if check_url_reachable "https://downloads.claude.ai" 10 "HEAD"; then
+        log "INFO" "downloads.claude.ai 可达"
+    else
+        warn "无法访问 downloads.claude.ai"
+        log "WARN" "downloads.claude.ai 不可达"
+        ok=0
+    fi
+
+    if [ "$ok" -eq 1 ]; then
+        success "Claude 官方安装通道可用。"
+        log "INFO" "Claude 官方安装通道: 可用"
+    else
+        warn "Claude 官方安装通道不可用，将使用 npm 镜像。"
+        log "WARN" "Claude 官方安装通道: 不可用"
+    fi
+
+    return "$ok"
+}
+
+check_npmmirror_network() {
+    log "INFO" "检测 npmmirror 镜像可用性..."
+
+    # 检查 node
+    if ! command_exists node; then
+        warn "Node.js 未安装。"
+        return 1
+    fi
+
+    local node_major
+    node_major=$(node --version | sed 's/v//' | cut -d. -f1)
+    if [ "$node_major" -lt 18 ] 2>/dev/null; then
+        warn "Node.js 版本过低 ($(node --version))，需要 >= 18。"
+        return 1
+    fi
+
+    # 检查 npm
+    if ! command_exists npm; then
+        warn "npm 不可用。"
+        return 1
+    fi
+
+    # 检测 npmmirror 上的包
+    local npm_out npm_rc
+    npm_out=$(npm view @anthropic-ai/claude-code version --registry=https://registry.npmmirror.com 2>&1)
+    npm_rc=$?
+
+    if [ "$npm_rc" -eq 0 ] && [ -n "$npm_out" ]; then
+        info "npmmirror @anthropic-ai/claude-code 可达，版本: $npm_out"
+        log "INFO" "npmmirror 镜像可用: $npm_out"
+        return 0
+    else
+        warn "无法从 npmmirror 获取 @anthropic-ai/claude-code 版本信息。"
+        log "WARN" "npmmirror 检测失败: $npm_out"
+        return 1
+    fi
+}
+
+install_claude_official() {
+    info "正在使用 Claude 官方方式安装..."
+    info "执行: curl -fsSL https://claude.ai/install.sh | bash"
+    log "INFO" "执行: curl -fsSL https://claude.ai/install.sh | bash"
+
+    local curl_exit
+    _ccdi_errexit_saved=0
+    case $- in *e*) _ccdi_errexit_saved=1 ;; esac
+    set +e
+    curl -fsSL https://claude.ai/install.sh | bash >> "$LOG_FILE" 2>&1
+    curl_exit=$?
+    if [ "$_ccdi_errexit_saved" -eq 1 ]; then set -e; fi
+
+    if [ "$curl_exit" -eq 0 ]; then
+        success "Claude 官方安装脚本执行成功。"
+        log "INFO" "官方 install.sh 完成"
+        return 0
+    else
+        warn "Claude 官方安装脚本执行未成功完成。"
+        log "WARN" "官方 install.sh 执行失败 (exit=$curl_exit)"
+        return 1
+    fi
+}
+
+install_claude_npmmirror() {
+    info "正在使用 npm + npmmirror 镜像安装 Claude Code..."
+    info "执行: npm install -g @anthropic-ai/claude-code --registry=https://registry.npmmirror.com"
+    log "INFO" "执行: npm install -g @anthropic-ai/claude-code --registry=https://registry.npmmirror.com"
+
+    local npm_exit
+    _ccdi_errexit_saved=0
+    case $- in *e*) _ccdi_errexit_saved=1 ;; esac
+    set +e
+    npm install -g @anthropic-ai/claude-code --registry=https://registry.npmmirror.com >> "$LOG_FILE" 2>&1
+    npm_exit=$?
+    if [ "$_ccdi_errexit_saved" -eq 1 ]; then set -e; fi
+
+    if [ "$npm_exit" -eq 0 ]; then
+        success "npm 镜像安装 Claude Code 成功！"
+        log "INFO" "npm mirror 安装成功"
+        return 0
+    else
+        error "npm 镜像安装过程中出现错误。"
+        log "ERROR" "npm mirror 安装失败 (exit=$npm_exit)"
+        warn "如果是权限问题，请参考 Claude Code 官方文档修复 npm 权限。"
+        warn "不建议通过 sudo 强行安装 Claude Code。"
+        return 1
+    fi
+}
+
+install_claude_auto() {
+    log "INFO" "--- install_claude_auto 开始 ---"
+
+    # Step 1: 检测 claude 是否已存在
+    if command_exists claude; then
+        local existing_version
+        existing_version=$(claude --version 2>/dev/null || echo "已安装")
+        success "Claude Code 已安装: $existing_version"
+        info "已安装时不覆盖、不重装、不自动更新。"
+
+        info "运行 claude doctor..."
+        claude doctor 2>&1 || true
+
+        CLAUDE_OK=1
+        CLAUDE_INSTALL_METHOD="existing"
+        CLAUDE_WAS_ALREADY_INSTALLED=1
+        CLAUDE_INSTALL_STATUS="skipped_existing"
+        log "INFO" "Claude Code 已存在，跳过安装: $existing_version"
+        return 0
+    fi
+
+    info "Claude Code 未安装，开始安装流程..."
+
+    # Step 2: 检测官方安装通道
+    info "优先使用 Claude 官方方式安装..."
+    info "正在检测官方安装通道..."
+
+    local official_ok=0
+    if check_official_claude_network; then
+        official_ok=1
+        if install_claude_official; then
+            # 验证官方安装
+            hash -r || true
+            if command_exists claude; then
+                local new_version
+                new_version=$(claude --version 2>/dev/null || echo "安装成功")
+                success "Claude Code 安装验证通过 (official): $new_version"
+                info "运行 claude doctor..."
+                claude doctor 2>&1 || true
+                CLAUDE_OK=1
+                CLAUDE_INSTALL_METHOD="official_native"
+                CLAUDE_INSTALL_STATUS="installed"
+                log "INFO" "官方安装成功: $new_version"
+                return 0
+            else
+                warn "官方安装脚本已执行但 claude 命令未找到。"
+                warn "将尝试 npmmirror 镜像安装作为备用方案。"
+                log "WARN" "官方安装后未检测到 claude 命令"
+            fi
+        else
+            warn "官方安装失败，将自动切换 npmmirror 镜像安装。"
+            log "WARN" "官方安装失败"
+        fi
+    else
+        warn "Claude 官方安装通道不可用。"
+        info "将自动切换 npmmirror 国内镜像安装..."
+    fi
+
+    # Step 3: npm npmmirror 镜像安装
+    echo ""
+    info "正在使用 npmmirror 国内镜像安装 Claude Code..."
+    info "使用 Anthropic 官方发布的 @anthropic-ai/claude-code npm 包。"
+    info "镜像只提高 Claude Code 下载成功率，不保证登录、鉴权、模型调用一定可用。"
+    echo ""
+
+    # 检查镜像可用性（同时检查 node/npm）
+    if ! check_npmmirror_network; then
+        error "官方安装通道不可用，镜像安装需要 Node.js 18+ 和 npm。"
+
+        if [ "$NON_INTERACTIVE" -eq 1 ]; then
+            if [ "$INSTALL_DEPS" -eq 1 ]; then
+                info "非交互模式 --install-deps: 尝试安装 Node.js..."
+                if ! install_nodejs_interactive; then
+                    CLAUDE_OK=0
+                    CLAUDE_INSTALL_STATUS="failed_missing_node_or_npm"
+                    log "ERROR" "Node.js 自动安装失败"
+                    return 1
+                fi
+                # 重新检测镜像
+                if ! check_npmmirror_network; then
+                    CLAUDE_OK=0
+                    CLAUDE_INSTALL_STATUS="failed_npmmirror_unreachable"
+                    log "ERROR" "npmmirror 镜像不可达"
+                    return 1
+                fi
+            else
+                error "非交互模式下不会自动安装系统依赖（Node.js）。"
+                info "请手动安装 Node.js 18+ 后重新运行。"
+                info "或使用 --install-deps 参数允许自动安装。"
+                CLAUDE_OK=0
+                CLAUDE_INSTALL_STATUS="failed_missing_node_or_npm"
+                return 1
+            fi
+        else
+            # 交互模式：提示安装
+            if ! install_nodejs_interactive; then
+                CLAUDE_OK=0
+                CLAUDE_INSTALL_STATUS="failed_missing_node_or_npm"
+                return 1
+            fi
+            # 重新检测镜像
+            if ! check_npmmirror_network; then
+                CLAUDE_OK=0
+                CLAUDE_INSTALL_STATUS="failed_npmmirror_unreachable"
+                return 1
+            fi
+        fi
+    fi
+
+    # 执行 npm mirror 安装
+    if ! install_claude_npmmirror; then
+        error "官方安装和 npm 镜像安装均失败。"
+        info "请运行 ./install_wsl.sh --mode doctor 获取诊断。"
+        CLAUDE_OK=0
+        CLAUDE_INSTALL_METHOD="none"
+        CLAUDE_INSTALL_STATUS="failed_official_and_mirror"
+        log "ERROR" "官方安装和镜像安装均失败"
+        return 1
+    fi
+
+    # 验证安装
+    hash -r || true
+    if command_exists claude; then
+        local new_version
+        new_version=$(claude --version 2>/dev/null || echo "安装成功")
+        success "Claude Code 安装验证通过 (npm mirror): $new_version"
+        info "运行 claude doctor..."
+        claude doctor 2>&1 || true
+        CLAUDE_OK=1
+        CLAUDE_INSTALL_METHOD="npm_npmmirror"
+        CLAUDE_INSTALL_STATUS="installed"
+        log "INFO" "npm mirror 安装成功: $new_version"
+        return 0
+    else
+        warn "claude 命令未找到。可能是 PATH 问题，请尝试:"
+        warn "  1. 运行: hash -r"
+        warn "  2. 或关闭终端后重新打开"
+        warn "  3. 或检查 npm 全局 bin 路径是否在 PATH 中"
+        CLAUDE_OK=0
+        CLAUDE_INSTALL_METHOD="npm_npmmirror"
+        CLAUDE_INSTALL_STATUS="installed_needs_restart"
+        log "WARN" "npm mirror 安装后 PATH 未刷新"
+        return 1
+    fi
+}
+
+# ============================================================
+# 安装 Claude Code（复用 install_claude_auto）
 # ============================================================
 
 install_claude_code() {
     step "安装 Claude Code"
 
-    # 先确保 Node.js 环境满足要求
-    if ! ensure_nodejs_for_install; then
-        CLAUDE_OK=0
-        return 1
-    fi
+    info "安装策略: 优先 Claude 官方 Native Install → 不可用时自动切换 npmmirror 镜像"
+    info "npm 镜像使用 Anthropic 官方发布的 @anthropic-ai/claude-code 包"
+    echo ""
 
-    if command -v claude &> /dev/null; then
-        local version
-        version=$(claude --version 2>/dev/null || echo "未知版本")
-        success "Claude Code 已安装: $version"
-
-        if [ "$NON_INTERACTIVE" -eq 1 ]; then
-            info "非交互模式：跳过更新询问，保持现有版本。"
-        else
-            echo ""
-            info "已安装版本: $version"
-            read -r -p "是否更新到最新版本？(Y/N): " update_choice
-            if [ "$update_choice" = "Y" ] || [ "$update_choice" = "y" ]; then
-                info "正在更新 Claude Code..."
-                if npm install -g @anthropic-ai/claude-code@latest >> "$LOG_FILE" 2>&1; then
-                    success "Claude Code 已更新到最新版本。"
-                else
-                    warn "更新失败，将继续使用现有版本。"
-                fi
-            else
-                info "跳过更新。"
-            fi
-        fi
-
-        info "正在运行 claude doctor..."
-        claude doctor 2>&1 || true
-        CLAUDE_OK=1
-        return 0
-    fi
-
-    info "正在使用 npm 安装 Claude Code..."
-    info "执行: npm install -g @anthropic-ai/claude-code@latest"
-
-    if npm install -g @anthropic-ai/claude-code@latest >> "$LOG_FILE" 2>&1; then
-        success "Claude Code 安装成功！"
-    else
-        error "Claude Code 安装失败！"
-        warn "如果是权限问题，请尝试:"
-        warn "  1. 检查 npm 全局目录是否为当前用户可写"
-        warn "  2. 参考 Claude Code 官方文档修复 npm 权限"
-        warn "  3. 不建议通过 sudo 强行安装 Claude Code"
-        warn "日志文件: $LOG_FILE"
-        CLAUDE_OK=0
-        return 1
-    fi
-
-    # 验证
-    if command -v claude &> /dev/null; then
-        local new_version
-        new_version=$(claude --version 2>/dev/null || echo "安装成功")
-        success "Claude Code 版本: $new_version"
-        info "运行 claude doctor..."
-        claude doctor 2>&1 || true
-        CLAUDE_OK=1
-    else
-        warn "claude 命令未找到。"
-        warn "可能是 PATH 问题，请尝试:"
-        warn "  1. 运行: hash -r"
-        warn "  2. 或关闭终端后重新打开"
-        warn "  3. 或检查 npm 全局 bin 路径是否在 PATH 中"
-        CLAUDE_OK=0
-        return 1
-    fi
-
-    return 0
+    install_claude_auto
+    return $?
 }
 
 # ============================================================
@@ -1711,6 +1957,9 @@ print_final_summary() {
 
     if command -v claude &> /dev/null; then
         success "Claude Code: $(claude --version 2>/dev/null || echo '已安装')"
+        if [ -n "${CLAUDE_INSTALL_METHOD:-}" ]; then
+            info "安装方式: ${CLAUDE_INSTALL_METHOD}"
+        fi
     else
         if mode_needs_install; then
             warn "Claude Code: 未安装或不可用"

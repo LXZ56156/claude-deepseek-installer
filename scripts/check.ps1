@@ -72,7 +72,15 @@ $requiredCommands = @(
     "Get-DeepSeekConfigStatus",
     "Initialize-CcdiState",
     "Update-CcdiState",
-    "Read-CcdiState"
+    "Read-CcdiState",
+    "Test-ClaudeCommandExisting",
+    "Test-HttpEndpointReachable",
+    "Test-ClaudeOfficialInstallNetwork",
+    "Test-NpmMirrorClaudeCodeNetwork",
+    "Install-ClaudeCodeNative",
+    "Install-ClaudeCodeNpmMirror",
+    "Install-ClaudeCodeAuto",
+    "Invoke-ClaudeDoctorSafe"
 )
 
 foreach ($cmd in $requiredCommands) {
@@ -149,5 +157,37 @@ foreach ($cmdFile in $cmdFiles) {
     }
 }
 Write-Host "[check] .cmd launchers: no BOM, pure ASCII"
+
+Write-Host "[check] Claude install module: TestSafe mode"
+$env:CCDI_TEST_MODE = "1"
+try {
+    # Test 1: Install-ClaudeCodeAuto -TestSafe with existing claude
+    Write-Host "[check]   Install-ClaudeCodeAuto -TestSafe (existing skip)"
+    $result = Install-ClaudeCodeAuto -TestSafe
+    if ($result.Method -ne "existing" -and $result.Method -ne "none") {
+        throw "TestSafe mode should return existing/none method, got: $($result.Method)"
+    }
+    Write-Host "[check]   Install-ClaudeCodeAuto -TestSafe: Method=$($result.Method), Status=$($result.Status)"
+
+    # Test 2: Test-HttpEndpointReachable
+    Write-Host "[check]   Test-HttpEndpointReachable"
+    $netResult = Test-HttpEndpointReachable -Url "https://example.com" -TimeoutSec 10
+    Write-Host "[check]   example.com: Reachable=$($netResult.Reachable), StatusCode=$($netResult.StatusCode)"
+
+    # Test 3: Test-ClaudeCommandExisting
+    Write-Host "[check]   Test-ClaudeCommandExisting"
+    $claudeCheck = Test-ClaudeCommandExisting
+    Write-Host "[check]   claude: Exists=$($claudeCheck.Exists)"
+
+    # Test 4: Invoke-ClaudeDoctorSafe (should not throw when claude absent)
+    Write-Host "[check]   Invoke-ClaudeDoctorSafe (graceful when missing)"
+    $doctorResult = Invoke-ClaudeDoctorSafe
+    if (-not $doctorResult) {
+        throw "Invoke-ClaudeDoctorSafe returned null"
+    }
+}
+finally {
+    Remove-Item Env:\CCDI_TEST_MODE -ErrorAction SilentlyContinue
+}
 
 Write-Host "[check] OK"
