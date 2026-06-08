@@ -20,11 +20,13 @@ function Test-ClaudeCommandExisting {
     <#
     .SYNOPSIS
         检测 claude 命令是否存在并可用。
+        不能只因为 Get-Command claude 存在就判定可用。
     .RETURNS
-        包含 Exists, Version, Error 的哈希表
+        包含 Exists, Usable, Version, Error 的哈希表
     #>
     $result = @{
         Exists  = $false
+        Usable  = $false
         Version = $null
         Error   = ""
     }
@@ -33,15 +35,16 @@ function Test-ClaudeCommandExisting {
     Refresh-CurrentProcessPath
 
     if (Test-CommandAvailable -CommandName "claude") {
+        $result.Exists = $true
         $verResult = Invoke-CommandSafe -Command "claude" -Arguments @("--version") -TimeoutSec 30
-        if ($verResult.Success) {
-            $result.Exists = $true
+        if ($verResult.Success -and -not [string]::IsNullOrWhiteSpace($verResult.Output)) {
+            $result.Usable = $true
             $result.Version = $verResult.Output.Trim()
         }
         else {
-            $result.Exists = $true
-            $result.Version = "已安装（无法获取版本）"
-            $result.Error = $verResult.Error
+            $result.Usable = $false
+            $result.Error = "claude 命令存在但 --version 失败（残留或损坏）: $($verResult.Error)"
+            Write-Log "WARN" $result.Error
         }
     }
 
@@ -124,8 +127,8 @@ function Test-ClaudeOfficialInstallNetwork {
     .SYNOPSIS
         检测 Claude 官方安装通道是否可达。
         检测两个端点:
-          1. https://claude.ai/install.ps1 — 需要能正常下载（GET 请求）
-          2. https://downloads.claude.ai — DNS/TLS/HTTP 有响应即可
+          1. https://claude.ai/install.ps1 — 必须 HTTP 200 且 GET 下载成功、内容非空
+          2. https://downloads.claude.ai — DNS/TLS/HTTP 有响应即可（401/403/404/405 视为可达）
     .RETURNS
         包含 Reachable, InstallScriptOk, DownloadsOk, Details 的哈希表
     #>
@@ -138,18 +141,49 @@ function Test-ClaudeOfficialInstallNetwork {
 
     Write-Log "DEBUG" "检测 Claude 官方安装通道..."
 
-    # 1. 检测 install.ps1
-    $installCheck = Test-HttpEndpointReachable -Url "https://claude.ai/install.ps1" -Method "GET" -TimeoutSec 15
-    if ($installCheck.Reachable) {
-        $result.InstallScriptOk = $true
-        Write-Log "DEBUG" "claude.ai/install.ps1 可达 (HTTP $($installCheck.StatusCode))"
+    # 1. 检测 install.ps1（严格检测：HTTP 200 + 内容下载成功且非空）
+    # 不能用 Test-HttpEndpointReachable，它会把 401/403/404 当作 Reachable
+    try {
+        $response = Invoke-WebRequest -Uri "https://claude.ai/install.ps1" `
+            -Method GET -TimeoutSec 15 -UseBasicParsing `
+            -ErrorAction Stop -MaximumRedirection 3
+
+        if ($response.StatusCode -eq 200) {
+            $content = $response.Content
+            if (-not [string]::IsNullOrWhiteSpace($content)) {
+                $result.InstallScriptOk = $true
+                Write-Log "DEBUG" "claude.ai/install.ps1 下载成功 (HTTP 200, $($content.Length) bytes)"
+            }
+            else {
+                Write-Log "WARN" "claude.ai/install.ps1 返回 HTTP 200 但内容为空"
+                $result.Details += "install.ps1 内容为空; "
+            }
+        }
+        else {
+            Write-Log "WARN" "claude.ai/install.ps1 返回非 200: HTTP $($response.StatusCode)"
+            $result.Details += "install.ps1 HTTP $($response.StatusCode); "
+        }
     }
-    else {
-        Write-Log "WARN" "claude.ai/install.ps1 不可达: $($installCheck.Error)"
-        $result.Details += "无法下载 install.ps1 ($($installCheck.Error)); "
+    catch {
+        if ($_.Exception -is [System.Net.WebException]) {
+            $webEx = $_.Exception
+            if ($webEx.Response) {
+                $statusCode = [int]$webEx.Response.StatusCode
+                Write-Log "WARN" "claude.ai/install.ps1 返回 HTTP $statusCode（不视为可用）"
+                $result.Details += "install.ps1 HTTP $statusCode; "
+            }
+            else {
+                Write-Log "WARN" "claude.ai/install.ps1 不可达: $($webEx.Status)"
+                $result.Details += "install.ps1 不可达 ($($webEx.Status)); "
+            }
+        }
+        else {
+            Write-Log "WARN" "claude.ai/install.ps1 请求异常: $($_.Exception.Message)"
+            $result.Details += "install.ps1 请求异常; "
+        }
     }
 
-    # 2. 检测 downloads.claude.ai
+    # 2. 检测 downloads.claude.ai（宽松检测：有 HTTP 响应即可）
     $downloadsCheck = Test-HttpEndpointReachable -Url "https://downloads.claude.ai" -Method "HEAD" -TimeoutSec 10
     if ($downloadsCheck.Reachable) {
         $result.DownloadsOk = $true
@@ -368,12 +402,25 @@ function Invoke-ClaudeDoctorSafe {
     <#
     .SYNOPSIS
         安全运行 claude doctor，失败不阻断主流程，只写日志。
+    .PARAMETER TestSafe
+        测试安全模式：跳过真实 claude doctor 执行。
     .RETURNS
         包含 Success, Output 的哈希表
     #>
+    param(
+        [switch]$TestSafe
+    )
+
     $result = @{
         Success = $false
         Output  = ""
+    }
+
+    $isTestSafe = $TestSafe -or ($env:CCDI_TEST_MODE -eq "1")
+    if ($isTestSafe) {
+        Write-Log "INFO" "TestSafe: 跳过 claude doctor 执行"
+        $result.Output = "skipped_test_safe"
+        return $result
     }
 
     Write-Info "运行 claude doctor..."
@@ -434,17 +481,30 @@ function Install-ClaudeCodeAuto {
 
         $existingCheck = Test-ClaudeCommandExisting
         if ($existingCheck.Exists) {
-            Write-Success "检测到 Claude Code: $($existingCheck.Version)"
-            $result.Success = $true
-            $result.Method = "existing"
-            $result.Status = "skipped_existing"
-            $result.Version = $existingCheck.Version
-            $result.WasAlreadyInstalled = $true
-            Update-CcdiState -Updates @{
-                claudeWasAlreadyInstalled = $true
-                claudeInstallMethod       = "existing"
-                claudeInstallStatus       = "skipped_existing"
-            } | Out-Null
+            if ($existingCheck.Usable) {
+                Write-Success "检测到 Claude Code: $($existingCheck.Version)"
+                $result.Success = $true
+                $result.Method = "existing"
+                $result.Status = "skipped_existing"
+                $result.Version = $existingCheck.Version
+                $result.WasAlreadyInstalled = $true
+                Update-CcdiState -Updates @{
+                    claudeWasAlreadyInstalled = $true
+                    claudeInstallMethod       = "existing"
+                    claudeInstallStatus       = "skipped_existing"
+                } | Out-Null
+            }
+            else {
+                Write-Warning "检测到 Claude Code 残留或损坏: $($existingCheck.Error)"
+                Write-Warning "测试安全模式下不会尝试修复安装。"
+                $result.Method = "none"
+                $result.Status = "skipped_test_safe_broken"
+                Update-CcdiState -Updates @{
+                    claudeWasAlreadyInstalled = $false
+                    claudeInstallMethod       = "none"
+                    claudeInstallStatus       = "skipped_test_safe_broken"
+                } | Out-Null
+            }
         }
         else {
             Write-Warning "未检测到 Claude Code。测试安全模式下不会尝试安装。"
@@ -465,28 +525,37 @@ function Install-ClaudeCodeAuto {
     # ============================================================
     $existingCheck = Test-ClaudeCommandExisting
     if ($existingCheck.Exists) {
-        Write-Success "Claude Code 已安装: $($existingCheck.Version)"
-        Write-Info "已安装时不覆盖、不重装、不自动更新。"
+        if ($existingCheck.Usable) {
+            # claude 存在且可用 → 跳过
+            Write-Success "Claude Code 已安装: $($existingCheck.Version)"
+            Write-Info "已安装时不覆盖、不重装、不自动更新。"
 
-        # 运行 claude doctor（失败不阻断）
-        [void](Invoke-ClaudeDoctorSafe)
+            [void](Invoke-ClaudeDoctorSafe)
 
-        $result.Success = $true
-        $result.Method = "existing"
-        $result.Status = "skipped_existing"
-        $result.Version = $existingCheck.Version
-        $result.WasAlreadyInstalled = $true
-        Update-CcdiState -Updates @{
-            claudeWasAlreadyInstalled = $true
-            claudeInstallMethod       = "existing"
-            claudeInstallStatus       = "skipped_existing"
-        } | Out-Null
+            $result.Success = $true
+            $result.Method = "existing"
+            $result.Status = "skipped_existing"
+            $result.Version = $existingCheck.Version
+            $result.WasAlreadyInstalled = $true
+            Update-CcdiState -Updates @{
+                claudeWasAlreadyInstalled = $true
+                claudeInstallMethod       = "existing"
+                claudeInstallStatus       = "skipped_existing"
+            } | Out-Null
 
-        Write-Log "INFO" "Claude Code 已存在，跳过安装: $($existingCheck.Version)"
-        return $result
+            Write-Log "INFO" "Claude Code 已存在且可用，跳过安装: $($existingCheck.Version)"
+            return $result
+        }
+        else {
+            # claude 命令存在但不可用 → 残留/损坏，进入修复路径
+            Write-Warning "检测到 Claude Code 残留或损坏: $($existingCheck.Error)"
+            Write-Info "将尝试通过安装流程修复（不覆盖已有配置）。"
+            Write-Log "WARN" "Claude Code 存在但不可用 (existing_broken)，进入修复路径"
+        }
     }
-
-    Write-Info "Claude Code 未安装，开始安装流程..."
+    else {
+        Write-Info "Claude Code 未安装，开始安装流程..."
+    }
 
     # ============================================================
     # Step 2: 检测官方安装通道 + 尝试 Native Install

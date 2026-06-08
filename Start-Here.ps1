@@ -1,5 +1,5 @@
 ﻿# ============================================================
-# Start-Here.ps1 - Claude Code + DeepSeek 一键安装总控入口 (v1.3.1)
+# Start-Here.ps1 - Claude Code + DeepSeek 一键安装总控入口 (v1.3.2)
 #
 # 用法:
 #   双击 "开始安装.cmd" 或:
@@ -36,7 +36,7 @@ if (-not $EntryScriptDir) { $EntryScriptDir = (Get-Location).Path }
 . (Join-Path $EntryScriptDir "lib\bootstrap.ps1")
 $ScriptDir = Initialize-CcdiScript -ScriptName "start-here"
 
-$ScriptVersion = "1.3.1"
+$ScriptVersion = "1.3.2"
 
 # 状态变量
 $script:ClaudeInstalled = $false

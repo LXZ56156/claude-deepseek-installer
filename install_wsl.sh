@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # install_wsl.sh - WSL Ubuntu 内 Claude Code 安装配置脚本
-# 版本: 1.3.1
+# 版本: 1.3.2
 #
 # 用法:
 #   chmod +x install_wsl.sh
@@ -26,7 +26,7 @@ BACKUP_DIR="$SCRIPT_DIR/backup"
 DEFAULTS_FILE="$SCRIPT_DIR/lib/deepseek-env.defaults.json"
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 LOG_FILE="$LOG_DIR/install_wsl-${TIMESTAMP}.log"
-SCRIPT_VERSION="1.3.1"
+SCRIPT_VERSION="1.3.2"
 MODE="menu"
 YES=0
 NON_INTERACTIVE=0

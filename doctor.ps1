@@ -27,7 +27,7 @@ if (-not $EntryScriptDir) { $EntryScriptDir = (Get-Location).Path }
 . (Join-Path $EntryScriptDir "lib\bootstrap.ps1")
 $ScriptDir = Initialize-CcdiScript -ScriptName "doctor"
 
-$ScriptVersion = "1.3.1"
+$ScriptVersion = "1.3.2"
 
 # 报告状态集中放在脚本级对象中，避免函数作用域下 += 丢失内容。
 $script:DoctorState = @{

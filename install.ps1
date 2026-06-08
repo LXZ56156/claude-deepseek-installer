@@ -39,7 +39,7 @@ if (-not $EntryScriptDir) { $EntryScriptDir = (Get-Location).Path }
 $ScriptDir = Initialize-CcdiScript -ScriptName "install"
 
 # 脚本版本
-$ScriptVersion = "1.3.0"
+$ScriptVersion = "1.3.2"
 
 # 状态变量（用于最终摘要）
 $script:ClaudeInstalled = $false

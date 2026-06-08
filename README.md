@@ -4,7 +4,7 @@
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-blue)](https://www.microsoft.com/windows)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)](https://learn.microsoft.com/powershell/)
-[![Version](https://img.shields.io/badge/Version-1.3.1-green)]()
+[![Version](https://img.shields.io/badge/Version-1.3.2-green)]()
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ---

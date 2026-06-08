@@ -136,7 +136,7 @@ function Initialize-CcdiState {
         当前脚本版本号
     #>
     param(
-        [string]$ScriptVersion = "1.3.1"
+        [string]$ScriptVersion = "1.3.2"
     )
 
     $now = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
