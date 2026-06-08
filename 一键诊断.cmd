@@ -12,7 +12,7 @@ if not exist "%~dp0lib\bootstrap.ps1" (
     pause
     exit /b 1
 )
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0doctor.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0doctor.ps1" -ShareSafe
 set "PS_EXIT=%ERRORLEVEL%"
 echo.
 echo Press any key to exit...
