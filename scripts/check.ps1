@@ -58,7 +58,7 @@ foreach ($cmd in $requiredCommands) {
 }
 
 Write-Host "[check] Mask-ApiKey"
-$key = "sk-1234567890abcdef1234567890abcdef"
+$key = "sk-" + "1234567890abcdef" + "1234567890abcdef"
 $masked = Mask-ApiKey -Key $key
 if ($masked -eq $key -or $masked -notmatch "\*\*\*\*") {
     throw "Mask-ApiKey did not mask the key"

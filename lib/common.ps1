@@ -749,6 +749,47 @@ function Sanitize-PathForReport {
     $result = $Text
     $userName = Get-UserNameForSanitize
 
+    $pathReplacements = @()
+
+    if ($env:CCDI_TEST_MODE -eq "1") {
+        if (-not [string]::IsNullOrWhiteSpace($env:CCDI_TEST_USERPROFILE)) {
+            $pathReplacements += [pscustomobject]@{
+                Path = $env:CCDI_TEST_USERPROFILE
+                Mask = "%USERPROFILE%"
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($env:CCDI_TEST_DESKTOP)) {
+            $pathReplacements += [pscustomobject]@{
+                Path = $env:CCDI_TEST_DESKTOP
+                Mask = "%USERPROFILE%\Desktop"
+            }
+        }
+    }
+
+    if (Get-Command Get-CcdiProjectRoot -ErrorAction SilentlyContinue) {
+        $projectRoot = Get-CcdiProjectRoot
+        if (-not [string]::IsNullOrWhiteSpace($projectRoot)) {
+            $pathReplacements += [pscustomobject]@{
+                Path = $projectRoot
+                Mask = "%PROJECT_DIR%"
+            }
+        }
+    }
+
+    foreach ($entry in $pathReplacements) {
+        $path = ([string]$entry.Path).TrimEnd([char[]]@('\', '/'))
+        $mask = [string]$entry.Mask
+        if ([string]::IsNullOrWhiteSpace($path)) { continue }
+
+        $result = $result.Replace("$path\", "$mask\")
+        $result = $result.Replace("$path/", "$mask/")
+        $result = $result.Replace($path, $mask)
+
+        $altSlash = $path.Replace('\', '/')
+        $result = $result.Replace("$altSlash/", "$mask/")
+        $result = $result.Replace($altSlash, $mask)
+    }
+
     if (-not [string]::IsNullOrWhiteSpace($userName)) {
         # C:\Users\具体用户名\ → %USERPROFILE%\
         $result = $result -replace [regex]::Escape("C:\Users\$userName\"), '%USERPROFILE%\'
@@ -759,6 +800,17 @@ function Sanitize-PathForReport {
         # /home/具体用户名/ → ~/
         $result = $result -replace "/home/$userName/", '~/'
         $result = $result -replace "/home/$userName", '~'
+
+        # WSL UNC / pushd mapped paths may appear in native Windows reports.
+        $result = $result -replace [regex]::Escape("\\wsl.localhost\Ubuntu\home\$userName\"), '~\'
+        $result = $result -replace [regex]::Escape("\\wsl.localhost\Ubuntu\home\$userName"), '~'
+        $mappedHomeWithSlash = '(?i)[A-Z]:\\home\\' + [regex]::Escape($userName) + '\\'
+        $mappedHome = '(?i)[A-Z]:\\home\\' + [regex]::Escape($userName)
+        $result = $result -replace $mappedHomeWithSlash, '~\'
+        $result = $result -replace $mappedHome, '~'
+
+        # Remove standalone username fragments that remain after path masking.
+        $result = $result -replace ('(?i)(?<![A-Za-z0-9_-])' + [regex]::Escape($userName) + '(?![A-Za-z0-9_-])'), '<USER>'
     }
 
     return $result

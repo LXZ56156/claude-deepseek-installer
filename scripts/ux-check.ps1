@@ -14,7 +14,7 @@ $ScriptRoot = Split-Path -Parent $PSScriptRoot
 $SandboxDir = Join-Path $ScriptRoot ".sandbox"
 $TotalPassed = 0
 $TotalFailed = 0
-$TestApiKey = "sk-test1234567890abcdef1234567890abcdef1234567890ab"  # 假 Key
+$TestApiKey = "sk-test" + "1234567890abcdef" + "1234567890abcdef" + "1234567890ab"  # 假 Key
 
 function Write-CheckHeader {
     param([string]$Title)
@@ -246,10 +246,10 @@ try {
         "sk-xxxx",
         "__API_KEY__",
         "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-        "sk-1234567890abcdef1234567890abcdef",
-        "sk-test1234567890abcdef1234567890abcdef1234567890ab",
-        "sk-fake1234567890abcdef1234567890abcdef1234567890ab",
-        "sk-1234567890abcdef1234567890abcdef1234567890ab"
+        ("sk-" + "1234567890abcdef" + "1234567890abcdef"),
+        ("sk-test" + "1234567890abcdef" + "1234567890abcdef" + "1234567890ab"),
+        ("sk-fake" + "1234567890abcdef" + "1234567890abcdef" + "1234567890ab"),
+        ("sk-" + "1234567890abcdef" + "1234567890abcdef" + "1234567890ab")
     )
 
     $textFiles = Get-ChildItem -Path $ScriptRoot -Recurse -Include "*.ps1", "*.psm1", "*.sh", "*.json", "*.md", "*.txt", "*.cmd" |
@@ -420,15 +420,15 @@ try {
 诊断报告
 操作系统: Windows 11
 用户目录: C:\Users\TestUser
-ANTHROPIC_AUTH_TOKEN: sk-test1234567890abcdef1234567890abcdef1234567890ab
-CCDI_API_KEY: sk-test1234567890abcdef1234567890abcdef1234567890ab
-x-api-key: sk-test1234567890abcdef1234567890abcdef1234567890ab
+ANTHROPIC_AUTH_TOKEN: $TestApiKey
+CCDI_API_KEY: $TestApiKey
+x-api-key: $TestApiKey
 正常文本不包含敏感信息
 "@
 
     $sanitized = Sanitize-ReportText -Text $fullReportText
 
-    $fullTestKey = "sk-test1234567890abcdef1234567890abcdef1234567890ab"
+    $fullTestKey = "sk-test" + "1234567890abcdef" + "1234567890abcdef" + "1234567890ab"
     Assert "分享版不含完整 API Key" { $sanitized -notmatch [regex]::Escape($fullTestKey) } "分享版包含完整 Key"
     Assert "分享版不含用户名" { $sanitized -notmatch 'C:\\Users\\TestUser' } "分享版包含真实用户名: $sanitized"
     Assert "分享版正常文本保留" { $sanitized -match '正常文本' } "分享版丢失正常文本"
@@ -468,8 +468,9 @@ x-api-key: sk-test1234567890abcdef1234567890abcdef1234567890ab
     # ============================================================
     Write-CheckHeader "14. Mask-ApiKey 脱敏"
 
-    $masked = Mask-ApiKey -Key "sk-1234567890abcdef1234567890abcdef1234567890ab"
-    Assert "脱敏不是原文" { $masked -ne "sk-1234567890abcdef1234567890abcdef1234567890ab" } "脱敏结果等于原文"
+    $maskTestKey = "sk-" + "1234567890abcdef" + "1234567890abcdef" + "1234567890ab"
+    $masked = Mask-ApiKey -Key $maskTestKey
+    Assert "脱敏不是原文" { $masked -ne $maskTestKey } "脱敏结果等于原文"
     Assert "脱敏包含掩码" { $masked -match '\*\*\*\*' } "脱敏没有掩码标记"
     Assert "脱敏保留前缀" { $masked.StartsWith("sk-1") } "脱敏丢失前缀"
     Assert "脱敏保留后缀" { $masked.EndsWith("90ab") } "脱敏丢失后缀"

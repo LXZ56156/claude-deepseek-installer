@@ -15,7 +15,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOTAL_PASSED=0
 TOTAL_FAILED=0
-FAKE_KEY="sk-fake1234567890abcdef1234567890abcdef1234567890ab"
+FAKE_KEY="sk-fake""1234567890abcdef""1234567890abcdef""1234567890ab"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'

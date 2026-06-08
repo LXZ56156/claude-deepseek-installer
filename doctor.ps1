@@ -806,6 +806,7 @@ function Main {
             Write-Warning "不要发送 full-report-xxx.txt（包含完整路径信息）！"
         }
         Write-Warning "不要发送您的 API Key！报告中已自动脱敏处理。"
+    }
 
     Write-Info "日志文件: $(Get-LogFilePath)"
 

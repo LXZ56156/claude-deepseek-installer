@@ -71,6 +71,7 @@ $RequiredFiles = @(
     "lib/deepseek-env.defaults.json",
     "scripts/check.ps1",
     "scripts/check.sh",
+    "scripts/package-release.ps1",
     "README.md",
     "QUICK_START.md",
     "LICENSE"
@@ -165,6 +166,7 @@ $AllowedEntries = @(
     # === scripts 文件级白名单 ===
     "scripts/check.ps1",
     "scripts/check.sh",
+    "scripts/package-release.ps1",
     "scripts/ux-check.ps1",
     "scripts/ux-check.sh",
     # === 根目录文档 ===
