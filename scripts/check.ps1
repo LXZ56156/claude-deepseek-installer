@@ -8,9 +8,33 @@ $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $PSScriptRoot
 Set-Location $RootDir
 
+Write-Host "PowerShell: $($PSVersionTable.PSVersion) $($PSVersionTable.PSEdition)"
+
+$ExcludeDirs = @(
+    ".git",
+    ".sandbox",
+    "logs",
+    "backup",
+    "reports",
+    "release",
+    "node_modules"
+)
+
+function Test-IsExcludedPath {
+    param([string]$Path)
+
+    foreach ($dir in $ExcludeDirs) {
+        $escaped = [regex]::Escape($dir)
+        if ($Path -match "(^|[\\/])$escaped([\\/]|$)") {
+            return $true
+        }
+    }
+    return $false
+}
+
 Write-Host "[check] PowerShell syntax"
 $psFiles = Get-ChildItem -Path $RootDir -Filter "*.ps1" -Recurse |
-    Where-Object { $_.FullName -notmatch "\\logs\\|\\backup\\" }
+    Where-Object { -not (Test-IsExcludedPath $_.FullName) }
 
 foreach ($file in $psFiles) {
     $tokens = $null

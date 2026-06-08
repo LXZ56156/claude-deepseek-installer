@@ -68,6 +68,8 @@ claude
 **注意：**
 - **只发送 `report.txt`**（分享版，已脱敏路径和 Key）
 - **不要发送 `reports/full-report-xxx.txt`**（完整版，包含真实路径）
+- **不要发送 `backup/` 目录或 `.bak` 文件**（可能包含完整 API Key）
+- **不要发送 `logs/` 目录**（可能包含本机路径信息）
 - 诊断报告中的 API Key 已自动脱敏，可以放心发送
 - 不要截图包含 API Key 的窗口
 
@@ -131,6 +133,19 @@ claude
 powershell -ExecutionPolicy Bypass -File .\Start-Here.ps1
 ```
 
+### 测试安全模式（不安装软件）
+
+```powershell
+$env:CCDI_TEST_MODE = "1"
+$env:CCDI_TEST_USERPROFILE = "$PWD\.sandbox\windows-userprofile"
+$env:CCDI_TEST_DESKTOP = "$PWD\.sandbox\windows-desktop"
+$env:CCDI_API_KEY = "sk-你的DeepSeekKey"
+powershell -ExecutionPolicy Bypass -File .\Start-Here.ps1 -NonInteractive -SkipDisclaimer -TestSafe
+Remove-Item Env:\CCDI_API_KEY, Env:\CCDI_TEST_MODE, Env:\CCDI_TEST_USERPROFILE, Env:\CCDI_TEST_DESKTOP -ErrorAction SilentlyContinue
+```
+
+`-TestSafe` 会跳过 Claude Code 安装、更新、winget/npm 调用和真实 API 测试，仅用于沙盒验证配置写入和报告生成。
+
 ### 非交互配置（避免 Key 出现在命令历史）
 
 ```powershell
@@ -139,11 +154,26 @@ powershell -ExecutionPolicy Bypass -File .\configure-deepseek.ps1 -NonInteractiv
 Remove-Item Env:\CCDI_API_KEY
 ```
 
+### 非交互移除 DeepSeek 配置
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\uninstall-config.ps1 -RemoveDeepSeekEnv -Yes
+```
+
 ### 运行诊断
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\doctor.ps1
 ```
+
+### 开发者自检
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check.ps1
+pwsh.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check.ps1
+```
+
+如果没有安装 `pwsh.exe`，只运行第一条即可。双击 `.cmd` 入口默认使用 Windows PowerShell 5.1，因此发布前至少要保证第一条通过。
 
 ### WSL 用户（推荐在 WSL 终端中手动运行）
 

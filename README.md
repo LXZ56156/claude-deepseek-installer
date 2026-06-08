@@ -36,6 +36,7 @@
 
 > **遇到问题？** 双击「一键诊断.cmd」→ 把 report.txt（分享版）发给技术支持。
 > **不要发送** full-report-xxx.txt（包含完整路径信息）！
+> **不要发送** backup/、logs/ 或 reports/ 目录；backup/ 中的 .bak 文件可能包含完整 API Key。
 >
 > **想修改配置？** 双击「恢复或卸载配置.cmd」。
 
@@ -228,6 +229,14 @@ powershell -ExecutionPolicy Bypass -File .\doctor.ps1 -ShareSafe
 将项目根目录的 `report.txt`（分享版）发送给卖家/技术支持。
 
 **不要发送 `full-report-xxx.txt`（包含完整路径信息）！**
+
+请只发送项目根目录下的 `report.txt`。
+
+不要发送以下内容：
+- `backup/` 目录或其中的 `.bak` 文件：可能包含你的完整 API Key。
+- `logs/` 目录：可能包含本机路径信息。
+- `reports/full-report-*.txt`：包含完整路径，仅供本机排查。
+- 任何截图中包含 API Key 的窗口。
 
 ### 第 3 步：不要发送 API Key
 

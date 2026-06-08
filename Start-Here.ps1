@@ -19,7 +19,9 @@ param(
     [switch]$NonInteractive,
     [switch]$SkipApiTest,
     [switch]$SkipDisclaimer,
-    [switch]$StepPause
+    [switch]$StepPause,
+    [switch]$TestSafe,
+    [switch]$DryRun
 )
 
 # ============================================================
@@ -48,6 +50,8 @@ $script:ApiTestFailReason = ""
 $script:TestProjectPath = $null
 $script:ReportPath = $null
 $script:UnsupportedSystem = $false
+$script:TestSafeMode = $TestSafe -or $DryRun -or ($env:CCDI_TEST_MODE -eq "1")
+$script:EffectiveSkipApiTest = $SkipApiTest -or $script:TestSafeMode
 
 # ============================================================
 # 辅助函数
@@ -356,6 +360,37 @@ function Step-CheckEnvironment {
 
 function Step-InstallClaudeCode {
     Write-Step "Step 2/7：安装 Claude Code"
+
+    if ($script:TestSafeMode) {
+        Write-Warning "当前为测试安全模式：不会安装、更新或卸载 Claude Code。"
+        Write-Info "将只检查 claude 命令是否存在，并继续后续沙盒配置验证。"
+
+        $existingVersion = Test-ClaudeInstalled
+        if ($existingVersion) {
+            Write-Success "检测到 Claude Code: $existingVersion"
+            $script:ClaudeInstalled = $true
+            $script:ClaudeInstallMethod = "existing"
+            $script:ClaudeInstallStatus = "SkippedInstall-TestSafe-Existing"
+            Update-CcdiState -Updates @{
+                claudeWasAlreadyInstalled = $true
+                claudeInstallMethod       = "existing"
+                claudeInstallStatus       = "SkippedInstall-TestSafe-Existing"
+            } | Out-Null
+        }
+        else {
+            Write-Warning "未检测到 Claude Code。测试安全模式下不会尝试安装。"
+            $script:ClaudeInstalled = $false
+            $script:ClaudeInstallMethod = "none"
+            $script:ClaudeInstallStatus = "SkippedInstall-TestSafe-Missing"
+            Update-CcdiState -Updates @{
+                claudeWasAlreadyInstalled = $false
+                claudeInstallMethod       = "none"
+                claudeInstallStatus       = "SkippedInstall-TestSafe-Missing"
+            } | Out-Null
+        }
+
+        return $true
+    }
 
     # 检查是否已安装
     $existingVersion = Test-ClaudeInstalled
@@ -756,7 +791,7 @@ function Step-TestApi {
 
     Write-Step "Step 5/7：测试 DeepSeek API 连接"
 
-    if ($SkipApiTest) {
+    if ($script:EffectiveSkipApiTest) {
         Write-ResultLine "API 测试" "SKIP" "已按参数跳过"
         Write-Info "注意: 未验证 API 是否可用。可稍后运行 doctor.ps1 测试。"
         $script:ApiTestSkipped = $true
@@ -932,7 +967,8 @@ function Step-GenerateReport {
         elseif ($script:ApiTestFailed) { "失败" }
         else { "未执行" }
 
-    $overallStatus = if ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestPassed) { "完整成功" }
+    $overallStatus = if ($script:TestSafeMode -and $script:ConfigWritten) { "测试安全模式完成" }
+        elseif ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestPassed) { "完整成功" }
         elseif ($script:ClaudeInstalled -and $script:ConfigWritten) { "部分成功" }
         else { "未完成" }
 
@@ -942,7 +978,7 @@ Claude Code + DeepSeek 安装完成报告
 
 生成时间: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 脚本版本: v$ScriptVersion
-运行模式: 一键安装
+运行模式: $(if ($script:TestSafeMode) { "测试安全模式" } else { "一键安装" })
 
 一、系统信息
 --------------------------------------
@@ -956,6 +992,7 @@ PowerShell 版本: $($psInfo.Version) ($($psInfo.Edition))
 Claude Code: $(if ($claudeVer) { "已安装" } else { "未安装" })
 Claude Code 版本: $(if ($claudeVer) { $claudeVer } else { "-" })
 安装方式: $($script:ClaudeInstallMethod)
+测试安全模式: $(if ($script:TestSafeMode) { "是（未执行安装/更新/卸载）" } else { "否" })
 VS Code: $(if ($codeVer) { "已检测" } else { "未检测" })
 WSL: $(if ($wslInfo.Installed) { "已检测" } else { "未检测" })
 
@@ -973,6 +1010,7 @@ API Key: $maskedKey
 结果: $apiTestStatus
 $(if ($script:ApiTestFailed) { "错误分类: $script:ApiTestFailReason" } else { "" })
 $(if ($script:ApiTestFailed) { "建议: 请检查 Key 是否正确、余额是否充足、网络是否正常。运行一键诊断获取详细信息。" } else { "" })
+$(if ($script:TestSafeMode) { "说明: 测试安全模式强制跳过真实 API 调用。" } else { "" })
 
 五、测试项目
 --------------------------------------
@@ -1027,6 +1065,29 @@ function Show-CompletionPage {
         Write-Info "  - 确保至少 4GB 内存"
         Write-Info "  - 升级 PowerShell 到 5.1 或更高版本"
         Write-Info "  - 运行「一键诊断.cmd」获取详细诊断报告"
+    }
+    elseif ($script:TestSafeMode -and $script:ConfigWritten) {
+        Write-Host "==============================================================" -ForegroundColor Yellow
+        Write-Host "                                                              " -ForegroundColor Yellow
+        Write-Host "            测试安全模式已完成                                " -ForegroundColor Yellow
+        Write-Host "                                                              " -ForegroundColor Yellow
+        Write-Host "==============================================================" -ForegroundColor Yellow
+        Write-Host ""
+        if ($script:ClaudeInstalled) {
+            Write-Success "Claude Code 已检测到"
+        }
+        else {
+            Write-Warning "测试安全模式：未安装 Claude Code"
+            Write-ResultLine "Claude Code 启动" "SKIP" "未验证"
+        }
+        Write-Success "DeepSeek 配置写入已验证"
+        Write-ResultLine "API 测试" "SKIP" "测试安全模式强制跳过"
+        if ($script:TestProjectPath) {
+            Write-Success "测试项目已创建"
+        }
+        Write-Host ""
+        Write-Info "测试安全模式不会安装、更新或卸载 Claude Code。"
+        Write-Info "安装完成报告: $($script:ReportPath)"
     }
     elseif ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestPassed) {
         Write-Host "==============================================================" -ForegroundColor Green
@@ -1166,7 +1227,7 @@ function Start-LazyInstall {
     Pause-ForUser
 
     # Step 6: 创建测试项目
-    Step-CreateTestProject
+    [void](Step-CreateTestProject)
 
     Pause-ForUser
 
@@ -1194,7 +1255,7 @@ function Start-DoctorOnly {
 
     $doctorScript = Join-Path $ScriptDir "doctor.ps1"
     if (Test-Path $doctorScript) {
-        & $doctorScript -SkipApiTest:$SkipApiTest
+        & $doctorScript -SkipApiTest:$script:EffectiveSkipApiTest
     }
     else {
         Write-Error-Msg "找不到 doctor.ps1，请确认文件完整。"
