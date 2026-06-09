@@ -1265,7 +1265,15 @@ install_claude_auto() {
         info "已安装时不覆盖、不重装、不自动更新。"
 
         info "运行 claude doctor..."
-        claude doctor 2>&1 || true
+        local doctor_output
+        if ! doctor_output="$(claude doctor 2>&1)"; then
+            :
+        fi
+        if [ -n "$doctor_output" ]; then
+            while IFS= read -r line; do
+                info "$line"
+            done <<< "$doctor_output"
+        fi
 
         CLAUDE_OK=1
         CLAUDE_INSTALL_METHOD="existing"
@@ -1292,7 +1300,15 @@ install_claude_auto() {
                 new_version=$(claude --version 2>/dev/null || echo "安装成功")
                 success "Claude Code 安装验证通过 (official): $new_version"
                 info "运行 claude doctor..."
-                claude doctor 2>&1 || true
+                local doctor_output
+                if ! doctor_output="$(claude doctor 2>&1)"; then
+                    :
+                fi
+                if [ -n "$doctor_output" ]; then
+                    while IFS= read -r line; do
+                        info "$line"
+                    done <<< "$doctor_output"
+                fi
                 CLAUDE_OK=1
                 CLAUDE_INSTALL_METHOD="official_native"
                 CLAUDE_INSTALL_STATUS="installed"
@@ -1381,7 +1397,15 @@ install_claude_auto() {
         new_version=$(claude --version 2>/dev/null || echo "安装成功")
         success "Claude Code 安装验证通过 (npm mirror): $new_version"
         info "运行 claude doctor..."
-        claude doctor 2>&1 || true
+        local doctor_output
+        if ! doctor_output="$(claude doctor 2>&1)"; then
+            :
+        fi
+        if [ -n "$doctor_output" ]; then
+            while IFS= read -r line; do
+                info "$line"
+            done <<< "$doctor_output"
+        fi
         CLAUDE_OK=1
         CLAUDE_INSTALL_METHOD="npm_npmmirror"
         CLAUDE_INSTALL_STATUS="installed"
