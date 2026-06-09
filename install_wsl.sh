@@ -322,7 +322,8 @@ var ak=process.env.CCDI_INPUT_API_KEY;
 var ne=JSON.parse(fs.readFileSync(df,"utf-8"));
 ne.ANTHROPIC_AUTH_TOKEN=ak;
 var ex={},jd=false;
-if(fs.existsSync(cf)){try{var ct=fs.readFileSync(cf,"utf-8").trim();if(ct)ex=JSON.parse(ct);}catch(e){jd=true;}}
+if(fs.existsSync(cf)){try{var ct=fs.readFileSync(cf,"utf-8").replace(/^\uFEFF/,"").trim();if(ct)ex=JSON.parse(ct);}catch(e){jd=true;}}
+if(!ex||typeof ex!=="object"||Array.isArray(ex))ex={};
 var oe=ex.env||{};
 if(typeof oe!=="object"||Array.isArray(oe))oe={};
 Object.assign(oe,ne);ex.env=oe;
@@ -358,11 +359,14 @@ json_damaged = False
 if os.path.exists(config_file):
     try:
         with open(config_file, 'r') as f:
-            content = f.read().strip()
+            content = f.read().lstrip("\ufeff").strip()
             if content:
                 existing = json.loads(content)
     except json.JSONDecodeError:
         json_damaged = True
+
+if not isinstance(existing, dict):
+    existing = {}
 
 old_env = existing.get("env", {})
 if not isinstance(old_env, dict):
@@ -389,9 +393,10 @@ ex={};jd=False
 if os.path.exists(cf):
  try:
   with open(cf,"r") as f:
-   ct=f.read().strip()
+   ct=f.read().lstrip("\ufeff").strip()
    if ct:ex=json.loads(ct)
  except json.JSONDecodeError:jd=True
+if not isinstance(ex,dict):ex={}
 oe=ex.get("env",{})
 if not isinstance(oe,dict):oe={}
 oe.update(ne);ex["env"]=oe
@@ -418,10 +423,10 @@ else:print("CONFIG_OK")
 validate_settings_json() {
     local config_file="$1"
     if command -v node &> /dev/null; then
-        node -e "JSON.parse(require('fs').readFileSync('$config_file','utf-8')); console.log('VALID');" 2>/dev/null
+        node -e "JSON.parse(require('fs').readFileSync('$config_file','utf-8').replace(/^\uFEFF/,'')); console.log('VALID');" 2>/dev/null
         return $?
     elif command -v python3 &> /dev/null; then
-        python3 -c "import json; json.load(open('$config_file')); print('VALID')" 2>/dev/null
+        python3 -c "import json; json.load(open('$config_file', encoding='utf-8-sig')); print('VALID')" 2>/dev/null
         return $?
     else
         return 1
@@ -439,7 +444,7 @@ const fs = require('fs');
 const os = require('os');
 const f = '$config_file'.replace(/^~/, os.homedir());
 try {
-    const c = JSON.parse(fs.readFileSync(f, 'utf-8'));
+    const c = JSON.parse(fs.readFileSync(f, 'utf-8').replace(/^\uFEFF/,''));
     console.log((c.env || {})['$key'] || '$default');
 } catch(e) { console.log('$default'); }
 " 2>/dev/null
@@ -447,7 +452,7 @@ try {
         python3 -c "
 import json, os
 try:
-    with open(os.path.expanduser('$config_file')) as f:
+    with open(os.path.expanduser('$config_file'), encoding='utf-8-sig') as f:
         c = json.load(f)
     print(c.get('env', {}).get('$key', '$default'))
 except:
@@ -666,6 +671,10 @@ restore_wsl_config() {
     fi
 
     # 执行恢复
+    mkdir -p "$(dirname "$config_file")" || {
+        error "恢复失败：无法创建配置目录 $(dirname "$config_file")"
+        return 1
+    }
     cp "$latest" "$config_file" || {
         error "恢复失败：无法写入 $config_file"
         return 1
@@ -1723,7 +1732,7 @@ run_doctor() {
                 node -e "
 const fs = require('fs'), os = require('os');
 const f = '$config_file'.replace(/^~/, os.homedir());
-const c = JSON.parse(fs.readFileSync(f, 'utf-8'));
+const c = JSON.parse(fs.readFileSync(f, 'utf-8').replace(/^\uFEFF/,''));
 const e = c.env || {};
 const t = e.ANTHROPIC_AUTH_TOKEN || '';
 const masked = t ? (t.slice(0,4)+'****'+t.slice(-4)) : '(未设置)';
