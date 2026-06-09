@@ -169,12 +169,13 @@ function Step-CheckEnvironment {
 
     # Windows 版本
     $winInfo = $minReq.Details["Windows"]
+    $minReqFailureStatus = if ($script:TestSafeMode) { "WARN" } else { "ERROR" }
     if ($winInfo.IsSupported) {
         $osLabel = if ($winInfo.IsWindows11) { "Windows 11" } else { "Windows 10" }
         Write-ResultLine "Windows 版本" "OK" "$osLabel (Build $($winInfo.Build))"
     }
     else {
-        Write-ResultLine "Windows 版本" "ERROR" "不支持的系统: $($winInfo.Version) (Build $($winInfo.Build))"
+        Write-ResultLine "Windows 版本" $minReqFailureStatus "不支持的系统: $($winInfo.Version) (Build $($winInfo.Build))"
         Write-Warning "需要 Windows 10 1809+ (Build >= 17763) 或 Windows 11"
     }
 
@@ -184,7 +185,7 @@ function Step-CheckEnvironment {
         Write-ResultLine "系统架构" "OK" $archInfo.Architecture
     }
     else {
-        Write-ResultLine "系统架构" "ERROR" "不支持: $($archInfo.Architecture)（需要 x64 或 ARM64）"
+        Write-ResultLine "系统架构" $minReqFailureStatus "不支持: $($archInfo.Architecture)（需要 x64 或 ARM64）"
     }
 
     # 物理内存
@@ -193,7 +194,7 @@ function Step-CheckEnvironment {
         Write-ResultLine "物理内存" "OK" "$($memInfo.TotalGB) GB"
     }
     else {
-        Write-ResultLine "物理内存" "ERROR" "$($memInfo.TotalGB) GB（需要 4GB 以上）"
+        Write-ResultLine "物理内存" $minReqFailureStatus "$($memInfo.TotalGB) GB（需要 4GB 以上）"
         Write-Warning "请关闭其他程序释放内存，或升级硬件。"
     }
 
@@ -203,7 +204,7 @@ function Step-CheckEnvironment {
         Write-ResultLine "PowerShell 版本" "OK" "$($psInfo.Version)"
     }
     else {
-        Write-ResultLine "PowerShell 版本" "ERROR" "版本过低"
+        Write-ResultLine "PowerShell 版本" $minReqFailureStatus "版本过低"
     }
 
     # 管理员权限
@@ -216,8 +217,12 @@ function Step-CheckEnvironment {
 
     Write-Host ""
 
-    # 如果硬性要求不满足，停止后续流程
+    # 如果硬性要求不满足，真实安装模式停止；TestSafe 继续做沙盒验证。
     if (-not $minReq.IsSupported) {
+        if ($script:TestSafeMode) {
+            Write-Warning "测试安全模式：最低系统要求检测未通过，但不会执行真实安装，继续沙盒配置验证。"
+        }
+        else {
         Write-Host ""
         Write-Error-Msg "当前电脑不满足最低系统要求，无法继续安装。"
         Write-Host ""
@@ -238,19 +243,30 @@ function Step-CheckEnvironment {
             WslInstalled      = $false
             MinReqFailed      = $true
         }
+        }
     }
 
     Write-Info "【其他环境检测】"
     Write-Host ""
 
     # 网络检测
-    Write-Info "检测网络连通性..."
-    $netDeepSeek = Test-NetworkConnectivity -Url "https://api.deepseek.com"
-    if ($netDeepSeek.Reachable) {
-        Write-ResultLine "DeepSeek 网络" "OK" "可访问 ($($netDeepSeek.LatencyMs)ms)"
+    if ($script:TestSafeMode) {
+        Write-ResultLine "DeepSeek 网络" "SKIP" "测试安全模式未请求 DeepSeek"
+        $netDeepSeek = @{
+            Reachable = $false
+            LatencyMs = 0
+            Error     = "skipped_test_safe"
+        }
     }
     else {
-        Write-ResultLine "DeepSeek 网络" "ERROR" "无法访问: $($netDeepSeek.Error)"
+        Write-Info "检测网络连通性..."
+        $netDeepSeek = Test-NetworkConnectivity -Url "https://api.deepseek.com"
+        if ($netDeepSeek.Reachable) {
+            Write-ResultLine "DeepSeek 网络" "OK" "可访问 ($($netDeepSeek.LatencyMs)ms)"
+        }
+        else {
+            Write-ResultLine "DeepSeek 网络" "ERROR" "无法访问: $($netDeepSeek.Error)"
+        }
     }
 
     # Claude Code 检测
@@ -391,6 +407,12 @@ function Step-InstallClaudeCode {
         return $false
     }
 
+    if ($script:TestSafeMode -and $installResult.Status -match "^skipped_test_safe_") {
+        Write-Warning "测试安全模式：未执行 Claude Code 安装，继续验证沙盒配置写入。"
+        Write-ResultLine "Claude Code 安装" "SKIP" "测试安全模式，未执行真实安装"
+        return $true
+    }
+
     if (-not $installResult.Success) {
         Write-Error-Msg "Claude Code 安装未成功。"
         Write-Info "请先解决安装问题后重新运行本脚本。"
@@ -512,8 +534,14 @@ function Step-TestApi {
     Write-Step "Step 5/7：测试 DeepSeek API 连接"
 
     if ($script:EffectiveSkipApiTest) {
-        Write-ResultLine "API 测试" "SKIP" "已按参数跳过"
-        Write-Info "注意: 未验证 API 是否可用。可稍后运行 doctor.ps1 测试。"
+        if ($script:TestSafeMode) {
+            Write-ResultLine "API 测试" "SKIP" "测试安全模式，未请求 DeepSeek"
+            Write-Info "测试安全模式流程完成后仍不代表真实 API 已验证。"
+        }
+        else {
+            Write-ResultLine "API 测试" "SKIP" "已按参数跳过"
+            Write-Info "注意: 未验证 API 是否可用。可稍后运行 doctor.ps1 测试。"
+        }
         $script:ApiTestSkipped = $true
         Update-CcdiState -Updates @{ lastApiTest = "skipped" } | Out-Null
         return
@@ -653,7 +681,7 @@ claude
 }
 
 # ============================================================
-# Step 7: 生成安装完成报告
+# Step 7: 生成报告
 # ============================================================
 
 function Step-GenerateReport {
@@ -662,7 +690,12 @@ function Step-GenerateReport {
         $EnvCheckResult
     )
 
-    Write-Step "Step 7/7：生成安装完成报告"
+    if ($script:TestSafeMode) {
+        Write-Step "Step 7/7：生成测试安全模式报告"
+    }
+    else {
+        Write-Step "Step 7/7：生成安装完成报告"
+    }
 
     # 确保 reports 目录存在
     $reportsDir = Join-Path $ScriptDir "reports"
@@ -692,8 +725,24 @@ function Step-GenerateReport {
         elseif ($script:ClaudeInstalled -and $script:ConfigWritten) { "部分成功" }
         else { "未完成" }
 
+    $reportTitle = if ($script:TestSafeMode) { "Claude Code + DeepSeek 测试安全模式报告" } else { "Claude Code + DeepSeek 安装完成报告" }
+    $configWriteDetail = if ($script:TestSafeMode) { "已在沙盒路径验证" } else { "已写入" }
+    $claudeInstallSummary = if ($script:TestSafeMode) { "[SKIP] Claude Code 安装：测试安全模式，未执行真实安装" }
+        elseif ($claudeVer) { "[OK] Claude Code 安装：已安装" }
+        else { "[ERROR] Claude Code 安装：未完成" }
+    $deepSeekConfigSummary = if ($script:ConfigWritten) { "[OK] DeepSeek 配置写入：$configWriteDetail" }
+        else { "[ERROR] DeepSeek 配置写入：未完成" }
+    $apiTestSummary = if ($script:TestSafeMode) { "[SKIP] API 测试：测试安全模式，未请求 DeepSeek" }
+        elseif ($script:ApiTestPassed) { "[OK] API 测试：通过" }
+        elseif ($script:ApiTestSkipped) { "[SKIP] API 测试：已跳过" }
+        else { "[WARN] API 测试：$apiTestStatus" }
+    $claudeLaunchSummary = if ($script:TestSafeMode) { "[SKIP] Claude 启动：未验证" }
+        elseif ($script:ClaudeInstalled) { "[OK] Claude 启动：可手动运行 claude 验证" }
+        else { "[SKIP] Claude 启动：未验证" }
+    $testSafeNotice = if ($script:TestSafeMode) { "测试安全模式流程完成，不代表真实安装/API 已验证。" } else { "" }
+
     $reportContent = @"
-Claude Code + DeepSeek 安装完成报告
+$reportTitle
 ======================================
 
 生成时间: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
@@ -709,7 +758,7 @@ PowerShell 版本: $($psInfo.Version) ($($psInfo.Edition))
 
 二、安装结果
 --------------------------------------
-Claude Code: $(if ($claudeVer) { "已安装" } else { "未安装" })
+Claude Code: $(if ($script:TestSafeMode) { "测试安全模式未执行真实安装" } elseif ($claudeVer) { "已安装" } else { "未安装" })
 Claude Code 版本: $(if ($claudeVer) { $claudeVer } else { "-" })
 安装方式: $($script:ClaudeInstallMethod)
 测试安全模式: $(if ($script:TestSafeMode) { "是（未执行安装/更新/卸载）" } else { "否" })
@@ -742,7 +791,13 @@ $(if ($script:TestSafeMode) { "说明: 测试安全模式强制跳过真实 API 
 
 六、整体状态
 --------------------------------------
+$claudeInstallSummary
+$deepSeekConfigSummary
+$apiTestSummary
+$claudeLaunchSummary
+
 $overallStatus
+$testSafeNotice
 
 七、售后提示
 --------------------------------------
@@ -755,7 +810,12 @@ API Key 始终只保存在您的本机，不会上传或分享。
 
     try {
         [System.IO.File]::WriteAllText($reportPath, $reportContent, (New-Object System.Text.UTF8Encoding($false)))
-        Write-Success "安装完成报告已生成: $reportPath"
+        if ($script:TestSafeMode) {
+            Write-Success "测试安全模式报告已生成: $reportPath"
+        }
+        else {
+            Write-Success "安装完成报告已生成: $reportPath"
+        }
         Write-Log "INFO" "安装报告已保存: $reportPath"
     }
     catch {
@@ -789,25 +849,21 @@ function Show-CompletionPage {
     elseif ($script:TestSafeMode -and $script:ConfigWritten) {
         Write-Host "==============================================================" -ForegroundColor Yellow
         Write-Host "                                                              " -ForegroundColor Yellow
-        Write-Host "            测试安全模式已完成                                " -ForegroundColor Yellow
+        Write-Host "            测试安全模式流程完成                              " -ForegroundColor Yellow
         Write-Host "                                                              " -ForegroundColor Yellow
         Write-Host "==============================================================" -ForegroundColor Yellow
         Write-Host ""
-        if ($script:ClaudeInstalled) {
-            Write-Success "Claude Code 已检测到"
-        }
-        else {
-            Write-Warning "测试安全模式：未安装 Claude Code"
-            Write-ResultLine "Claude Code 启动" "SKIP" "未验证"
-        }
-        Write-Success "DeepSeek 配置写入已验证"
-        Write-ResultLine "API 测试" "SKIP" "测试安全模式强制跳过"
+        Write-ResultLine "Claude Code 安装" "SKIP" "测试安全模式，未执行真实安装"
+        Write-ResultLine "DeepSeek 配置写入" "OK" "已在沙盒路径验证"
+        Write-ResultLine "API 测试" "SKIP" "测试安全模式，未请求 DeepSeek"
+        Write-ResultLine "Claude 启动" "SKIP" "未验证"
         if ($script:TestProjectPath) {
             Write-Success "测试项目已创建"
         }
         Write-Host ""
         Write-Info "测试安全模式不会安装、更新或卸载 Claude Code。"
-        Write-Info "安装完成报告: $($script:ReportPath)"
+        Write-Info "测试安全模式流程完成，不代表真实安装/API 已验证。"
+        Write-Info "报告: $($script:ReportPath)"
     }
     elseif ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestPassed) {
         Write-Host "==============================================================" -ForegroundColor Green

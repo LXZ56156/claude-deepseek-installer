@@ -3,7 +3,7 @@
 #
 # 用法:
 #   powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
-#   powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version "1.3.1"
+#   powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version "1.3.2"
 #
 # 输出:
 #   release/ClaudeCode-DeepSeek-本地配置助手-v1.3.0.zip
@@ -11,7 +11,7 @@
 # ============================================================
 
 param(
-    [string]$Version = "1.3.1",
+    [string]$Version = "1.3.2",
     [string]$OutputDir = $null,
     [switch]$SkipSha256
 )
@@ -64,6 +64,7 @@ $RequiredFiles = @(
     "uninstall-config.ps1",
     "install_wsl.sh",
     "lib/bootstrap.ps1",
+    "lib/claude-install.ps1",
     "lib/common.ps1",
     "lib/env-check.ps1",
     "lib/config-writer.ps1",
@@ -146,6 +147,7 @@ $AllowedEntries = @(
     "install_wsl.sh",
     # === lib 目录（随迭代增减，允许整目录复制） ===
     "lib/bootstrap.ps1",
+    "lib/claude-install.ps1",
     "lib/common.ps1",
     "lib/env-check.ps1",
     "lib/config-writer.ps1",
@@ -194,11 +196,10 @@ $safePlaceholders = @(
     "sk-你的DeepSeekKey",
     "sk-xxxx",
     "__API_KEY__",
-    "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    "sk-1234567890abcdef1234567890abcdef",  # scripts/check.ps1 Mask-ApiKey test
-    "sk-test1234567890abcdef1234567890abcdef1234567890ab",  # ux-check.ps1/test scripts
-    "sk-fake1234567890abcdef1234567890abcdef1234567890ab",  # ux-check.sh test key
-    "sk-1234567890abcdef1234567890abcdef1234567890ab"       # ux-check.ps1 test key
+    ("sk-" + ("x" * 32)),      # scripts/check.ps1 Mask-ApiKey test
+    ("sk-test" + ("x" * 42)),  # ux-check.ps1/test scripts
+    ("sk-fake" + ("x" * 42)),  # ux-check.sh test key
+    ("sk-" + ("x" * 46))       # ux-check.ps1 test key
 )
 
 $dangerPatterns = @(

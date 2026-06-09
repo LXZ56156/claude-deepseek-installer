@@ -3,7 +3,7 @@
 # ============================================================
 
 param(
-    [string]$Version = "1.3.0",
+    [string]$Version = "1.3.2",
     [switch]$KeepTemp
 )
 
@@ -13,7 +13,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $BuildScript = Join-Path $ProjectRoot "scripts\build-release.ps1"
 $ReleaseDir = Join-Path $ProjectRoot "release"
-$DummyApiKey = "sk-1234567890abcdef1234567890abcdef"
+$DummyApiKey = "sk-" + ("x" * 32)
 
 function Write-Check {
     param([string]$Message)
@@ -114,6 +114,9 @@ function Invoke-SimCommand {
     $proc.StartInfo = $psi
     [void]$proc.Start()
 
+    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+    $stderrTask = $proc.StandardError.ReadToEndAsync()
+
     if ($InputText) {
         $proc.StandardInput.Write($InputText)
     }
@@ -125,8 +128,11 @@ function Invoke-SimCommand {
         throw "$Name timed out after ${TimeoutSec}s"
     }
 
-    $stdout = $proc.StandardOutput.ReadToEnd()
-    $stderr = $proc.StandardError.ReadToEnd()
+    [void]$stdoutTask.Wait(5000)
+    [void]$stderrTask.Wait(5000)
+
+    $stdout = $stdoutTask.Result
+    $stderr = $stderrTask.Result
     $exitCode = $proc.ExitCode
 
     if ($exitCode -ne $ExpectedExitCode) {
@@ -403,26 +409,23 @@ try {
     $envVars = New-SimEnvironment -ProfileDir $testProfile -DesktopDir $testDesktop -DummyKey $DummyApiKey -ApiStatus "200"
 
     $runs = New-Object System.Collections.ArrayList
-    $menuRun = Invoke-SimCommand -Name "Start-Here.ps1 menu" -FileName $powerShellExe -Arguments @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $releaseRoot "Start-Here.ps1")
-    ) -InputText "Y`r`n5`r`n" -WorkingDirectory $releaseRoot -Environment $envVars
-    [void]$runs.Add($menuRun)
+    $startHerePath = Join-Path $releaseRoot "Start-Here.ps1"
+    $startFlowRun = Invoke-SimCommand -Name "Start-Here.ps1 TestSafe flow" -FileName $powerShellExe -Arguments @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $startHerePath,
+        "-NonInteractive", "-SkipDisclaimer", "-TestSafe"
+    ) -WorkingDirectory $releaseRoot -Environment $envVars -TimeoutSec 180
+    [void]$runs.Add($startFlowRun)
 
-    $advancedRun = Invoke-SimCommand -Name "Start-Here.ps1 advanced menu" -FileName $powerShellExe -Arguments @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $releaseRoot "Start-Here.ps1")
-    ) -InputText "Y`r`n4`r`n3`r`n5`r`n" -WorkingDirectory $releaseRoot -Environment $envVars
-    [void]$runs.Add($advancedRun)
-
-    [void]$runs.Add((Invoke-SimCommand -Name "Start-Install.cmd" -FileName $cmdExe -Arguments @("/c", "Start-Install.cmd") -InputText "Y`r`n5`r`n`r`n" -WorkingDirectory $releaseRoot -Environment $envVars))
-    [void]$runs.Add((Invoke-SimCommand -Name "开始安装.cmd" -FileName $cmdExe -Arguments @("/c", "开始安装.cmd") -InputText "Y`r`n5`r`n`r`n" -WorkingDirectory $releaseRoot -Environment $envVars))
+    [void]$runs.Add((Invoke-SimCommand -Name "Start-Install.cmd cancel" -FileName $cmdExe -Arguments @("/d", "/c", "echo N| Start-Install.cmd") -WorkingDirectory $releaseRoot -Environment $envVars))
+    [void]$runs.Add((Invoke-SimCommand -Name "开始安装.cmd cancel" -FileName $cmdExe -Arguments @("/d", "/c", "echo N| 开始安装.cmd") -WorkingDirectory $releaseRoot -Environment $envVars))
 
     $startHereLogs = Get-ChildItem -Path (Join-Path $releaseRoot "logs") -Filter "start-here-*.log" -ErrorAction SilentlyContinue
     $startHereLogText = ($startHereLogs | ForEach-Object { Get-Content -Path $_.FullName -Raw -Encoding UTF8 }) -join "`n"
-    if ($startHereLogText -notmatch "用户选择: 退出") {
-        throw "Start-Here did not reach menu exit path"
-    }
-    if ($startHereLogText -notmatch "用户选择: 高级选项" -or $startHereLogText -notmatch "用户选择: 从高级选项返回主菜单") {
-        throw "Start-Here did not exercise advanced menu return path"
+    $startHereRuntimeText = "$startHereLogText`n$($startFlowRun.Combined)"
+    $testSettingsPath = Join-Path $testProfile ".claude\settings.json"
+    $installReports = Get-ChildItem -Path (Join-Path $releaseRoot "reports") -Filter "install-report-*.txt" -ErrorAction SilentlyContinue
+    if ((-not (Test-Path $testSettingsPath)) -or (-not $installReports) -or $startHereRuntimeText -notmatch "DeepSeek 配置写入已验证") {
+        throw "Start-Here TestSafe flow did not complete configuration validation"
     }
 
     [void]$runs.Add((Invoke-SimCommand -Name "Run-Diagnostics.cmd" -FileName $cmdExe -Arguments @("/c", "Run-Diagnostics.cmd") -InputText "`r`n" -WorkingDirectory $releaseRoot -Environment $envVars -TimeoutSec 180))
@@ -430,6 +433,93 @@ try {
 
     [void]$runs.Add((Invoke-SimCommand -Name "Restore-Config.cmd" -FileName $cmdExe -Arguments @("/c", "Restore-Config.cmd") -InputText "4`r`n`r`n" -WorkingDirectory $releaseRoot -Environment $envVars))
     [void]$runs.Add((Invoke-SimCommand -Name "恢复或卸载配置.cmd" -FileName $cmdExe -Arguments @("/c", "恢复或卸载配置.cmd") -InputText "4`r`n`r`n" -WorkingDirectory $releaseRoot -Environment $envVars))
+
+    $settingsPath = Join-Path $testProfile ".claude\settings.json"
+    $customSettings = [PSCustomObject]@{
+        permissions = [PSCustomObject]@{
+            deny = @("Read(./.env)")
+        }
+        env = [PSCustomObject]@{
+            CUSTOM_KEEP = "yes"
+            ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic"
+            ANTHROPIC_AUTH_TOKEN = $DummyApiKey
+            ANTHROPIC_MODEL = "deepseek-v4-pro[1m]"
+            ANTHROPIC_SMALL_FAST_MODEL = "deepseek-v4-flash"
+        }
+    }
+    $customSettings | ConvertTo-Json -Depth 8 | Set-Content -Path $settingsPath -Encoding UTF8
+
+    $listBackupsRun = Invoke-SimCommand -Name "uninstall-config.ps1 -ListBackups" -FileName $powerShellExe -Arguments @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $releaseRoot "uninstall-config.ps1"), "-ListBackups"
+    ) -WorkingDirectory $releaseRoot -Environment $envVars
+    if ($listBackupsRun.Combined -notmatch 'settings\.json\..*\.bak') {
+        throw "-ListBackups did not print backup file names"
+    }
+    [void]$runs.Add($listBackupsRun)
+
+    [void]$runs.Add((Invoke-SimCommand -Name "uninstall-config.ps1 -RemoveDeepSeekEnv" -FileName $powerShellExe -Arguments @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $releaseRoot "uninstall-config.ps1"), "-RemoveDeepSeekEnv", "-Yes"
+    ) -WorkingDirectory $releaseRoot -Environment $envVars))
+    $removedConfig = Get-Content -Path $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $removedEnvNames = $removedConfig.env.PSObject.Properties.Name
+    if ($removedConfig.permissions.deny -notcontains "Read(./.env)" -or $removedConfig.env.CUSTOM_KEEP -ne "yes") {
+        throw "RemoveDeepSeekEnv did not preserve custom configuration"
+    }
+    if ($removedEnvNames -contains "ANTHROPIC_AUTH_TOKEN" -or $removedEnvNames -contains "ANTHROPIC_BASE_URL") {
+        throw "RemoveDeepSeekEnv did not remove DeepSeek env fields"
+    }
+
+    [void]$runs.Add((Invoke-SimCommand -Name "uninstall-config.ps1 -RestoreLatest" -FileName $powerShellExe -Arguments @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $releaseRoot "uninstall-config.ps1"), "-RestoreLatest", "-Yes"
+    ) -WorkingDirectory $releaseRoot -Environment $envVars))
+    $restoredConfig = Get-Content -Path $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($restoredConfig.env.ANTHROPIC_AUTH_TOKEN -ne $DummyApiKey) {
+        throw "RestoreLatest did not restore DeepSeek API token"
+    }
+
+    [void]$runs.Add((Invoke-SimCommand -Name "uninstall-config.ps1 -DeleteSettings" -FileName $powerShellExe -Arguments @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $releaseRoot "uninstall-config.ps1"), "-DeleteSettings", "-Yes"
+    ) -WorkingDirectory $releaseRoot -Environment $envVars))
+    if (Test-Path $settingsPath) {
+        throw "DeleteSettings did not remove settings.json"
+    }
+
+    [void]$runs.Add((Invoke-SimCommand -Name "uninstall-config.ps1 restore after delete" -FileName $powerShellExe -Arguments @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $releaseRoot "uninstall-config.ps1"), "-RestoreLatest", "-Yes"
+    ) -WorkingDirectory $releaseRoot -Environment $envVars))
+    if (-not (Test-Path $settingsPath)) {
+        throw "RestoreLatest after delete did not recreate settings.json"
+    }
+
+    $noKeyProfile = Join-Path $tempRoot "No Key Profile"
+    $noKeyDesktop = Join-Path $tempRoot "No Key Desktop"
+    New-Item -ItemType Directory -Path $noKeyProfile, $noKeyDesktop -Force | Out-Null
+    $noKeyEnv = New-SimEnvironment -ProfileDir $noKeyProfile -DesktopDir $noKeyDesktop -DummyKey $DummyApiKey -ApiStatus "200"
+    $noKeyEnv["CCDI_API_KEY"] = ""
+    $noKeyEnv["DEEPSEEK_API_KEY"] = ""
+    [void]$runs.Add((Invoke-SimCommand -Name "configure-deepseek.ps1 no API key" -FileName $powerShellExe -Arguments @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $releaseRoot "configure-deepseek.ps1"), "-NonInteractive", "-SkipApiTest"
+    ) -WorkingDirectory $releaseRoot -Environment $noKeyEnv -ExpectedExitCode 1))
+
+    $corruptProfile = Join-Path $tempRoot "Corrupt Profile"
+    $corruptDesktop = Join-Path $tempRoot "Corrupt Desktop"
+    New-Item -ItemType Directory -Path (Join-Path $corruptProfile ".claude"), $corruptDesktop -Force | Out-Null
+    $corruptSettings = Join-Path $corruptProfile ".claude\settings.json"
+    Set-Content -Path $corruptSettings -Encoding UTF8 -Value "{ bad json"
+    $corruptEnv = New-SimEnvironment -ProfileDir $corruptProfile -DesktopDir $corruptDesktop -DummyKey $DummyApiKey -ApiStatus "200"
+    $corruptRun = Invoke-SimCommand -Name "configure-deepseek.ps1 corrupted JSON" -FileName $powerShellExe -Arguments @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $releaseRoot "configure-deepseek.ps1"), "-NonInteractive", "-SkipApiTest"
+    ) -WorkingDirectory $releaseRoot -Environment $corruptEnv
+    $configureLogs = Get-ChildItem -Path (Join-Path $releaseRoot "logs") -Filter "configure-deepseek-*.log" -ErrorAction SilentlyContinue
+    $configureLogText = ($configureLogs | ForEach-Object { Get-Content -Path $_.FullName -Raw -Encoding UTF8 }) -join "`n"
+    if ($configureLogText -notmatch "JSON 格式无效" -or $configureLogText -notmatch "非 env 字段") {
+        throw "corrupted JSON configure path did not show explicit warnings"
+    }
+    $corruptConfig = Get-Content -Path $corruptSettings -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($corruptConfig.env.ANTHROPIC_AUTH_TOKEN -ne $DummyApiKey) {
+        throw "corrupted JSON configure path did not rebuild settings.json"
+    }
+    [void]$runs.Add($corruptRun)
 
     $rootReport = Join-Path $releaseRoot "report.txt"
     $reportsDir = Join-Path $releaseRoot "reports"

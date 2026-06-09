@@ -58,17 +58,25 @@ function Get-ConfigBackups {
     }
 
     return @(Get-ChildItem -Path $backupDir -Filter "settings.json.*.bak" -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending)
+        Sort-Object Name -Descending)
 }
 
 function Show-ConfigBackups {
-    $backups = Get-ConfigBackups
+    $backups = @(Get-ConfigBackups)
     if ($backups.Count -eq 0) {
         Write-Warning "没有找到可恢复的 settings.json 备份。"
         return
     }
 
-    $backups | Select-Object Name, FullName, LastWriteTime
+    Write-Info "找到 $($backups.Count) 个 settings.json 备份:"
+    Write-Host ""
+
+    for ($i = 0; $i -lt $backups.Count; $i++) {
+        $backup = $backups[$i]
+        Write-Host ("  [{0}] {1}" -f ($i + 1), $backup.Name) -ForegroundColor White
+        Write-Host ("      时间: {0}" -f $backup.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")) -ForegroundColor Gray
+        Write-Host ("      路径: {0}" -f $backup.FullName) -ForegroundColor Gray
+    }
 }
 
 function Remove-DeepSeekEnvConfig {
@@ -143,7 +151,7 @@ function Remove-DeepSeekEnvConfig {
 function Restore-LatestConfigBackup {
     param([switch]$AssumeYes)
 
-    $latest = Get-ConfigBackups | Select-Object -First 1
+    $latest = @(Get-ConfigBackups) | Select-Object -First 1
     if (-not $latest) {
         Write-Warning "没有找到可恢复的 settings.json 备份。"
         return $false
@@ -279,7 +287,7 @@ Write-Host "==============================================================" -For
 Write-Host ""
 
 if ($ListBackups) {
-    [void](Show-ConfigBackups)
+    Show-ConfigBackups
     exit 0
 }
 

@@ -732,9 +732,9 @@ function Main {
     # 输出到控制台摘要
     Write-Host ""
     Write-Host ("=" * 60) -ForegroundColor Cyan
-    $okCount = ($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "OK" }).Count
-    $warnCount = ($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "WARN" }).Count
-    $errCount = ($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "ERROR" }).Count
+    $okCount = @($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "OK" }).Count
+    $warnCount = @($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "WARN" }).Count
+    $errCount = @($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "ERROR" }).Count
     $totalCount = $script:DoctorState.CheckResults.Count
 
     Write-Host "  检测总结: 共 $totalCount 项" -ForegroundColor White
@@ -776,7 +776,8 @@ function Main {
     }
     else {
         # 使用双报告机制
-        $reportResult = Write-DiagnosticReports -ReportLines $script:DoctorState.ReportLines -ScriptDir $ScriptDir -Timestamp $timestamp
+        $isShareSafeMode = ($ShareSafe -or $Anonymize)
+        $reportResult = Write-DiagnosticReports -ReportLines $script:DoctorState.ReportLines -ScriptDir $ScriptDir -Timestamp $timestamp -IncludeFullReport:(-not $isShareSafeMode)
 
         $fullSharePath = (Resolve-Path $reportResult.SharePath -ErrorAction SilentlyContinue).Path
         if (-not $fullSharePath) { $fullSharePath = $reportResult.SharePath }
@@ -784,7 +785,7 @@ function Main {
         Write-Host ""
         Write-Success "已生成诊断报告:"
 
-        if ($ShareSafe -or $Anonymize) {
+        if ($isShareSafeMode) {
             # 分享安全模式：仅输出脱敏版，不生成完整版路径提示
             Write-Info "  分享版报告（可发送）: $fullSharePath"
             Write-Host ""

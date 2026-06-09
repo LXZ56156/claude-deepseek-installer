@@ -2,6 +2,11 @@
 # scripts/check.ps1 - 轻量 PowerShell 自检
 # ============================================================
 
+param(
+    [switch]$Network,
+    [switch]$StrictNetwork
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -90,10 +95,51 @@ foreach ($cmd in $requiredCommands) {
 }
 
 Write-Host "[check] Mask-ApiKey"
-$key = "sk-" + "1234567890abcdef" + "1234567890abcdef"
+$key = "sk-" + ("x" * 32)
 $masked = Mask-ApiKey -Key $key
 if ($masked -eq $key -or $masked -notmatch "\*\*\*\*") {
     throw "Mask-ApiKey did not mask the key"
+}
+
+function Write-NetworkCheckResult {
+    param(
+        [string]$Name,
+        [bool]$Reachable,
+        [string]$Detail
+    )
+
+    if ($Reachable) {
+        Write-Host "[check]     $Name reachable: $Detail"
+        return
+    }
+
+    $message = "$Name unreachable: $Detail"
+    if ($StrictNetwork) {
+        throw $message
+    }
+    Write-Host "[check]     WARN: $message"
+}
+
+Write-Host "[check] Invoke-CommandSafe Windows command execution"
+$psResult = Invoke-CommandSafe -Command "powershell.exe" -Arguments @(
+    "-NoProfile", "-Command", "Write-Output ok; exit 0"
+)
+if (-not $psResult.Success -or $psResult.ExitCode -ne 0 -or $psResult.Output.Trim() -ne "ok") {
+    throw "Invoke-CommandSafe failed to capture powershell.exe success"
+}
+
+$tempCmdDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ccdi-check-cmd-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $tempCmdDir -Force | Out-Null
+try {
+    $tempCmd = Join-Path $tempCmdDir "ok.cmd"
+    Set-Content -Path $tempCmd -Encoding ASCII -Value "@echo off`r`necho cmd-ok`r`nexit /b 0"
+    $cmdResult = Invoke-CommandSafe -Command $tempCmd
+    if (-not $cmdResult.Success -or $cmdResult.ExitCode -ne 0 -or $cmdResult.Output.Trim() -ne "cmd-ok") {
+        throw "Invoke-CommandSafe failed to execute .cmd files"
+    }
+}
+finally {
+    Remove-Item -Path $tempCmdDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "[check] Merge-SettingsJson"
@@ -123,6 +169,12 @@ finally {
     Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+Write-Host "[check] backup filename precision"
+$commonText = Get-Content -Path (Join-Path $RootDir "lib\common.ps1") -Raw -Encoding UTF8
+if ($commonText -notmatch 'yyyyMMdd-HHmmss-fff') {
+    throw "Backup-File must use millisecond precision to avoid overwriting backups created in the same second"
+}
+
 Write-Host "[check] Doctor state guardrails"
 $doctorText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
 if ($doctorText -notmatch '\$script:DoctorState') {
@@ -130,6 +182,28 @@ if ($doctorText -notmatch '\$script:DoctorState') {
 }
 if ($doctorText -match '\$Suggestions \+=') {
     throw "doctor.ps1 still uses scoped Suggestions +="
+}
+$requiredDoctorCountPatterns = @(
+    '\$okCount\s*=\s*@\(\$script:DoctorState\.CheckResults\s*\|\s*Where-Object\s*\{\s*\$_\.Status\s+-eq\s+"OK"\s*\}\)\.Count',
+    '\$warnCount\s*=\s*@\(\$script:DoctorState\.CheckResults\s*\|\s*Where-Object\s*\{\s*\$_\.Status\s+-eq\s+"WARN"\s*\}\)\.Count',
+    '\$errCount\s*=\s*@\(\$script:DoctorState\.CheckResults\s*\|\s*Where-Object\s*\{\s*\$_\.Status\s+-eq\s+"ERROR"\s*\}\)\.Count'
+)
+foreach ($pattern in $requiredDoctorCountPatterns) {
+    if ($doctorText -notmatch $pattern) {
+        throw "doctor.ps1 summary counts must wrap pipeline results in @(...).Count"
+    }
+}
+
+Write-Host "[check] uninstall backup listing"
+$uninstallText = Get-Content -Path (Join-Path $RootDir "uninstall-config.ps1") -Raw -Encoding UTF8
+if ($uninstallText -match '\[void\]\s*\(\s*Show-ConfigBackups\s*\)') {
+    throw "uninstall-config.ps1 suppresses -ListBackups output"
+}
+if ($uninstallText -notmatch '\$backups\s*=\s*@\(Get-ConfigBackups\)') {
+    throw "uninstall-config.ps1 must wrap Get-ConfigBackups in @() before counting"
+}
+if ($uninstallText -match 'Sort-Object\s+LastWriteTime') {
+    throw "uninstall-config.ps1 must not sort backups by LastWriteTime because Copy-Item preserves source timestamps"
 }
 
 Write-Host "[check] .cmd launcher encoding"
@@ -163,7 +237,7 @@ Write-Host "[check] .cmd launchers: no BOM, pure ASCII"
 #
 # 覆盖内容:
 #   函数存在性检查 + TestSafe 安全检查 + 字段 shape 检查
-#   + 少量真实网络 shape 检查
+#   + 可选真实网络检查（需传入 -Network）
 #
 # 未覆盖的完整网络 fallback 分支（需真机或后续 mock 验证）:
 #   官方不可用 → npm_npmmirror
@@ -231,48 +305,46 @@ try {
     Write-Host "[check]     Auto-detected CCDI_TEST_MODE, correctly skipped"
 
     # ----------------------------------------------------------
-    # Test 3: Test-HttpEndpointReachable
+    # Test 3/4/8: optional network checks
     # ----------------------------------------------------------
-    Write-Host "[check]   Test 3: Test-HttpEndpointReachable detects reachable endpoint"
-    $t3 = Test-HttpEndpointReachable -Url "https://example.com" -TimeoutSec 10
-    if (-not $t3.Reachable) {
-        Write-Host "[check]     WARN: example.com unreachable (network may be down): $($t3.Error)"
+    if ($Network) {
+        Write-Host "[check]   Network: example.com"
+        $t3 = Test-HttpEndpointReachable -Url "https://example.com" -TimeoutSec 10
+        Write-NetworkCheckResult -Name "example.com" -Reachable $t3.Reachable -Detail "StatusCode=$($t3.StatusCode); Error=$($t3.Error)"
+
+        Write-Host "[check]   Network: Claude official install channel"
+        $t4 = Test-ClaudeOfficialInstallNetwork
+        $requiredKeys = @("Reachable", "InstallScriptOk", "DownloadsOk", "Details")
+        foreach ($key in $requiredKeys) {
+            if ($t4.Keys -notcontains $key) {
+                throw "Test-ClaudeOfficialInstallNetwork missing field: $key"
+            }
+        }
+        Write-NetworkCheckResult -Name "Claude official install channel" -Reachable $t4.Reachable -Detail "InstallScriptOk=$($t4.InstallScriptOk); DownloadsOk=$($t4.DownloadsOk); Details=$($t4.Details)"
     }
     else {
-        Write-Host "[check]     example.com: Reachable=$($t3.Reachable), StatusCode=$($t3.StatusCode)"
+        Write-Host "[check]   Network checks skipped (pass -Network to enable; add -StrictNetwork to fail on network errors)"
     }
-
-    # 401/403/404 should be Reachable for HEAD requests (not for install.ps1 GET)
-    Write-Host "[check]   Test 3b: HTTP 403/404 treated as reachable for HEAD (downloads endpoint)"
-    # We test this indirectly: Test-HttpEndpointReachable marks 401/403/404 as Reachable
-    # This is the correct behavior for downloads.claude.ai
-
-    # ----------------------------------------------------------
-    # Test 4: Test-ClaudeOfficialInstallNetwork returns correct shape
-    # ----------------------------------------------------------
-    Write-Host "[check]   Test 4: Test-ClaudeOfficialInstallNetwork shape check"
-    $t4 = Test-ClaudeOfficialInstallNetwork
-    $requiredKeys = @("Reachable", "InstallScriptOk", "DownloadsOk", "Details")
-    foreach ($key in $requiredKeys) {
-        if ($t4.Keys -notcontains $key) {
-            throw "Test-ClaudeOfficialInstallNetwork missing field: $key"
-        }
-    }
-    # InstallScriptOk must NOT be true for non-200 (verified via function logic)
-    Write-Host "[check]     Reachable=$($t4.Reachable), InstallScriptOk=$($t4.InstallScriptOk), DownloadsOk=$($t4.DownloadsOk)"
 
     # ----------------------------------------------------------
     # Test 5: Install-ClaudeCodeAuto -TestSafe (claude absent → skip)
     # ----------------------------------------------------------
     Write-Host "[check]   Test 5: Install-ClaudeCodeAuto -TestSafe (claude absent)"
     $t5 = Install-ClaudeCodeAuto -TestSafe
-    if ($t5.Status -ne "skipped_test_safe_missing") {
-        throw "Expected skipped_test_safe_missing when claude absent, got: $($t5.Status)"
+    if ($t5.Status -notmatch "^skipped_test_safe_") {
+        throw "Expected skipped_test_safe_* in TestSafe mode, got: $($t5.Status)"
     }
-    if ($t5.Method -ne "none") {
+    if ($t5.Method -notin @("none", "existing")) {
         throw "Expected Method=none, got: $($t5.Method)"
     }
     Write-Host "[check]     Status=$($t5.Status) (correct)"
+
+    Write-Host "[check]   Test 5b: Install-ClaudeCodeAuto (no TestSafe param, but CCDI_TEST_MODE=1)"
+    $t5b = Install-ClaudeCodeAuto
+    if ($t5b.Status -notmatch "^skipped_test_safe_") {
+        throw "Install-ClaudeCodeAuto with CCDI_TEST_MODE=1 should auto-skip, got: $($t5b.Status)"
+    }
+    Write-Host "[check]     Auto-protected by CCDI_TEST_MODE=1, Status=$($t5b.Status)"
 
     # ----------------------------------------------------------
     # Test 6: Install-ClaudeCodeNative -TestSafe skips real install
@@ -282,6 +354,9 @@ try {
     if ($t6.Success) {
         throw "Install-ClaudeCodeNative -TestSafe should return Success=false"
     }
+    if ($t6.Status -ne "skipped_test_safe") {
+        throw "Install-ClaudeCodeNative -TestSafe should return Status=skipped_test_safe, got: $($t6.Status)"
+    }
     Write-Host "[check]     Success=$($t6.Success) (correctly skipped)"
 
     # Test 6b: Install-ClaudeCodeNative without -TestSafe BUT CCDI_TEST_MODE=1
@@ -289,6 +364,9 @@ try {
     $t6b = Install-ClaudeCodeNative
     if ($t6b.Success) {
         throw "Install-ClaudeCodeNative with CCDI_TEST_MODE=1 should auto-skip, got Success=true"
+    }
+    if ($t6b.Status -ne "skipped_test_safe") {
+        throw "Install-ClaudeCodeNative with CCDI_TEST_MODE=1 should return Status=skipped_test_safe, got: $($t6b.Status)"
     }
     Write-Host "[check]     Auto-protected by CCDI_TEST_MODE=1, Success=$($t6b.Success)"
 
@@ -300,6 +378,9 @@ try {
     if ($t7.Success) {
         throw "Install-ClaudeCodeNpmMirror -TestSafe should return Success=false"
     }
+    if ($t7.Status -ne "skipped_test_safe") {
+        throw "Install-ClaudeCodeNpmMirror -TestSafe should return Status=skipped_test_safe, got: $($t7.Status)"
+    }
     Write-Host "[check]     Success=$($t7.Success) (correctly skipped)"
 
     # Test 7b: Install-ClaudeCodeNpmMirror without -TestSafe BUT CCDI_TEST_MODE=1
@@ -308,24 +389,22 @@ try {
     if ($t7b.Success) {
         throw "Install-ClaudeCodeNpmMirror with CCDI_TEST_MODE=1 should auto-skip, got Success=true"
     }
+    if ($t7b.Status -ne "skipped_test_safe") {
+        throw "Install-ClaudeCodeNpmMirror with CCDI_TEST_MODE=1 should return Status=skipped_test_safe, got: $($t7b.Status)"
+    }
     Write-Host "[check]     Auto-protected by CCDI_TEST_MODE=1, Success=$($t7b.Success)"
 
-    # ----------------------------------------------------------
-    # Test 8: Install-ClaudeCodeNative without -TestSafe BUT CCDI_TEST_MODE=1
-    # should still skip because the function checks the test mode
-    # Actually looking at the function: it uses explicit -TestSafe param only.
-    # CCDI_TEST_MODE is checked at the Install-ClaudeCodeAuto level, not
-    # in the individual Install-* functions. This is by design.
-    # ----------------------------------------------------------
-    Write-Host "[check]   Test 8: Test-NpmMirrorClaudeCodeNetwork shape check"
-    $t8 = Test-NpmMirrorClaudeCodeNetwork
-    $mirrorKeys = @("Reachable", "NpmAvailable", "NodeOk", "Error")
-    foreach ($key in $mirrorKeys) {
-        if ($t8.Keys -notcontains $key) {
-            throw "Test-NpmMirrorClaudeCodeNetwork missing field: $key"
+    if ($Network) {
+        Write-Host "[check]   Network: npmmirror"
+        $t8 = Test-NpmMirrorClaudeCodeNetwork
+        $mirrorKeys = @("Reachable", "NpmAvailable", "NodeOk", "Error")
+        foreach ($key in $mirrorKeys) {
+            if ($t8.Keys -notcontains $key) {
+                throw "Test-NpmMirrorClaudeCodeNetwork missing field: $key"
+            }
         }
+        Write-NetworkCheckResult -Name "npmmirror" -Reachable $t8.Reachable -Detail "NodeOk=$($t8.NodeOk); NpmAvailable=$($t8.NpmAvailable); Error=$($t8.Error)"
     }
-    Write-Host "[check]     NodeOk=$($t8.NodeOk), NpmAvailable=$($t8.NpmAvailable), Reachable=$($t8.Reachable)"
 
     # ----------------------------------------------------------
     # Test 9: Install-ClaudeCodeAuto status values sanity
@@ -341,12 +420,18 @@ try {
     # All valid Method values
     $validMethods = @("existing", "official_native", "npm_npmmirror", "none",
         "node-via-winget")
-    $validStatuses = @("skipped_existing", "skipped_test_safe_missing",
+    $validStatuses = @("skipped_existing", "skipped_test_safe_existing", "skipped_test_safe_missing",
         "skipped_test_safe_broken", "installed", "installed_needs_restart",
         "node_installed_needs_restart", "failed_missing_node_or_npm",
         "failed_npmmirror_unreachable", "failed_official_and_mirror")
     Write-Host "[check]     Valid Methods: $($validMethods -join ', ')"
     Write-Host "[check]     Valid Statuses: $($validStatuses -join ', ')"
+
+    # Start-Here.ps1 must continue in TestSafe when claude is missing/broken.
+    $startHereText = Get-Content (Join-Path $RootDir "Start-Here.ps1") -Raw
+    if ($startHereText -notmatch '\$script:TestSafeMode\s+-and\s+\$installResult\.Status\s+-match\s+"\^skipped_test_safe_"') {
+        throw "Start-Here.ps1 must treat skipped_test_safe_* as a TestSafe continuation state"
+    }
 
     Write-Host "[check]   All safety and structure checks passed"
 }

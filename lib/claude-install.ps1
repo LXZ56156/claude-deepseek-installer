@@ -288,10 +288,13 @@ function Install-ClaudeCodeNative {
     $result = @{
         Success = $false
         Error   = ""
+        Status  = ""
     }
 
     if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
         Write-Log "INFO" "TestSafe: 跳过 Native Install 执行"
+        $result.Status = "skipped_test_safe"
+        $result.Error = "skipped_test_safe"
         return $result
     }
 
@@ -362,10 +365,13 @@ function Install-ClaudeCodeNpmMirror {
     $result = @{
         Success = $false
         Error   = ""
+        Status  = ""
     }
 
     if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
         Write-Log "INFO" "TestSafe: 跳过 npm mirror 安装"
+        $result.Status = "skipped_test_safe"
+        $result.Error = "skipped_test_safe"
         return $result
     }
 
@@ -414,12 +420,14 @@ function Invoke-ClaudeDoctorSafe {
     $result = @{
         Success = $false
         Output  = ""
+        Status  = ""
     }
 
     $isTestSafe = $TestSafe -or ($env:CCDI_TEST_MODE -eq "1")
     if ($isTestSafe) {
         Write-Log "INFO" "TestSafe: 跳过 claude doctor 执行"
         $result.Output = "skipped_test_safe"
+        $result.Status = "skipped_test_safe"
         return $result
     }
 
@@ -475,7 +483,8 @@ function Install-ClaudeCodeAuto {
     # ============================================================
     # TestSafe 模式
     # ============================================================
-    if ($TestSafe) {
+    $isTestSafe = $TestSafe -or ($env:CCDI_TEST_MODE -eq "1")
+    if ($isTestSafe) {
         Write-Warning "当前为测试安全模式：不会安装、更新或卸载 Claude Code。"
         Write-Info "将只检查 claude 命令是否存在，并继续后续沙盒配置验证。"
 
@@ -485,13 +494,13 @@ function Install-ClaudeCodeAuto {
                 Write-Success "检测到 Claude Code: $($existingCheck.Version)"
                 $result.Success = $true
                 $result.Method = "existing"
-                $result.Status = "skipped_existing"
+                $result.Status = "skipped_test_safe_existing"
                 $result.Version = $existingCheck.Version
                 $result.WasAlreadyInstalled = $true
                 Update-CcdiState -Updates @{
                     claudeWasAlreadyInstalled = $true
                     claudeInstallMethod       = "existing"
-                    claudeInstallStatus       = "skipped_existing"
+                    claudeInstallStatus       = "skipped_test_safe_existing"
                 } | Out-Null
             }
             else {
