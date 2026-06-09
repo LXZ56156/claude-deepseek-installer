@@ -58,11 +58,11 @@ function Get-ConfigBackups {
     }
 
     return @(Get-ChildItem -Path $backupDir -Filter "settings.json.*.bak" -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending)
+        Sort-Object Name -Descending)
 }
 
 function Show-ConfigBackups {
-    $backups = Get-ConfigBackups
+    $backups = @(Get-ConfigBackups)
     if ($backups.Count -eq 0) {
         Write-Warning "没有找到可恢复的 settings.json 备份。"
         return
@@ -151,7 +151,7 @@ function Remove-DeepSeekEnvConfig {
 function Restore-LatestConfigBackup {
     param([switch]$AssumeYes)
 
-    $latest = Get-ConfigBackups | Select-Object -First 1
+    $latest = @(Get-ConfigBackups) | Select-Object -First 1
     if (-not $latest) {
         Write-Warning "没有找到可恢复的 settings.json 备份。"
         return $false

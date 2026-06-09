@@ -145,6 +145,12 @@ finally {
     Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+Write-Host "[check] backup filename precision"
+$commonText = Get-Content -Path (Join-Path $RootDir "lib\common.ps1") -Raw -Encoding UTF8
+if ($commonText -notmatch 'yyyyMMdd-HHmmss-fff') {
+    throw "Backup-File must use millisecond precision to avoid overwriting backups created in the same second"
+}
+
 Write-Host "[check] Doctor state guardrails"
 $doctorText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
 if ($doctorText -notmatch '\$script:DoctorState') {
@@ -153,11 +159,27 @@ if ($doctorText -notmatch '\$script:DoctorState') {
 if ($doctorText -match '\$Suggestions \+=') {
     throw "doctor.ps1 still uses scoped Suggestions +="
 }
+$requiredDoctorCountPatterns = @(
+    '\$okCount\s*=\s*@\(\$script:DoctorState\.CheckResults\s*\|\s*Where-Object\s*\{\s*\$_\.Status\s+-eq\s+"OK"\s*\}\)\.Count',
+    '\$warnCount\s*=\s*@\(\$script:DoctorState\.CheckResults\s*\|\s*Where-Object\s*\{\s*\$_\.Status\s+-eq\s+"WARN"\s*\}\)\.Count',
+    '\$errCount\s*=\s*@\(\$script:DoctorState\.CheckResults\s*\|\s*Where-Object\s*\{\s*\$_\.Status\s+-eq\s+"ERROR"\s*\}\)\.Count'
+)
+foreach ($pattern in $requiredDoctorCountPatterns) {
+    if ($doctorText -notmatch $pattern) {
+        throw "doctor.ps1 summary counts must wrap pipeline results in @(...).Count"
+    }
+}
 
 Write-Host "[check] uninstall backup listing"
 $uninstallText = Get-Content -Path (Join-Path $RootDir "uninstall-config.ps1") -Raw -Encoding UTF8
 if ($uninstallText -match '\[void\]\s*\(\s*Show-ConfigBackups\s*\)') {
     throw "uninstall-config.ps1 suppresses -ListBackups output"
+}
+if ($uninstallText -notmatch '\$backups\s*=\s*@\(Get-ConfigBackups\)') {
+    throw "uninstall-config.ps1 must wrap Get-ConfigBackups in @() before counting"
+}
+if ($uninstallText -match 'Sort-Object\s+LastWriteTime') {
+    throw "uninstall-config.ps1 must not sort backups by LastWriteTime because Copy-Item preserves source timestamps"
 }
 
 Write-Host "[check] .cmd launcher encoding"

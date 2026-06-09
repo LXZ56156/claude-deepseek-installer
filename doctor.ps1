@@ -732,9 +732,9 @@ function Main {
     # 输出到控制台摘要
     Write-Host ""
     Write-Host ("=" * 60) -ForegroundColor Cyan
-    $okCount = ($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "OK" }).Count
-    $warnCount = ($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "WARN" }).Count
-    $errCount = ($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "ERROR" }).Count
+    $okCount = @($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "OK" }).Count
+    $warnCount = @($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "WARN" }).Count
+    $errCount = @($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "ERROR" }).Count
     $totalCount = $script:DoctorState.CheckResults.Count
 
     Write-Host "  检测总结: 共 $totalCount 项" -ForegroundColor White

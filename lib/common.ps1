@@ -108,7 +108,7 @@ function Backup-File {
         }
 
         # 生成备份文件名
-        $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        $timestamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
         $fileName = [System.IO.Path]::GetFileName($FilePath)
         $backupName = "$fileName.$timestamp.bak"
         $backupPath = Join-Path $fullBackupDir $backupName

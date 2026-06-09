@@ -335,7 +335,7 @@ function Restore-ConfigFromBackup {
     }
 
     # 列出可用备份
-    $backups = Get-ChildItem -Path $fullBackupDir -Filter "settings.json.*.bak" | Sort-Object LastWriteTime -Descending
+    $backups = Get-ChildItem -Path $fullBackupDir -Filter "settings.json.*.bak" | Sort-Object Name -Descending
 
     if ($backups.Count -eq 0) {
         $result.Message = "备份目录中没有找到 settings.json 的备份文件"
