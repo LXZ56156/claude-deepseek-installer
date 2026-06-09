@@ -279,7 +279,7 @@ foreach ($ext in $textExtensions) {
             $full = $_.FullName
             $skip = $false
             foreach ($excl in $sourceScanExcludes) {
-                if ($full -match "\$excl\" -or $full -match "\$excl`$" -or $full -match "/$excl/" -or $full -match "/$excl`$") {
+                if ($full -match "\\$excl\\" -or $full -match "\\$excl`$" -or $full -match "/$excl/" -or $full -match "/$excl`$") {
                     $skip = $true
                     break
                 }
