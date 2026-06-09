@@ -68,7 +68,15 @@ function Show-ConfigBackups {
         return
     }
 
-    $backups | Select-Object Name, FullName, LastWriteTime
+    Write-Info "找到 $($backups.Count) 个 settings.json 备份:"
+    Write-Host ""
+
+    for ($i = 0; $i -lt $backups.Count; $i++) {
+        $backup = $backups[$i]
+        Write-Host ("  [{0}] {1}" -f ($i + 1), $backup.Name) -ForegroundColor White
+        Write-Host ("      时间: {0}" -f $backup.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")) -ForegroundColor Gray
+        Write-Host ("      路径: {0}" -f $backup.FullName) -ForegroundColor Gray
+    }
 }
 
 function Remove-DeepSeekEnvConfig {
@@ -279,7 +287,7 @@ Write-Host "==============================================================" -For
 Write-Host ""
 
 if ($ListBackups) {
-    [void](Show-ConfigBackups)
+    Show-ConfigBackups
     exit 0
 }
 

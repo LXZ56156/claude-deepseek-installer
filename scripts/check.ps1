@@ -154,6 +154,12 @@ if ($doctorText -match '\$Suggestions \+=') {
     throw "doctor.ps1 still uses scoped Suggestions +="
 }
 
+Write-Host "[check] uninstall backup listing"
+$uninstallText = Get-Content -Path (Join-Path $RootDir "uninstall-config.ps1") -Raw -Encoding UTF8
+if ($uninstallText -match '\[void\]\s*\(\s*Show-ConfigBackups\s*\)') {
+    throw "uninstall-config.ps1 suppresses -ListBackups output"
+}
+
 Write-Host "[check] .cmd launcher encoding"
 $cmdFiles = @(
     (Join-Path $RootDir "开始安装.cmd"),
