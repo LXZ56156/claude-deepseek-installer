@@ -220,6 +220,13 @@ backup_file() {
     local filename
     filename=$(basename "$file")
     local backup_path="$BACKUP_DIR/${filename}.${TIMESTAMP}.bak"
+    if [ -e "$backup_path" ]; then
+        local n=1
+        while [ -e "$BACKUP_DIR/${filename}.${TIMESTAMP}.${n}.bak" ]; do
+            n=$((n + 1))
+        done
+        backup_path="$BACKUP_DIR/${filename}.${TIMESTAMP}.${n}.bak"
+    fi
     if cp "$file" "$backup_path"; then
         log "INFO" "已备份: $file -> $backup_path"
         info "已备份: $backup_path"
@@ -2019,19 +2026,29 @@ run_mode() {
             check_environment || true
             if ! install_claude_code; then
                 error "Claude Code 安装失败，跳过配置步骤。"
-                print_final_summary
                 return 1
             fi
-            configure_deepseek
-            test_api || true
+            if ! configure_deepseek; then
+                return 1
+            fi
+            if ! test_api; then
+                [ "$SKIP_API_TEST" -eq 1 ] && return 0
+                return 1
+            fi
             ;;
         install)
             check_environment || true
-            install_claude_code || true
+            install_claude_code
+            return $?
             ;;
         configure)
-            configure_deepseek
-            test_api || true
+            if ! configure_deepseek; then
+                return 1
+            fi
+            if ! test_api; then
+                [ "$SKIP_API_TEST" -eq 1 ] && return 0
+                return 1
+            fi
             ;;
         doctor)
             run_doctor
@@ -2063,9 +2080,11 @@ main() {
     show_disclaimer
 
     if [ "$MODE" != "menu" ]; then
+        local rc
         run_mode
+        rc=$?
         print_final_summary
-        return 0
+        return $rc
     fi
 
     # 菜单模式：显示检测结果但不退出
