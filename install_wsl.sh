@@ -399,8 +399,9 @@ if(jd)console.log("CONFIG_OK_DAMAGED_JSON");else console.log("CONFIG_OK");
             return 0
         elif echo "$_ccdi_node_out" | grep -q "CONFIG_OK"; then
             return 0
+        else
+            return 1
         fi
-        return $?
     elif command -v python3 &> /dev/null; then
         # 回退到 python3
         local _ccdi_py_out
@@ -437,8 +438,9 @@ else:print("CONFIG_OK")
             return 0
         elif echo "$_ccdi_py_out" | grep -q "CONFIG_OK"; then
             return 0
+        else
+            return 1
         fi
-        return $?
     else
         error "没有可用的 JSON 处理器。"
         return 1
@@ -1158,12 +1160,12 @@ check_official_claude_network() {
     if [ "$ok" -eq 1 ]; then
         success "Claude 官方安装通道可用。"
         log "INFO" "Claude 官方安装通道: 可用"
+        return 0
     else
         warn "Claude 官方安装通道不可用，将使用 npm 镜像。"
         log "WARN" "Claude 官方安装通道: 不可用"
+        return 1
     fi
-
-    return "$ok"
 }
 
 check_npmmirror_network() {
