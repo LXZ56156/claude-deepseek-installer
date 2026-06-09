@@ -24,7 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$SCRIPT_DIR/logs"
 BACKUP_DIR="$SCRIPT_DIR/backup"
 DEFAULTS_FILE="$SCRIPT_DIR/lib/deepseek-env.defaults.json"
-TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+TIMESTAMP=$(date +"%Y%m%d-%H%M%S-%3N")
 LOG_FILE="$LOG_DIR/install_wsl-${TIMESTAMP}.log"
 SCRIPT_VERSION="1.3.2"
 MODE="menu"
@@ -64,42 +64,54 @@ NC='\033[0m' # No Color
 
 init_logging() {
     mkdir -p "$LOG_DIR"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] ========== WSL 安装日志开始 ==========" >> "$LOG_FILE"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] 日志文件: $LOG_FILE" >> "$LOG_FILE"
+    printf '[%s] [INFO] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$(sanitize_text "========== WSL 安装日志开始 ==========")" >> "$LOG_FILE"
+    printf '[%s] [INFO] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$(sanitize_text "日志文件: $LOG_FILE")" >> "$LOG_FILE"
 }
 
 log() {
     local level="$1"
     shift
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $*" >> "$LOG_FILE"
+    local message
+    message="$(sanitize_text "$*")"
+    printf '[%s] [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$level" "$message" >> "$LOG_FILE"
 }
 
 info() {
-    echo -e "${CYAN}[INFO]${NC} $*"
-    log "INFO" "$*"
+    local message
+    message="$(sanitize_text "$*")"
+    echo -e "${CYAN}[INFO]${NC} $message"
+    log "INFO" "$message"
 }
 
 success() {
-    echo -e "${GREEN}[OK]${NC} $*"
-    log "INFO" "[OK] $*"
+    local message
+    message="$(sanitize_text "$*")"
+    echo -e "${GREEN}[OK]${NC} $message"
+    log "INFO" "[OK] $message"
 }
 
 warn() {
-    echo -e "${YELLOW}[WARN]${NC} $*"
-    log "WARN" "$*"
+    local message
+    message="$(sanitize_text "$*")"
+    echo -e "${YELLOW}[WARN]${NC} $message"
+    log "WARN" "$message"
 }
 
 error() {
-    echo -e "${RED}[ERROR]${NC} $*"
-    log "ERROR" "$*"
+    local message
+    message="$(sanitize_text "$*")"
+    echo -e "${RED}[ERROR]${NC} $message"
+    log "ERROR" "$message"
 }
 
 step() {
+    local message
+    message="$(sanitize_text "$*")"
     echo ""
     echo -e "${CYAN}============================================================${NC}"
-    echo -e "${CYAN}  $*${NC}"
+    echo -e "${CYAN}  $message${NC}"
     echo -e "${CYAN}============================================================${NC}"
-    log "INFO" "--- 步骤: $* ---"
+    log "INFO" "--- 步骤: $message ---"
 }
 
 usage() {
@@ -179,15 +191,56 @@ parse_args() {
 }
 
 mask_api_key() {
-    local key="$1"
-    local len=${#key}
-    if [ "$len" -eq 0 ]; then
-        printf '(空)'
-    elif [ "$len" -le 8 ]; then
-        printf '%s****' "${key:0:2}"
-    else
-        printf '%s****%s' "${key:0:4}" "${key: -4}"
+    local key="${1:-}"
+    if [ -z "$key" ]; then
+        echo "(empty)"
+        return
     fi
+
+    local len=${#key}
+    if [ "$len" -le 8 ]; then
+        echo "${key:0:2}****"
+        return
+    fi
+
+    echo "${key:0:4}****${key: -4}"
+}
+
+sanitize_text() {
+    local text="${1:-}"
+
+    if [ -n "${CCDI_API_KEY:-}" ]; then
+        text="${text//$CCDI_API_KEY/$(mask_api_key "$CCDI_API_KEY")}"
+    fi
+
+    if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
+        text="${text//$DEEPSEEK_API_KEY/$(mask_api_key "$DEEPSEEK_API_KEY")}"
+    fi
+
+    text="$(printf '%s' "$text" | sed -E 's/sk-[A-Za-z0-9]{16,}/sk-****REDACTED/g')"
+    printf '%s' "$text"
+}
+
+print_share_safety_notice() {
+    info "请只发送 report.txt。"
+    warn "不要发送 backup/、logs/ 或 reports/full-report-*。"
+    warn "backup/ 可能包含完整 API Key，仅用于本机恢复。"
+}
+
+write_sanitized_file() {
+    local output_file="$1"
+    local content="${2:-}"
+    local sanitized
+
+    sanitized="$(sanitize_text "$content")"
+    if [ -n "${HOME:-}" ]; then
+        sanitized="${sanitized//$HOME/~}"
+    fi
+    if [ -n "${SCRIPT_DIR:-}" ]; then
+        sanitized="${sanitized//$SCRIPT_DIR/[project-dir]}"
+    fi
+
+    printf '%s\n' "$sanitized" > "$output_file"
 }
 
 # ============================================================
@@ -220,6 +273,13 @@ backup_file() {
     local filename
     filename=$(basename "$file")
     local backup_path="$BACKUP_DIR/${filename}.${TIMESTAMP}.bak"
+    if [ -e "$backup_path" ]; then
+        local n=1
+        while [ -e "$BACKUP_DIR/${filename}.${TIMESTAMP}.${n}.bak" ]; do
+            n=$((n + 1))
+        done
+        backup_path="$BACKUP_DIR/${filename}.${TIMESTAMP}.${n}.bak"
+    fi
     if cp "$file" "$backup_path"; then
         log "INFO" "已备份: $file -> $backup_path"
         info "已备份: $backup_path"
@@ -315,9 +375,18 @@ var ak=process.env.CCDI_INPUT_API_KEY;
 var ne=JSON.parse(fs.readFileSync(df,"utf-8"));
 ne.ANTHROPIC_AUTH_TOKEN=ak;
 var ex={},jd=false;
-if(fs.existsSync(cf)){try{var ct=fs.readFileSync(cf,"utf-8").trim();if(ct)ex=JSON.parse(ct);}catch(e){jd=true;}}
+if(fs.existsSync(cf)){
+  try{
+    var ct=fs.readFileSync(cf,"utf-8").replace(/^\uFEFF/,"").trim();
+    if(ct)ex=JSON.parse(ct);
+  }catch(e){
+    jd=true;
+    ex={};
+  }
+}
+if(!ex||typeof ex!=="object"||Array.isArray(ex)){jd=true;ex={};}
 var oe=ex.env||{};
-if(typeof oe!=="object"||Array.isArray(oe))oe={};
+if(!oe||typeof oe!=="object"||Array.isArray(oe))oe={};
 Object.assign(oe,ne);ex.env=oe;
 var cd=path.dirname(cf);
 if(!fs.existsSync(cd))fs.mkdirSync(cd,{recursive:true});
@@ -330,46 +399,11 @@ if(jd)console.log("CONFIG_OK_DAMAGED_JSON");else console.log("CONFIG_OK");
             return 0
         elif echo "$_ccdi_node_out" | grep -q "CONFIG_OK"; then
             return 0
+        else
+            return 1
         fi
-        return $?
     elif command -v python3 &> /dev/null; then
         # 回退到 python3
-        python3 << 'PYEOF'
-import json
-import os
-
-config_file = os.path.expanduser(os.environ.get("CCDI_CONFIG_FILE", "~/.claude/settings.json"))
-defaults_file = os.environ.get("CCDI_DEFAULTS_FILE", "")
-api_key = os.environ.get("CCDI_INPUT_API_KEY", "")
-
-with open(defaults_file, 'r', encoding='utf-8') as f:
-    new_env = json.load(f)
-new_env["ANTHROPIC_AUTH_TOKEN"] = api_key
-
-existing = {}
-json_damaged = False
-if os.path.exists(config_file):
-    try:
-        with open(config_file, 'r') as f:
-            content = f.read().strip()
-            if content:
-                existing = json.loads(content)
-    except json.JSONDecodeError:
-        json_damaged = True
-
-old_env = existing.get("env", {})
-if not isinstance(old_env, dict):
-    old_env = {}
-
-old_env.update(new_env)
-existing["env"] = old_env
-
-os.makedirs(os.path.dirname(config_file), exist_ok=True)
-with open(config_file, 'w') as f:
-    json.dump(existing, f, indent=2, ensure_ascii=False)
-
-print("CONFIG_OK")
-PYEOF
         local _ccdi_py_out
         _ccdi_py_out=$(python3 -c '
 import json,os
@@ -381,15 +415,20 @@ ne["ANTHROPIC_AUTH_TOKEN"]=ak
 ex={};jd=False
 if os.path.exists(cf):
  try:
-  with open(cf,"r") as f:
-   ct=f.read().strip()
+  with open(cf,"r",encoding="utf-8") as f:
+   ct=f.read().lstrip("\ufeff").strip()
    if ct:ex=json.loads(ct)
- except json.JSONDecodeError:jd=True
+ except Exception:
+  jd=True
+  ex={}
+if not isinstance(ex,dict):
+ jd=True
+ ex={}
 oe=ex.get("env",{})
 if not isinstance(oe,dict):oe={}
 oe.update(ne);ex["env"]=oe
 os.makedirs(os.path.dirname(cf),exist_ok=True)
-with open(cf,"w") as f:json.dump(ex,f,indent=2,ensure_ascii=False)
+with open(cf,"w",encoding="utf-8") as f:json.dump(ex,f,indent=2,ensure_ascii=False)
 if jd:print("CONFIG_OK_DAMAGED_JSON")
 else:print("CONFIG_OK")
 ' 2>/dev/null)
@@ -399,8 +438,9 @@ else:print("CONFIG_OK")
             return 0
         elif echo "$_ccdi_py_out" | grep -q "CONFIG_OK"; then
             return 0
+        else
+            return 1
         fi
-        return $?
     else
         error "没有可用的 JSON 处理器。"
         return 1
@@ -411,10 +451,10 @@ else:print("CONFIG_OK")
 validate_settings_json() {
     local config_file="$1"
     if command -v node &> /dev/null; then
-        node -e "JSON.parse(require('fs').readFileSync('$config_file','utf-8')); console.log('VALID');" 2>/dev/null
+        node -e "JSON.parse(require('fs').readFileSync('$config_file','utf-8').replace(/^\uFEFF/,'')); console.log('VALID');" 2>/dev/null
         return $?
     elif command -v python3 &> /dev/null; then
-        python3 -c "import json; json.load(open('$config_file')); print('VALID')" 2>/dev/null
+        python3 -c "import json; json.load(open('$config_file', encoding='utf-8-sig')); print('VALID')" 2>/dev/null
         return $?
     else
         return 1
@@ -432,7 +472,7 @@ const fs = require('fs');
 const os = require('os');
 const f = '$config_file'.replace(/^~/, os.homedir());
 try {
-    const c = JSON.parse(fs.readFileSync(f, 'utf-8'));
+    const c = JSON.parse(fs.readFileSync(f, 'utf-8').replace(/^\uFEFF/,''));
     console.log((c.env || {})['$key'] || '$default');
 } catch(e) { console.log('$default'); }
 " 2>/dev/null
@@ -440,7 +480,7 @@ try {
         python3 -c "
 import json, os
 try:
-    with open(os.path.expanduser('$config_file')) as f:
+    with open(os.path.expanduser('$config_file'), encoding='utf-8-sig') as f:
         c = json.load(f)
     print(c.get('env', {}).get('$key', '$default'))
 except:
@@ -611,9 +651,10 @@ restore_wsl_config() {
 
     local config_file="$HOME/.claude/settings.json"
 
-    # 列出现有备份
+    # 列出现有备份。备份文件名包含时间戳，恢复时必须按文件名排序，
+    # 避免 mtime 被复制、解压或同步工具改写后选错备份。
     local backups
-    backups=$(ls -1t "$BACKUP_DIR"/settings.json.*.bak 2>/dev/null || true)
+    backups=$(find "$BACKUP_DIR" -type f -name 'settings.json.*.bak' 2>/dev/null | sort || true)
 
     if [ -z "$backups" ]; then
         warn "未在 backup/ 目录找到 settings.json 备份文件。"
@@ -622,30 +663,29 @@ restore_wsl_config() {
     fi
 
     local latest
-    latest=$(echo "$backups" | head -1)
+    latest=$(printf '%s\n' "$backups" | tail -n 1)
     local count
-    count=$(echo "$backups" | wc -l)
+    count=$(printf '%s\n' "$backups" | wc -l)
 
     if [ "$NON_INTERACTIVE" -eq 1 ] || [ "$YES" -eq 1 ]; then
-        info "非交互模式：自动选择最近备份。"
+        info "非交互模式：按文件名时间戳自动选择最新备份。"
         info "备份文件: $latest"
-        info "备份时间: $(stat -c %y "$latest" 2>/dev/null || echo '未知')"
     else
-        info "找到 $count 个备份文件："
+        info "找到 $count 个备份文件（按文件名时间戳从新到旧）："
         local i=1
         local IFS_OLD="$IFS"
         IFS=$'\n'
-        for b in $backups; do
-            local bt
-            bt=$(stat -c %y "$b" 2>/dev/null || echo '未知时间')
-            echo "  [$i] $b ($bt)"
+        local display_backups
+        display_backups=$(printf '%s\n' "$backups" | sort -r)
+        for b in $display_backups; do
+            echo "  [$i] $b"
             i=$((i+1))
         done
         IFS="$IFS_OLD"
         echo ""
         read -r -p "选择要恢复的备份编号 (1-$count，默认最近): " choice
         if [ -n "$choice" ] && [ "$choice" -ge 1 ] 2>/dev/null && [ "$choice" -le "$count" ] 2>/dev/null; then
-            latest=$(echo "$backups" | sed -n "${choice}p")
+            latest=$(printf '%s\n' "$display_backups" | sed -n "${choice}p")
         fi
     fi
 
@@ -659,6 +699,10 @@ restore_wsl_config() {
     fi
 
     # 执行恢复
+    mkdir -p "$(dirname "$config_file")" || {
+        error "恢复失败：无法创建配置目录 $(dirname "$config_file")"
+        return 1
+    }
     cp "$latest" "$config_file" || {
         error "恢复失败：无法写入 $config_file"
         return 1
@@ -1116,12 +1160,12 @@ check_official_claude_network() {
     if [ "$ok" -eq 1 ]; then
         success "Claude 官方安装通道可用。"
         log "INFO" "Claude 官方安装通道: 可用"
+        return 0
     else
         warn "Claude 官方安装通道不可用，将使用 npm 镜像。"
         log "WARN" "Claude 官方安装通道: 不可用"
+        return 1
     fi
-
-    return "$ok"
 }
 
 check_npmmirror_network() {
@@ -1223,7 +1267,15 @@ install_claude_auto() {
         info "已安装时不覆盖、不重装、不自动更新。"
 
         info "运行 claude doctor..."
-        claude doctor 2>&1 || true
+        local doctor_output
+        if ! doctor_output="$(claude doctor 2>&1)"; then
+            :
+        fi
+        if [ -n "$doctor_output" ]; then
+            while IFS= read -r line; do
+                info "$line"
+            done <<< "$doctor_output"
+        fi
 
         CLAUDE_OK=1
         CLAUDE_INSTALL_METHOD="existing"
@@ -1250,7 +1302,15 @@ install_claude_auto() {
                 new_version=$(claude --version 2>/dev/null || echo "安装成功")
                 success "Claude Code 安装验证通过 (official): $new_version"
                 info "运行 claude doctor..."
-                claude doctor 2>&1 || true
+                local doctor_output
+                if ! doctor_output="$(claude doctor 2>&1)"; then
+                    :
+                fi
+                if [ -n "$doctor_output" ]; then
+                    while IFS= read -r line; do
+                        info "$line"
+                    done <<< "$doctor_output"
+                fi
                 CLAUDE_OK=1
                 CLAUDE_INSTALL_METHOD="official_native"
                 CLAUDE_INSTALL_STATUS="installed"
@@ -1339,7 +1399,15 @@ install_claude_auto() {
         new_version=$(claude --version 2>/dev/null || echo "安装成功")
         success "Claude Code 安装验证通过 (npm mirror): $new_version"
         info "运行 claude doctor..."
-        claude doctor 2>&1 || true
+        local doctor_output
+        if ! doctor_output="$(claude doctor 2>&1)"; then
+            :
+        fi
+        if [ -n "$doctor_output" ]; then
+            while IFS= read -r line; do
+                info "$line"
+            done <<< "$doctor_output"
+        fi
         CLAUDE_OK=1
         CLAUDE_INSTALL_METHOD="npm_npmmirror"
         CLAUDE_INSTALL_STATUS="installed"
@@ -1471,8 +1539,7 @@ configure_deepseek() {
         # 如果旧 JSON 损坏，明确提示用户
         if [ "${CONFIG_REBUILT_FROM_DAMAGED:-0}" -eq 1 ]; then
             warn ""
-            warn "注意：旧配置文件 JSON 损坏，已备份并重建。"
-            warn "旧配置中的非 env 字段（如 permissions）可能无法自动保留。"
+            warn "旧 settings.json 已损坏，已备份；由于无法解析，permissions 等非 env 字段无法自动保留。"
             warn "如需恢复，请从 backup/ 目录手动合并。"
             warn ""
         fi
@@ -1716,7 +1783,7 @@ run_doctor() {
                 node -e "
 const fs = require('fs'), os = require('os');
 const f = '$config_file'.replace(/^~/, os.homedir());
-const c = JSON.parse(fs.readFileSync(f, 'utf-8'));
+const c = JSON.parse(fs.readFileSync(f, 'utf-8').replace(/^\uFEFF/,''));
 const e = c.env || {};
 const t = e.ANTHROPIC_AUTH_TOKEN || '';
 const masked = t ? (t.slice(0,4)+'****'+t.slice(-4)) : '(未设置)';
@@ -1818,6 +1885,8 @@ print(f'快速模型: {e.get(\"ANTHROPIC_SMALL_FAST_MODEL\", \"(未设置)\")}')
     if [ "$SHARE_SAFE" -eq 1 ]; then
         info "========== 生成分享版诊断报告 =========="
         local share_report="$SCRIPT_DIR/report-share-safe.txt"
+        local share_report_content
+        share_report_content="$(
         {
             echo "============================================================"
             echo "  Claude DeepSeek 诊断报告（分享版 - 已脱敏）"
@@ -1862,12 +1931,18 @@ print(f'快速模型: {e.get(\"ANTHROPIC_SMALL_FAST_MODEL\", \"(未设置)\")}')
             echo ""
             echo "============================================================"
             echo "注意: 本报告已自动脱敏（隐藏用户名和路径）。"
-        } > "$share_report"
+        }
+        )"
+        write_sanitized_file "$share_report" "$share_report_content"
         success "分享版报告已生成: $share_report"
         info "你可以将此文件发给卖家/技术支持，不会泄露个人路径信息。"
+        print_share_safety_notice
     fi
 
     echo ""
+    if [ "$SHARE_SAFE" -ne 1 ]; then
+        print_share_safety_notice
+    fi
     info "诊断完成。"
 }
 
@@ -1931,7 +2006,7 @@ print_final_summary() {
                 echo -e "${GREEN}  配置完成${NC}"
                 echo -e "${GREEN}============================================================${NC}"
                 if [ "${CONFIG_REBUILT_FROM_DAMAGED:-0}" -eq 1 ]; then
-                    warn "配置已从损坏 JSON 重建。非 env 字段可能未保留，请检查。"
+                    warn "旧 settings.json 已损坏，已备份；由于无法解析，permissions 等非 env 字段无法自动保留。"
                 fi
                 ;;
             install)
@@ -2019,19 +2094,29 @@ run_mode() {
             check_environment || true
             if ! install_claude_code; then
                 error "Claude Code 安装失败，跳过配置步骤。"
-                print_final_summary
                 return 1
             fi
-            configure_deepseek
-            test_api || true
+            if ! configure_deepseek; then
+                return 1
+            fi
+            if ! test_api; then
+                [ "$SKIP_API_TEST" -eq 1 ] && return 0
+                return 1
+            fi
             ;;
         install)
             check_environment || true
-            install_claude_code || true
+            install_claude_code
+            return $?
             ;;
         configure)
-            configure_deepseek
-            test_api || true
+            if ! configure_deepseek; then
+                return 1
+            fi
+            if ! test_api; then
+                [ "$SKIP_API_TEST" -eq 1 ] && return 0
+                return 1
+            fi
             ;;
         doctor)
             run_doctor
@@ -2063,9 +2148,11 @@ main() {
     show_disclaimer
 
     if [ "$MODE" != "menu" ]; then
+        local rc
         run_mode
+        rc=$?
         print_final_summary
-        return 0
+        return $rc
     fi
 
     # 菜单模式：显示检测结果但不退出
