@@ -92,7 +92,7 @@ claude
 3. 进入 "API Keys" 页面
 4. 点击 "创建 API Key"
 5. 复制并保存 Key（只显示一次！）
-6. Key 格式示例：`sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
+6. Key 通常以 `sk-` 开头，后面是一长串随机字符
 
 **注意：DeepSeek API 是付费服务，请关注余额。**
 

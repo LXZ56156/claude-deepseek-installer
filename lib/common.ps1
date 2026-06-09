@@ -927,7 +927,7 @@ function Sanitize-ReportText {
 function Write-DiagnosticReports {
     <#
     .SYNOPSIS
-        写入诊断报告（分享版 + 完整版）
+        写入诊断报告（分享版 + 可选完整版）
     .PARAMETER ReportLines
         报告行数组（ArrayList 或 string[]）
     .PARAMETER ScriptDir
@@ -942,7 +942,8 @@ function Write-DiagnosticReports {
         $ReportLines,
         [Parameter(Mandatory = $true)]
         [string]$ScriptDir,
-        [string]$Timestamp = $null
+        [string]$Timestamp = $null,
+        [bool]$IncludeFullReport = $true
     )
 
     if (-not $Timestamp) {
@@ -978,12 +979,15 @@ function Write-DiagnosticReports {
     $result.HistoryPath = $historyPath
 
     # 2. 本地完整版（轻度脱敏：仅脱敏 API Key，保留路径）
-    $fullContent = Sanitize-SecretLikeText -Text $reportContent
-    $fullPath = Join-Path $reportsDir "full-report-$Timestamp.txt"
-    [System.IO.File]::WriteAllText($fullPath, $fullContent, $utf8NoBom)
-    $result.FullPath = $fullPath
+    if ($IncludeFullReport) {
+        $fullContent = Sanitize-SecretLikeText -Text $reportContent
+        $fullPath = Join-Path $reportsDir "full-report-$Timestamp.txt"
+        [System.IO.File]::WriteAllText($fullPath, $fullContent, $utf8NoBom)
+        $result.FullPath = $fullPath
+    }
 
-    Write-Log "INFO" "诊断报告已保存: 分享版=$shareRootPath, 完整版=$fullPath"
+    $fullLogText = if ($result.FullPath) { $result.FullPath } else { "(ShareSafe skipped)" }
+    Write-Log "INFO" "诊断报告已保存: 分享版=$shareRootPath, 完整版=$fullLogText"
     return $result
 }
 

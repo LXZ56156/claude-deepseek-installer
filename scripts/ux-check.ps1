@@ -247,7 +247,6 @@ try {
         "sk-你的DeepSeekKey",
         "sk-xxxx",
         "__API_KEY__",
-        "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
         ("sk-" + ("x" * 32)),
         ("sk-test" + ("x" * 42)),
         ("sk-fake" + ("x" * 42)),

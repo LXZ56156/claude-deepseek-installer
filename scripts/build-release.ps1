@@ -196,7 +196,6 @@ $safePlaceholders = @(
     "sk-你的DeepSeekKey",
     "sk-xxxx",
     "__API_KEY__",
-    "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
     ("sk-" + ("x" * 32)),      # scripts/check.ps1 Mask-ApiKey test
     ("sk-test" + ("x" * 42)),  # ux-check.ps1/test scripts
     ("sk-fake" + ("x" * 42)),  # ux-check.sh test key
