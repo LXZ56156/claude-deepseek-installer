@@ -14,7 +14,7 @@ $ScriptRoot = Split-Path -Parent $PSScriptRoot
 $SandboxDir = Join-Path $ScriptRoot ".sandbox"
 $TotalPassed = 0
 $TotalFailed = 0
-$TestApiKey = "sk-test" + "1234567890abcdef" + "1234567890abcdef" + "1234567890ab"  # 假 Key
+$TestApiKey = "sk-test" + ("x" * 42)  # 假 Key
 
 function Write-CheckHeader {
     param([string]$Title)
@@ -248,10 +248,10 @@ try {
         "sk-xxxx",
         "__API_KEY__",
         "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-        ("sk-" + "1234567890abcdef" + "1234567890abcdef"),
-        ("sk-test" + "1234567890abcdef" + "1234567890abcdef" + "1234567890ab"),
-        ("sk-fake" + "1234567890abcdef" + "1234567890abcdef" + "1234567890ab"),
-        ("sk-" + "1234567890abcdef" + "1234567890abcdef" + "1234567890ab")
+        ("sk-" + ("x" * 32)),
+        ("sk-test" + ("x" * 42)),
+        ("sk-fake" + ("x" * 42)),
+        ("sk-" + ("x" * 46))
     )
 
     $textFiles = Get-ChildItem -Path $ScriptRoot -Recurse -Include "*.ps1", "*.psm1", "*.sh", "*.json", "*.md", "*.txt", "*.cmd" |
@@ -430,7 +430,7 @@ x-api-key: $TestApiKey
 
     $sanitized = Sanitize-ReportText -Text $fullReportText
 
-    $fullTestKey = "sk-test" + "1234567890abcdef" + "1234567890abcdef" + "1234567890ab"
+    $fullTestKey = "sk-test" + ("x" * 42)
     Assert "分享版不含完整 API Key" { $sanitized -notmatch [regex]::Escape($fullTestKey) } "分享版包含完整 Key"
     Assert "分享版不含用户名" { $sanitized -notmatch 'C:\\Users\\TestUser' } "分享版包含真实用户名: $sanitized"
     Assert "分享版正常文本保留" { $sanitized -match '正常文本' } "分享版丢失正常文本"
@@ -470,12 +470,12 @@ x-api-key: $TestApiKey
     # ============================================================
     Write-CheckHeader "14. Mask-ApiKey 脱敏"
 
-    $maskTestKey = "sk-" + "1234567890abcdef" + "1234567890abcdef" + "1234567890ab"
+    $maskTestKey = "sk-" + ("x" * 46)
     $masked = Mask-ApiKey -Key $maskTestKey
     Assert "脱敏不是原文" { $masked -ne $maskTestKey } "脱敏结果等于原文"
     Assert "脱敏包含掩码" { $masked -match '\*\*\*\*' } "脱敏没有掩码标记"
-    Assert "脱敏保留前缀" { $masked.StartsWith("sk-1") } "脱敏丢失前缀"
-    Assert "脱敏保留后缀" { $masked.EndsWith("90ab") } "脱敏丢失后缀"
+    Assert "脱敏保留前缀" { $masked.StartsWith("sk-x") } "脱敏丢失前缀"
+    Assert "脱敏保留后缀" { $masked.EndsWith("xxxx") } "脱敏丢失后缀"
 
     # ============================================================
     # 15. Sanitize-PathForReport 路径脱敏
