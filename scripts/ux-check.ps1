@@ -113,6 +113,7 @@ try {
         "install_wsl.sh",
         "install.ps1",
         "lib/bootstrap.ps1",
+        "lib/claude-install.ps1",
         "lib/common.ps1",
         "lib/env-check.ps1",
         "lib/config-writer.ps1",

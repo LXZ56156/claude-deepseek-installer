@@ -21,6 +21,9 @@ report*.txt
 # 安装完成报告
 install-report*.txt
 
+# 验收/自动化测试沙盒
+.sandbox/
+
 # PowerShell 临时文件
 *.tmp
 *.log

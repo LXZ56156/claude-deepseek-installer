@@ -96,6 +96,28 @@ if ($masked -eq $key -or $masked -notmatch "\*\*\*\*") {
     throw "Mask-ApiKey did not mask the key"
 }
 
+Write-Host "[check] Invoke-CommandSafe Windows command execution"
+$psResult = Invoke-CommandSafe -Command "powershell.exe" -Arguments @(
+    "-NoProfile", "-Command", "Write-Output ok; exit 0"
+)
+if (-not $psResult.Success -or $psResult.ExitCode -ne 0 -or $psResult.Output.Trim() -ne "ok") {
+    throw "Invoke-CommandSafe failed to capture powershell.exe success"
+}
+
+$tempCmdDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ccdi-check-cmd-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $tempCmdDir -Force | Out-Null
+try {
+    $tempCmd = Join-Path $tempCmdDir "ok.cmd"
+    Set-Content -Path $tempCmd -Encoding ASCII -Value "@echo off`r`necho cmd-ok`r`nexit /b 0"
+    $cmdResult = Invoke-CommandSafe -Command $tempCmd
+    if (-not $cmdResult.Success -or $cmdResult.ExitCode -ne 0 -or $cmdResult.Output.Trim() -ne "cmd-ok") {
+        throw "Invoke-CommandSafe failed to execute .cmd files"
+    }
+}
+finally {
+    Remove-Item -Path $tempCmdDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host "[check] Merge-SettingsJson"
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ccdi-check-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
@@ -347,6 +369,12 @@ try {
         "failed_npmmirror_unreachable", "failed_official_and_mirror")
     Write-Host "[check]     Valid Methods: $($validMethods -join ', ')"
     Write-Host "[check]     Valid Statuses: $($validStatuses -join ', ')"
+
+    # Start-Here.ps1 must continue in TestSafe when claude is missing/broken.
+    $startHereText = Get-Content (Join-Path $RootDir "Start-Here.ps1") -Raw
+    if ($startHereText -notmatch '\$script:TestSafeMode\s+-and\s+\$installResult\.Status\s+-match\s+"\^skipped_test_safe_"') {
+        throw "Start-Here.ps1 must treat skipped_test_safe_* as a TestSafe continuation state"
+    }
 
     Write-Host "[check]   All safety and structure checks passed"
 }

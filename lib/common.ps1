@@ -539,20 +539,44 @@ function Invoke-CommandSafe {
         Error    = ""
     }
 
-    $tmpOut = $null
-    $tmpErr = $null
-
     try {
-        # 使用唯一临时文件名避免并发冲突
+        $startFile = $Command
+        $startArguments = $Arguments
+        $commandInfo = $null
+        $candidates = @(Get-Command $Command -All -ErrorAction SilentlyContinue)
+        if ($candidates.Count -gt 0) {
+            $commandInfo = $candidates |
+                Where-Object {
+                    $_.CommandType -eq "Application" -and
+                    $_.Source -and
+                    ([System.IO.Path]::GetExtension($_.Source).ToLowerInvariant() -in @(".exe", ".com", ".cmd", ".bat"))
+                } |
+                Select-Object -First 1
+
+            if (-not $commandInfo) {
+                $commandInfo = $candidates | Select-Object -First 1
+            }
+
+            $resolvedPath = if ($commandInfo.Source) { $commandInfo.Source } else { $commandInfo.Definition }
+            if (-not [string]::IsNullOrWhiteSpace($resolvedPath)) {
+                $startFile = $resolvedPath
+            }
+        }
+
+        # Windows PowerShell 5.1 may return a blank Start-Process ExitCode,
+        # and npm often resolves to a .cmd shim. Run through cmd.exe and
+        # capture stdout/stderr/exit code explicitly.
         $tempDir = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
         $tmpOut = Join-Path $tempDir "ccdi_stdout_${PID}_$(Get-Random).tmp"
         $tmpErr = Join-Path $tempDir "ccdi_stderr_${PID}_$(Get-Random).tmp"
+        $tmpExit = Join-Path $tempDir "ccdi_exit_${PID}_$(Get-Random).tmp"
 
-        $argumentLine = ConvertTo-CommandLine -Arguments $Arguments
+        $commandLine = ConvertTo-CommandLine -Arguments (@($startFile) + $startArguments)
+        $innerCommand = "$commandLine > $(ConvertTo-CommandLineArgument -Argument $tmpOut) 2> $(ConvertTo-CommandLineArgument -Argument $tmpErr) & echo !ERRORLEVEL! > $(ConvertTo-CommandLineArgument -Argument $tmpExit)"
+        $cmdExe = if ($env:ComSpec) { $env:ComSpec } else { "cmd.exe" }
+        $argumentLine = "/d /v:on /s /c `"$innerCommand`""
 
-        $proc = Start-Process -FilePath $Command -ArgumentList $argumentLine `
-            -NoNewWindow -PassThru -RedirectStandardOutput $tmpOut `
-            -RedirectStandardError $tmpErr
+        $proc = Start-Process -FilePath $cmdExe -ArgumentList $argumentLine -NoNewWindow -PassThru
 
         # 等待进程完成，设置超时；长命令可选择性输出心跳提示。
         $finished = $false
@@ -590,30 +614,40 @@ function Invoke-CommandSafe {
             $result.Error = "命令执行超时 (${TimeoutSec}秒): $Command"
             $result.Success = $false
             Write-Log "ERROR" "命令超时: $Command $argumentLine"
+            foreach ($tmpPath in @($tmpOut, $tmpErr, $tmpExit)) {
+                if ($tmpPath -and (Test-Path $tmpPath)) {
+                    Remove-Item $tmpPath -Force -ErrorAction SilentlyContinue
+                }
+            }
             return $result
         }
 
-        $result.ExitCode = $proc.ExitCode
-        $result.Success = ($proc.ExitCode -eq 0)
-
-        if ($tmpOut -and (Test-Path $tmpOut)) {
-            $result.Output = Get-Content $tmpOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if (Test-Path $tmpExit) {
+            $exitText = (Get-Content $tmpExit -Raw -ErrorAction SilentlyContinue).Trim()
+            if ($exitText -match '^-?\d+$') {
+                $result.ExitCode = [int]$exitText
+            }
         }
-        if ($tmpErr -and (Test-Path $tmpErr)) {
+        $result.Success = ($result.ExitCode -eq 0)
+
+        if (Test-Path $tmpOut) {
+            $result.Output = Get-Content $tmpOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+            if ($null -eq $result.Output) { $result.Output = "" }
+        }
+        if (Test-Path $tmpErr) {
             $result.Error = Get-Content $tmpErr -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+            if ($null -eq $result.Error) { $result.Error = "" }
+        }
+
+        foreach ($tmpPath in @($tmpOut, $tmpErr, $tmpExit)) {
+            if ($tmpPath -and (Test-Path $tmpPath)) {
+                Remove-Item $tmpPath -Force -ErrorAction SilentlyContinue
+            }
         }
     }
     catch {
         $result.Error = $_.Exception.Message
         Write-Log "ERROR" "命令执行异常: $Command $Arguments, 错误: $($_.Exception.Message)"
-    }
-    finally {
-        if ($tmpOut -and (Test-Path $tmpOut)) {
-            Remove-Item $tmpOut -Force -ErrorAction SilentlyContinue
-        }
-        if ($tmpErr -and (Test-Path $tmpErr)) {
-            Remove-Item $tmpErr -Force -ErrorAction SilentlyContinue
-        }
     }
 
     return $result

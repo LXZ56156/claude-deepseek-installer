@@ -391,6 +391,12 @@ function Step-InstallClaudeCode {
         return $false
     }
 
+    if ($script:TestSafeMode -and $installResult.Status -match "^skipped_test_safe_") {
+        Write-Warning "测试安全模式：未执行 Claude Code 安装，继续验证沙盒配置写入。"
+        Write-ResultLine "Claude Code 安装" "SKIP" "测试安全模式未安装或更新"
+        return $true
+    }
+
     if (-not $installResult.Success) {
         Write-Error-Msg "Claude Code 安装未成功。"
         Write-Info "请先解决安装问题后重新运行本脚本。"
