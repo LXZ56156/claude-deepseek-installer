@@ -197,10 +197,10 @@ $safePlaceholders = @(
     "sk-xxxx",
     "__API_KEY__",
     "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    "sk-1234567890abcdef1234567890abcdef",  # scripts/check.ps1 Mask-ApiKey test
-    "sk-test1234567890abcdef1234567890abcdef1234567890ab",  # ux-check.ps1/test scripts
-    "sk-fake1234567890abcdef1234567890abcdef1234567890ab",  # ux-check.sh test key
-    "sk-1234567890abcdef1234567890abcdef1234567890ab"       # ux-check.ps1 test key
+    ("sk-" + ("x" * 32)),      # scripts/check.ps1 Mask-ApiKey test
+    ("sk-test" + ("x" * 42)),  # ux-check.ps1/test scripts
+    ("sk-fake" + ("x" * 42)),  # ux-check.sh test key
+    ("sk-" + ("x" * 46))       # ux-check.ps1 test key
 )
 
 $dangerPatterns = @(

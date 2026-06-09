@@ -13,7 +13,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $BuildScript = Join-Path $ProjectRoot "scripts\build-release.ps1"
 $ReleaseDir = Join-Path $ProjectRoot "release"
-$DummyApiKey = "sk-1234567890abcdef1234567890abcdef"
+$DummyApiKey = "sk-" + ("x" * 32)
 
 function Write-Check {
     param([string]$Message)
