@@ -259,7 +259,7 @@ function Add-ApiKeyHitsFromContent {
 Write-Host ""
 Write-Host "[3.4/5] 源目录 API Key 预扫描..." -ForegroundColor Cyan
 
-$sourceScanExcludes = @(".git", "logs", "backup", "reports", "release", "node_modules")
+$sourceScanExcludes = @(".git", ".sandbox", "logs", "backup", "reports", "release", "node_modules")
 
 $sourceApiHits = [System.Collections.Generic.List[object]]::new()
 
@@ -402,6 +402,25 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
             if (Test-Path $OutputDir) { Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue }
             exit 1
         }
+    }
+
+    # .sh: 统一规范为 LF（UTF-8 without BOM）
+    # Windows 构建环境可能引入 CRLF，导致 WSL 用户解压后 bash -n 报错
+    $shFiles = Get-ChildItem -Path $stagingDir -Filter "*.sh" -Recurse -ErrorAction SilentlyContinue
+    $utf8NoBomEncoding = New-Object System.Text.UTF8Encoding($false)
+
+    foreach ($f in $shFiles) {
+        $text = [System.IO.File]::ReadAllText($f.FullName)
+        # CRLF → LF，单独 CR → LF（处理混合行尾）
+        $normalized = $text -replace "`r`n", "`n" -replace "`r", "`n"
+        if ($normalized -ne $text) {
+            [System.IO.File]::WriteAllText($f.FullName, $normalized, $utf8NoBomEncoding)
+            Write-Host "  [LF] $($f.Name)" -ForegroundColor Cyan
+        }
+    }
+
+    if ($shFiles.Count -gt 0) {
+        Write-Host "  .sh LF 规范化: $($shFiles.Count) 个文件" -ForegroundColor Green
     }
 
     # .ps1/.psm1 构建时校验：必须都有 BOM
