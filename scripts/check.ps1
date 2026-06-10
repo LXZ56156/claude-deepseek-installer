@@ -340,6 +340,18 @@ if ($claudeInstallText -notmatch 'ProgressMessage') {
 if ($claudeInstallText -notmatch '安装流程会继续') {
     throw "Invoke-ClaudeDoctorSafe should tell users claude doctor failure does not block installation"
 }
+if ($doctorText -notmatch 'claude doctor（快速诊断，最多等待 30 秒）') {
+    throw "doctor.ps1 should describe claude doctor as a quick, bounded diagnostic"
+}
+if ($doctorText -notmatch '-TimeoutSec\s+30') {
+    throw "doctor.ps1 should cap claude doctor at 30 seconds"
+}
+if ($doctorText -notmatch 'ProgressMessage') {
+    throw "doctor.ps1 should show progress while claude doctor is running"
+}
+if ($doctorText -notmatch '不影响后续诊断') {
+    throw "doctor.ps1 should tell users claude doctor failure does not block diagnostics"
+}
 
 Write-Host "[check] uninstall backup listing"
 $uninstallText = Get-Content -Path (Join-Path $RootDir "uninstall-config.ps1") -Raw -Encoding UTF8

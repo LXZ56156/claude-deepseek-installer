@@ -253,14 +253,19 @@ function Check-Commands {
     if ($claudeVersion) {
         Add-CheckResult "Claude Code CLI" "OK" $claudeVersion
 
-        # 运行 claude doctor
-        Write-Info "正在运行 claude doctor..."
-        $claudeDoctor = Invoke-CommandSafe -Command "claude" -Arguments @("doctor")
+        # 运行 claude doctor。该命令在首次启动或网络异常时可能等待较久，
+        # 诊断工具只做快速采样，不能阻断后续检查。
+        Write-Info "正在运行 claude doctor（快速诊断，最多等待 30 秒）..."
+        Write-Info "如果 claude doctor 较慢，会自动跳过；不影响后续诊断。"
+        $claudeDoctor = Invoke-CommandSafe -Command "claude" -Arguments @("doctor") `
+            -TimeoutSec 30 `
+            -ProgressMessage "claude doctor 仍在运行，若超过 30 秒将自动跳过。" `
+            -ProgressIntervalSec 10
         if ($claudeDoctor.Success) {
             Add-CheckResult "claude doctor" "OK" "已执行"
         }
         else {
-            Add-CheckResult "claude doctor" "WARN" "执行返回非零退出码"
+            Add-CheckResult "claude doctor" "WARN" "未完成或返回非零退出码，已跳过"
         }
     }
     else {
