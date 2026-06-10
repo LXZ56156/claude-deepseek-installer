@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # scripts/validate.ps1 - unified validation entry
 #
 # Usage:
@@ -18,17 +18,32 @@ param(
 
     [string]$Version = "1.3.2",
 
-    [switch]$SkipPwsh
+    [switch]$SkipPwsh,
+
+    [switch]$RequireClean
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+# 显式导入核心模块（部分环境的模块自动加载不可用）
+Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue
 
 $RootDir = Split-Path -Parent $PSScriptRoot
 Set-Location $RootDir
 
 $script:StepCount = 0
 $script:Failures = New-Object System.Collections.ArrayList
+
+# git 可用性检查
+$gitAvailable = $null -ne (Get-Command "git" -ErrorAction SilentlyContinue)
+if (-not $gitAvailable) {
+    Write-Host "[validate] ERROR: git is not available. Validation cannot proceed." -ForegroundColor Red
+    exit 1
+}
+
+# RequireClean 逻辑
+$requireCleanForRun = $RequireClean -or ($Mode -eq "All")
 
 function Write-ValidationHeader {
     param([string]$Title)
@@ -191,6 +206,9 @@ function Invoke-SmokeValidation {
     Invoke-ValidationStep -Name "git diff --check" -ScriptBlock ([scriptblock]{
         Invoke-ExternalCommand -FileName "git" -Arguments @("diff", "--check")
     })
+    Invoke-ValidationStep -Name "git diff --cached --check" -ScriptBlock ([scriptblock]{
+        Invoke-ExternalCommand -FileName "git" -Arguments @("diff", "--cached", "--check")
+    })
     Invoke-ValidationStep -Name "scripts/check.ps1 (Windows PowerShell)" -ScriptBlock ([scriptblock]{
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\check.ps1")
     })
@@ -227,9 +245,19 @@ function Invoke-ReleaseValidation {
 }
 
 $beforeSettings = Get-RealSettingsSnapshot
-Write-Host "[validate] Mode=$Mode Version=$Version"
-Write-Host "[validate] Branch=$(git branch --show-current)"
+Write-Host "[validate] Mode=$Mode Version=$Version Branch=$(git branch --show-current) RequireClean=$requireCleanForRun"
 Write-Host "[validate] Real settings baseline: Exists=$($beforeSettings.Exists) Length=$($beforeSettings.Length) SHA256=$($beforeSettings.SHA256)"
+
+# RequireClean 下的 git status 检查（在验证步骤开始前运行）
+if ($requireCleanForRun) {
+    Invoke-ValidationStep -Name "git status clean" -ScriptBlock {
+        $status = git status --short
+        if ($status) {
+            $msg = "Working tree is not clean:`n" + ($status -join "`n")
+            throw $msg
+        }
+    }
+}
 
 switch ($Mode) {
     "Smoke" {
@@ -253,17 +281,32 @@ Invoke-ValidationStep -Name "real settings.json unchanged" -ScriptBlock ([script
 })
 
 Write-Host ""
+Write-Host "==============================================================" -ForegroundColor Cyan
+Write-Host "  Validation Summary" -ForegroundColor Cyan
+Write-Host "==============================================================" -ForegroundColor Cyan
+Write-Host "  Mode:              $Mode"
+Write-Host "  Version:           $Version"
+Write-Host "  Branch:            $(git branch --show-current)"
+Write-Host "  RequireClean:      $requireCleanForRun"
+Write-Host "  Real settings:     Exists=$($beforeSettings.Exists) Length=$($beforeSettings.Length) SHA256=$($beforeSettings.SHA256)"
+Write-Host "  Steps executed:    $script:StepCount"
+Write-Host "  Failures:          $($script:Failures.Count)"
+
 if ($script:Failures.Count -gt 0) {
+    Write-Host ""
     Write-Host "==============================================================" -ForegroundColor Red
-    Write-Host "  Validation failed: $($script:Failures.Count) step(s)" -ForegroundColor Red
+    Write-Host "  Validation FAILED: $($script:Failures.Count) step(s)" -ForegroundColor Red
     Write-Host "==============================================================" -ForegroundColor Red
+    Write-Host "  Failed steps:"
     foreach ($failure in $script:Failures) {
         Write-Host "  - $failure" -ForegroundColor Red
     }
+    Write-Host "==============================================================" -ForegroundColor Red
     exit 1
 }
 
+Write-Host ""
 Write-Host "==============================================================" -ForegroundColor Green
-Write-Host "  Validation passed: $($script:StepCount) step(s)" -ForegroundColor Green
+Write-Host "  Validation PASSED: $($script:StepCount) step(s)" -ForegroundColor Green
 Write-Host "==============================================================" -ForegroundColor Green
 exit 0

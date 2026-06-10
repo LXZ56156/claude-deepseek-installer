@@ -6,8 +6,8 @@
 #   powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version "1.3.2"
 #
 # 输出:
-#   release/ClaudeCode-DeepSeek-本地配置助手-v1.3.0.zip
-#   release/ClaudeCode-DeepSeek-本地配置助手-v1.3.0.zip.sha256
+#   release/ClaudeCode-DeepSeek-本地配置助手-v<Version>.zip
+#   release/ClaudeCode-DeepSeek-本地配置助手-v<Version>.zip.sha256
 # ============================================================
 
 param(
@@ -17,6 +17,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# 显式导入核心模块（部分环境的模块自动加载不可用）
+Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue
 
 # 确定项目根目录
 $ProjectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
@@ -74,7 +77,6 @@ $RequiredFiles = @(
     "lib/deepseek-env.defaults.json",
     "scripts/check.ps1",
     "scripts/check.sh",
-    "scripts/package-release.ps1",
     "README.md",
     "QUICK_START.md",
     "LICENSE"
@@ -131,9 +133,15 @@ Write-Host ""
 
 # 白名单：只有这些文件/目录可以进入 release ZIP
 # 任何未列出的文件都会被排除，防止本地临时文件误入商品包
+#
+# 不进入买家 ZIP 的开发者/验收资产：
+#   build-release.ps1, simulate-user-release.ps1, package-release.ps1（源码维护/开发者验收）
+#   CLAUDE.md, .gitignore, .git/（项目元数据）
+#   logs/, backup/, reports/, release/, report.txt（运行产物）
+#
 # docs/ 和 examples/ 使用文件级白名单，防止截图/草稿/内部文档误入
 $AllowedEntries = @(
-    # === 入口文件 ===
+    # === 入口文件（用户双击的 .cmd 文件） ===
     "开始安装.cmd",
     "一键诊断.cmd",
     "恢复或卸载配置.cmd",
@@ -141,7 +149,7 @@ $AllowedEntries = @(
     "Start-Install.cmd",
     "Run-Diagnostics.cmd",
     "Restore-Config.cmd",
-    # === 主脚本 ===
+    # === 主脚本（PowerShell/WSL 入口） ===
     "Start-Here.ps1",
     "install.ps1",
     "configure-deepseek.ps1",
@@ -149,7 +157,7 @@ $AllowedEntries = @(
     "uninstall-config.ps1",
     "repair-deps.ps1",
     "install_wsl.sh",
-    # === lib 目录（随迭代增减，允许整目录复制） ===
+    # === lib 目录（核心库，随迭代增减，允许整目录复制） ===
     "lib/bootstrap.ps1",
     "lib/claude-install.ps1",
     "lib/common.ps1",
@@ -158,7 +166,7 @@ $AllowedEntries = @(
     "lib/logger.ps1",
     "lib/state.ps1",
     "lib/deepseek-env.defaults.json",
-    # === docs 文件级白名单 ===
+    # === docs 文件级白名单（用户可见文档） ===
     "docs/用户使用教程.md",
     "docs/常见问题FAQ.md",
     "docs/闲鱼商品说明.md",
@@ -169,10 +177,10 @@ $AllowedEntries = @(
     # === examples 文件级白名单 ===
     "examples/settings.deepseek.example.json",
     "examples/report.example.txt",
-    # === scripts 文件级白名单 ===
+    # === scripts 文件级白名单（用户可用/售后可用的检查脚本） ===
+    # 注意: build-release.ps1 / simulate-user-release.ps1 / package-release.ps1 不进入买家 ZIP
     "scripts/check.ps1",
     "scripts/check.sh",
-    "scripts/package-release.ps1",
     "scripts/ux-check.ps1",
     "scripts/ux-check.sh",
     # === 根目录文档 ===

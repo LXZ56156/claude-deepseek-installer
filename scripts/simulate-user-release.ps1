@@ -291,8 +291,10 @@ function Assert-ZipDoesNotContainForbiddenEntries {
             "logs/",
             "backup/",
             "reports/",
+            "release/",
             "scripts/build-release.ps1",
             "scripts/simulate-user-release.ps1",
+            "scripts/package-release.ps1",
             "CLAUDE.md",
             ".gitignore",
             "report.txt"
@@ -417,8 +419,8 @@ try {
     ) -WorkingDirectory $releaseRoot -Environment $envVars -TimeoutSec 180
     [void]$runs.Add($startFlowRun)
 
-    [void]$runs.Add((Invoke-SimCommand -Name "Start-Install.cmd cancel" -FileName $cmdExe -Arguments @("/d", "/c", "echo N| Start-Install.cmd") -WorkingDirectory $releaseRoot -Environment $envVars))
-    [void]$runs.Add((Invoke-SimCommand -Name "开始安装.cmd cancel" -FileName $cmdExe -Arguments @("/d", "/c", "echo N| 开始安装.cmd") -WorkingDirectory $releaseRoot -Environment $envVars))
+    [void]$runs.Add((Invoke-SimCommand -Name "Start-Install.cmd cancel" -FileName $cmdExe -Arguments @("/d", "/c", "echo N| .\Start-Install.cmd") -WorkingDirectory $releaseRoot -Environment $envVars))
+    [void]$runs.Add((Invoke-SimCommand -Name "开始安装.cmd cancel" -FileName $cmdExe -Arguments @("/d", "/c", "echo N| .\开始安装.cmd") -WorkingDirectory $releaseRoot -Environment $envVars))
 
     $startHereLogs = Get-ChildItem -Path (Join-Path $releaseRoot "logs") -Filter "start-here-*.log" -ErrorAction SilentlyContinue
     $startHereLogText = ($startHereLogs | ForEach-Object { Get-Content -Path $_.FullName -Raw -Encoding UTF8 }) -join "`n"
@@ -448,11 +450,11 @@ try {
     }
     [void]$runs.Add($partialStateRun)
 
-    [void]$runs.Add((Invoke-SimCommand -Name "Run-Diagnostics.cmd" -FileName $cmdExe -Arguments @("/c", "Run-Diagnostics.cmd") -InputText "`r`n" -WorkingDirectory $releaseRoot -Environment $envVars -TimeoutSec 180))
-    [void]$runs.Add((Invoke-SimCommand -Name "一键诊断.cmd" -FileName $cmdExe -Arguments @("/c", "一键诊断.cmd") -InputText "`r`n" -WorkingDirectory $releaseRoot -Environment $envVars -TimeoutSec 180))
+    [void]$runs.Add((Invoke-SimCommand -Name "Run-Diagnostics.cmd" -FileName $cmdExe -Arguments @("/c", ".\Run-Diagnostics.cmd") -InputText "`r`n" -WorkingDirectory $releaseRoot -Environment $envVars -TimeoutSec 180))
+    [void]$runs.Add((Invoke-SimCommand -Name "一键诊断.cmd" -FileName $cmdExe -Arguments @("/c", ".\一键诊断.cmd") -InputText "`r`n" -WorkingDirectory $releaseRoot -Environment $envVars -TimeoutSec 180))
 
-    [void]$runs.Add((Invoke-SimCommand -Name "Restore-Config.cmd" -FileName $cmdExe -Arguments @("/c", "Restore-Config.cmd") -InputText "4`r`n`r`n" -WorkingDirectory $releaseRoot -Environment $envVars))
-    [void]$runs.Add((Invoke-SimCommand -Name "恢复或卸载配置.cmd" -FileName $cmdExe -Arguments @("/c", "恢复或卸载配置.cmd") -InputText "4`r`n`r`n" -WorkingDirectory $releaseRoot -Environment $envVars))
+    [void]$runs.Add((Invoke-SimCommand -Name "Restore-Config.cmd" -FileName $cmdExe -Arguments @("/c", ".\Restore-Config.cmd") -InputText "4`r`n`r`n" -WorkingDirectory $releaseRoot -Environment $envVars))
+    [void]$runs.Add((Invoke-SimCommand -Name "恢复或卸载配置.cmd" -FileName $cmdExe -Arguments @("/c", ".\恢复或卸载配置.cmd") -InputText "4`r`n`r`n" -WorkingDirectory $releaseRoot -Environment $envVars))
 
     $settingsPath = Join-Path $testProfile ".claude\settings.json"
     $customSettings = [PSCustomObject]@{
@@ -586,7 +588,7 @@ try {
         "恢复或卸载配置.cmd"
     )) {
         Copy-Item -Path (Join-Path $releaseRoot $launcher) -Destination (Join-Path $missingDir $launcher) -Force
-        $run = Invoke-SimCommand -Name "missing package: $launcher" -FileName $cmdExe -Arguments @("/c", $launcher) -InputText "`r`n" -WorkingDirectory $missingDir -ExpectedExitCode 1 -Environment $envVars
+        $run = Invoke-SimCommand -Name "missing package: $launcher" -FileName $cmdExe -Arguments @("/c", (".\" + $launcher)) -InputText "`r`n" -WorkingDirectory $missingDir -ExpectedExitCode 1 -Environment $envVars
         if ($run.Combined -notmatch "Please extract the full ZIP package first") {
             throw "$launcher did not show extract-full-ZIP guidance"
         }

@@ -10,6 +10,7 @@
 # ============================================================
 
 $ErrorActionPreference = "Stop"
+Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue
 $ScriptRoot = Split-Path -Parent $PSScriptRoot
 $SandboxDir = Join-Path $ScriptRoot ".sandbox"
 $TotalPassed = 0
