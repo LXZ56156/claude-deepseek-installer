@@ -431,8 +431,12 @@ function Invoke-ClaudeDoctorSafe {
         return $result
     }
 
-    Write-Info "运行 claude doctor..."
-    $doctorResult = Invoke-CommandSafe -Command "claude" -Arguments @("doctor") -TimeoutSec 180
+    Write-Info "运行 claude doctor（快速诊断，最多等待 30 秒）..."
+    Write-Info "如果首次运行较慢，会自动跳过；不影响后续 DeepSeek 配置。"
+    $doctorResult = Invoke-CommandSafe -Command "claude" -Arguments @("doctor") `
+        -TimeoutSec 30 `
+        -ProgressMessage "claude doctor 仍在运行，若超过 30 秒将自动跳过。" `
+        -ProgressIntervalSec 10
 
     if ($doctorResult.Success) {
         Write-Host $doctorResult.Output
@@ -440,6 +444,8 @@ function Invoke-ClaudeDoctorSafe {
         $result.Output = $doctorResult.Output
     }
     else {
+        Write-Warning "claude doctor 未完成或返回异常，已跳过。安装流程会继续。"
+        Write-Info "如需进一步排查，安装结束后可运行「一键诊断.cmd」。"
         Write-Log "DEBUG" "claude doctor 输出: $($doctorResult.Error)"
         $result.Output = $doctorResult.Error
     }

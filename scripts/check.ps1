@@ -305,6 +305,21 @@ foreach ($pattern in $requiredDoctorCountPatterns) {
     }
 }
 
+Write-Host "[check] Claude doctor quick-check UX"
+$claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+if ($claudeInstallText -notmatch 'claude doctor（快速诊断，最多等待 30 秒）') {
+    throw "Invoke-ClaudeDoctorSafe should clearly describe claude doctor as a quick, bounded diagnostic"
+}
+if ($claudeInstallText -notmatch '-TimeoutSec\s+30') {
+    throw "Invoke-ClaudeDoctorSafe should cap claude doctor at 30 seconds"
+}
+if ($claudeInstallText -notmatch 'ProgressMessage') {
+    throw "Invoke-ClaudeDoctorSafe should show progress while claude doctor is running"
+}
+if ($claudeInstallText -notmatch '安装流程会继续') {
+    throw "Invoke-ClaudeDoctorSafe should tell users claude doctor failure does not block installation"
+}
+
 Write-Host "[check] uninstall backup listing"
 $uninstallText = Get-Content -Path (Join-Path $RootDir "uninstall-config.ps1") -Raw -Encoding UTF8
 if ($uninstallText -match '\[void\]\s*\(\s*Show-ConfigBackups\s*\)') {
