@@ -149,6 +149,7 @@ try {
                 $refFile = $ref.Groups[1].Value.Trim()
                 if ($refFile -match '^%') { continue }  # Skip env var references like %USERPROFILE%
                 if ($refFile -eq "install.sh") { continue }  # External Claude installer URL path fragment.
+                if ($refFile -eq "settings.json") { continue }  # User config file, not a repo file.
                 if ($refFile -match '\.(cmd|ps1|sh|md|json)$') {
                     # 如果有路径分隔符，检查文件
                     if ($refFile -match '[\\/]') {

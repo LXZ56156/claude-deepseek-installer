@@ -255,17 +255,23 @@ function Check-Commands {
 
         # 运行 claude doctor。该命令在首次启动或网络异常时可能等待较久，
         # 诊断工具只做快速采样，不能阻断后续检查。
-        Write-Info "正在运行 claude doctor（快速诊断，最多等待 30 秒）..."
-        Write-Info "如果 claude doctor 较慢，会自动跳过；不影响后续诊断。"
-        $claudeDoctor = Invoke-CommandSafe -Command "claude" -Arguments @("doctor") `
-            -TimeoutSec 30 `
-            -ProgressMessage "claude doctor 仍在运行，若超过 30 秒将自动跳过。" `
-            -ProgressIntervalSec 10
-        if ($claudeDoctor.Success) {
-            Add-CheckResult "claude doctor" "OK" "已执行"
+        if ($env:CCDI_TEST_MODE -eq "1") {
+            Write-Info "测试安全模式：跳过 claude doctor（快速诊断，最多等待 30 秒）。"
+            Add-CheckResult "claude doctor" "SKIP" "测试安全模式已跳过"
         }
         else {
-            Add-CheckResult "claude doctor" "WARN" "未完成或返回非零退出码，已跳过"
+            Write-Info "正在运行 claude doctor（快速诊断，最多等待 30 秒）..."
+            Write-Info "如果 claude doctor 较慢，会自动跳过；不影响后续诊断。"
+            $claudeDoctor = Invoke-CommandSafe -Command "claude" -Arguments @("doctor") `
+                -TimeoutSec 30 `
+                -ProgressMessage "claude doctor 仍在运行，若超过 30 秒将自动跳过。" `
+                -ProgressIntervalSec 10
+            if ($claudeDoctor.Success) {
+                Add-CheckResult "claude doctor" "OK" "已执行"
+            }
+            else {
+                Add-CheckResult "claude doctor" "WARN" "未完成或返回非零退出码，已跳过"
+            }
         }
     }
     else {

@@ -261,7 +261,15 @@ exit `$LASTEXITCODE
         throw "uninstall-config -ShowStatusOnly failed with partial state"
     }
 
-    $showStatusText = ($showStatusOutput | Out-String)
+    $latestUninstallLog = Get-ChildItem -Path (Join-Path $RootDir "logs") -Filter "uninstall-config-*.log" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    $showStatusText = if ($latestUninstallLog) {
+        Get-Content -Path $latestUninstallLog.FullName -Raw -Encoding UTF8
+    }
+    else {
+        ($showStatusOutput | Out-String)
+    }
     if ($showStatusText -notmatch "安装方式: existing") {
         throw "uninstall-config -ShowStatusOnly did not read partial state"
     }
@@ -416,6 +424,9 @@ if ($doctorText -notmatch 'ProgressMessage') {
 }
 if ($doctorText -notmatch '不影响后续诊断') {
     throw "doctor.ps1 should tell users claude doctor failure does not block diagnostics"
+}
+if ($doctorText -notmatch 'CCDI_TEST_MODE\s+-eq\s+"1"') {
+    throw "doctor.ps1 should skip claude doctor when CCDI_TEST_MODE=1"
 }
 
 Write-Host "[check] uninstall backup listing"

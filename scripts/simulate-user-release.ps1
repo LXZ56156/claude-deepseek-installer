@@ -394,7 +394,8 @@ try {
             "Get-WindowsVersionInfo",
             "Test-ClaudeInstalled",
             "Write-DeepSeekConfig",
-            "Get-DeepSeekConfigStatus"
+            "Get-DeepSeekConfigStatus",
+            "Get-CcdiStateValue"
         )
         foreach ($cmd in $requiredCommands) {
             if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
@@ -424,9 +425,28 @@ try {
     $startHereRuntimeText = "$startHereLogText`n$($startFlowRun.Combined)"
     $testSettingsPath = Join-Path $testProfile ".claude\settings.json"
     $installReports = Get-ChildItem -Path (Join-Path $releaseRoot "reports") -Filter "install-report-*.txt" -ErrorAction SilentlyContinue
-    if ((-not (Test-Path $testSettingsPath)) -or (-not $installReports) -or $startHereRuntimeText -notmatch "DeepSeek 配置写入已验证") {
+    if ((-not (Test-Path $testSettingsPath)) -or (-not $installReports) -or $startHereRuntimeText -notmatch "DeepSeek 配置写入.*(已验证|已在沙盒路径验证)") {
         throw "Start-Here TestSafe flow did not complete configuration validation"
     }
+
+    $partialStateDir = Join-Path $testProfile ".claude-deepseek-installer"
+    New-Item -ItemType Directory -Path $partialStateDir -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $partialStateDir "state.json"),
+        "{`"claudeInstallMethod`":`"existing`",`"claudeWasAlreadyInstalled`":true,`"claudeInstallStatus`":`"skipped_existing`"}",
+        (New-Object System.Text.UTF8Encoding($false))
+    )
+    $partialStateRun = Invoke-SimCommand -Name "uninstall-config.ps1 partial state ShowStatusOnly" -FileName $powerShellExe -Arguments @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $releaseRoot "uninstall-config.ps1"), "-ShowStatusOnly"
+    ) -WorkingDirectory $releaseRoot -Environment $envVars
+    $partialStateLog = Get-ChildItem -Path (Join-Path $releaseRoot "logs") -Filter "uninstall-config-*.log" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    $partialStateLogText = if ($partialStateLog) { Get-Content -Path $partialStateLog.FullName -Raw -Encoding UTF8 } else { "" }
+    if ($partialStateLogText -notmatch "安装时间: \(未记录\)") {
+        throw "partial state ShowStatusOnly did not show missing installedAt default"
+    }
+    [void]$runs.Add($partialStateRun)
 
     [void]$runs.Add((Invoke-SimCommand -Name "Run-Diagnostics.cmd" -FileName $cmdExe -Arguments @("/c", "Run-Diagnostics.cmd") -InputText "`r`n" -WorkingDirectory $releaseRoot -Environment $envVars -TimeoutSec 180))
     [void]$runs.Add((Invoke-SimCommand -Name "一键诊断.cmd" -FileName $cmdExe -Arguments @("/c", "一键诊断.cmd") -InputText "`r`n" -WorkingDirectory $releaseRoot -Environment $envVars -TimeoutSec 180))

@@ -849,7 +849,7 @@ function Test-DeepSeekApiAnthropic {
         # 构建 Anthropic Format 请求体
         $requestBody = @{
             model      = $Model
-            max_tokens = 16
+            max_tokens = 64
             messages   = @(
                 @{
                     role    = "user"
@@ -876,11 +876,17 @@ function Test-DeepSeekApiAnthropic {
         # StrictMode 下缺失属性会抛异常，导致 API 错误无法正常归类。
         $responseProps = @(Get-CcdiObjectPropertyNamesSafe -Object $response)
         if ($responseProps -contains "content") {
-            if ($response.content -is [array] -and $response.content.Count -gt 0) {
-                $result.Content = $response.content[0].text
+            $contentItems = @($response.content)
+            foreach ($item in $contentItems) {
+                $itemProps = @(Get-CcdiObjectPropertyNamesSafe -Object $item)
+                if ($itemProps -contains "text" -and -not [string]::IsNullOrWhiteSpace($item.text)) {
+                    $result.Content = $item.text
+                    break
+                }
             }
-            else {
-                $result.Content = $response.content.ToString()
+
+            if ([string]::IsNullOrWhiteSpace($result.Content) -and $contentItems.Count -gt 0) {
+                $result.Content = $contentItems[0].ToString()
             }
         }
         elseif ($responseProps -contains "choices") {
