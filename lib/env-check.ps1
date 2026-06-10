@@ -10,6 +10,19 @@
 # 系统信息检测
 # ============================================================
 
+function Get-CcdiObjectPropertyNamesSafe {
+    param(
+        [Parameter(Mandatory = $false)]
+        $Object
+    )
+
+    if ($null -eq $Object) {
+        return @()
+    }
+
+    return @($Object.PSObject.Properties | ForEach-Object { $_.Name })
+}
+
 function Get-WindowsVersionInfo {
     <#
     .SYNOPSIS
@@ -859,8 +872,10 @@ function Test-DeepSeekApiAnthropic {
 
         $result.StatusCode = 200
 
-        # 解析 Anthropic Format 响应
-        if ($response.content) {
+        # 解析 Anthropic Format 响应。不能直接访问不存在的属性；
+        # StrictMode 下缺失属性会抛异常，导致 API 错误无法正常归类。
+        $responseProps = @(Get-CcdiObjectPropertyNamesSafe -Object $response)
+        if ($responseProps -contains "content") {
             if ($response.content -is [array] -and $response.content.Count -gt 0) {
                 $result.Content = $response.content[0].text
             }
@@ -868,7 +883,7 @@ function Test-DeepSeekApiAnthropic {
                 $result.Content = $response.content.ToString()
             }
         }
-        elseif ($response.choices) {
+        elseif ($responseProps -contains "choices") {
             # OpenAI 兼容格式回退
             $result.Content = $response.choices[0].message.content
         }
@@ -882,8 +897,21 @@ function Test-DeepSeekApiAnthropic {
         }
     }
     catch {
-        if ($_.Exception.Response) {
-            $statusCode = [int]$_.Exception.Response.StatusCode
+        $exception = $_.Exception
+        $exceptionProps = @(Get-CcdiObjectPropertyNamesSafe -Object $exception)
+        $exceptionResponse = $null
+        if ($exceptionProps -contains "Response") {
+            $exceptionResponse = $exception.Response
+        }
+
+        if ($null -ne $exceptionResponse) {
+            $responseProps = @(Get-CcdiObjectPropertyNamesSafe -Object $exceptionResponse)
+            if ($responseProps -contains "StatusCode") {
+                $statusCode = [int]$exceptionResponse.StatusCode
+            }
+            else {
+                $statusCode = 0
+            }
             $result.StatusCode = $statusCode
 
             switch ($statusCode) {
@@ -920,7 +948,7 @@ function Test-DeepSeekApiAnthropic {
                     $result.Suggestion = "DeepSeek 官方正在维护或过载，请稍后重试。这不是您的配置问题。"
                 }
                 default {
-                    $result.Error = "HTTP $statusCode"
+                    $result.Error = if ($statusCode -gt 0) { "HTTP $statusCode" } else { "HTTP 请求失败" }
                     $result.Suggestion = "未知错误，请运行 doctor.ps1 获取诊断报告。"
                 }
             }

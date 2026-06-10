@@ -212,6 +212,27 @@ finally {
 }
 Write-Host "[check] Empty env StrictMode safety OK"
 
+Write-Host "[check] API test exception handling"
+$oldApiStatus = $env:CCDI_TEST_API_STATUS
+try {
+    Remove-Item Env:\CCDI_TEST_API_STATUS -ErrorAction SilentlyContinue
+    $apiFailure = Test-DeepSeekApiAnthropic `
+        -ApiKey ("sk-" + ("x" * 32)) `
+        -BaseUrl "http://127.0.0.1:1/anthropic" `
+        -Model "deepseek-v4-flash"
+
+    if ($apiFailure.Success) {
+        throw "Local closed-port API test should not succeed"
+    }
+    if ([string]::IsNullOrWhiteSpace($apiFailure.Error)) {
+        throw "API failure should return a structured error message"
+    }
+}
+finally {
+    if ($oldApiStatus) { $env:CCDI_TEST_API_STATUS = $oldApiStatus } else { Remove-Item Env:\CCDI_TEST_API_STATUS -ErrorAction SilentlyContinue }
+}
+Write-Host "[check] API test exception handling OK"
+
 function Write-NetworkCheckResult {
     param(
         [string]$Name,
