@@ -280,6 +280,17 @@ Invoke-ValidationStep -Name "real settings.json unchanged" -ScriptBlock ([script
     Assert-RealSettingsUnchanged -Before $beforeSettings -After $afterSettings
 })
 
+# 结束前 final git status clean（兜底：防止验证步骤意外生成未被 .gitignore 覆盖的文件）
+if ($requireCleanForRun) {
+    Invoke-ValidationStep -Name "final git status clean" -ScriptBlock {
+        $status = git status --short
+        if ($status) {
+            $msg = "Working tree is not clean after validation:`n" + ($status -join "`n")
+            throw $msg
+        }
+    }
+}
+
 Write-Host ""
 Write-Host "==============================================================" -ForegroundColor Cyan
 Write-Host "  Validation Summary" -ForegroundColor Cyan
