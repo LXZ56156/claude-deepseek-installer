@@ -21,7 +21,8 @@ param(
     [switch]$SkipDisclaimer,
     [switch]$StepPause,
     [switch]$TestSafe,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$FixDeps
 )
 
 # ============================================================
@@ -713,6 +714,8 @@ function Step-GenerateReport {
     $claudeVer = Test-ClaudeInstalled
     $codeVer = Test-CodeInstalled
     $wslInfo = Test-WslInstalled
+    $nodeInfo = Test-NodeJsInstalled
+    $npmInfo = Test-NpmInstalled
     $maskedKey = Mask-ApiKey -Key $ApiKey
 
     $apiTestStatus = if ($script:ApiTestPassed) { "通过" }
@@ -749,12 +752,25 @@ $reportTitle
 脚本版本: v$ScriptVersion
 运行模式: $(if ($script:TestSafeMode) { "测试安全模式" } else { "一键安装" })
 
+【一眼结论】
+--------------------------------------
+运行环境: Windows ($($winInfo.Version))
+Claude Code: $(if ($script:TestSafeMode) { "测试安全模式未执行真实安装" } elseif ($claudeVer) { "已安装 ($claudeVer)" } elseif ($script:ClaudeInstallStatus -match "needs_restart") { "已安装但需重开终端" } else { "未安装" })
+Node.js: $(if ($nodeInfo.Installed) { "$($nodeInfo.Version)" } else { "未安装" })
+npm: $(if ($npmInfo.Installed) { "$($npmInfo.Version)" } else { "不可用" })
+DeepSeek 配置: $(if ($script:ConfigWritten) { "已配置" } else { "未配置" })
+API 测试: $apiTestStatus$(if ($script:ApiTestFailed) { " ($script:ApiTestFailReason)" } elseif ($script:ApiTestSkipped) { " - 未验证 API 是否可用" } else { "" })
+整体状态: $overallStatus
+$(if ($script:TestSafeMode) { "测试安全模式流程完成，不代表真实安装/API 已验证。" } else { "" })
+$(if ($script:ClaudeInstallStatus -match "needs_restart") { "NEEDS_RESTART - 需要关闭窗口重新运行「开始安装.cmd」继续安装。" } else { "" })
+
 一、系统信息
 --------------------------------------
 Windows 版本: $($winInfo.Version)
 PowerShell 版本: $($psInfo.Version) ($($psInfo.Edition))
 是否管理员权限: $(if (Test-IsAdministrator) { "是" } else { "否" })
 用户目录: $(Get-UserProfilePath)
+运行路径: $(Get-Location)
 
 二、安装结果
 --------------------------------------
@@ -799,10 +815,32 @@ $claudeLaunchSummary
 $overallStatus
 $testSafeNotice
 
-七、售后提示
+七、下一步说明
+--------------------------------------
+$(if ($script:TestSafeMode) {
+"测试安全模式未执行真实安装，也未验证真实 API。
+本结果只代表沙盒配置流程通过。"
+} elseif ($script:ClaudeInstallStatus -match "needs_restart") {
+"关闭该窗口后重新双击「开始安装.cmd」继续安装流程。
+脚本会继续安装 Claude Code 并配置 DeepSeek。"
+} elseif ($script:ClaudeInstalled -and $script:ConfigWritten) {
+"安装完成不代表 API 永久可用。
+如果 Claude Code 能启动但模型调用失败，请优先检查：
+1. DeepSeek API Key 是否正确
+2. DeepSeek 账户余额是否充足
+3. 当前网络是否能访问 api.deepseek.com
+4. DeepSeek 官方接口或模型名是否发生变化
+
+本工具只负责本地安装和配置，不销售 API，不保证第三方接口永久可用。"
+} else {
+"请继续完成安装流程，或运行「一键诊断.cmd」获取详细信息。"
+})
+
+八、售后提示
 --------------------------------------
 如遇问题，请运行「一键诊断.cmd」，把生成的 report.txt 发给技术支持。
-请不要发送完整 API Key。
+请不要发送完整 API Key！也不要发送 backup/、logs/ 或 reports/full-report-*。
+backup 可能包含完整 API Key，仅用于本机恢复，不要发给任何人。
 API Key 始终只保存在您的本机，不会上传或分享。
 
 报告生成时间: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
@@ -884,6 +922,19 @@ function Show-CompletionPage {
             Write-Host "  claude" -ForegroundColor Cyan
         }
         Write-Host ""
+        Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
+        Write-Host "  【下一步说明】" -ForegroundColor Cyan
+        Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Info "安装完成不代表 API 永久可用。如果 Claude Code 能启动但模型调用失败，"
+        Write-Info "请优先检查："
+        Write-Info "  1. DeepSeek API Key 是否正确"
+        Write-Info "  2. DeepSeek 账户余额是否充足"
+        Write-Info "  3. 当前网络是否能访问 api.deepseek.com"
+        Write-Info "  4. DeepSeek 官方接口或模型名是否发生变化"
+        Write-Host ""
+        Write-Info "本工具只负责本地安装和配置，不销售 API，不保证第三方接口永久可用。"
+        Write-Host ""
         Write-Info "安装完成报告: $($script:ReportPath)"
         Write-Info "如遇问题请运行「一键诊断.cmd」"
     }
@@ -898,11 +949,18 @@ function Show-CompletionPage {
         Write-Success "DeepSeek 配置已写入"
         Write-Warning "API 测试: $script:ApiTestFailReason"
         Write-Host ""
+        Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
+        Write-Host "  【下一步说明】" -ForegroundColor Cyan
+        Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
+        Write-Host ""
         Write-Warning "当前未完全验证可用，请确认:"
-        Write-Info "  1. API Key 是否正确"
+        Write-Info "  1. API Key 是否正确（到 platform.deepseek.com 重新获取）"
         Write-Info "  2. DeepSeek 账户余额是否充足"
-        Write-Info "  3. 网络是否正常"
-        Write-Info "  4. 运行「一键诊断.cmd」获取详细信息"
+        Write-Info "  3. 网络是否正常（能否访问 api.deepseek.com）"
+        Write-Info "  4. DeepSeek 官方服务是否正常"
+        Write-Info "  5. 运行「一键诊断.cmd」获取详细信息"
+        Write-Host ""
+        Write-Info "本工具只负责本地安装和配置，不销售 API，不保证第三方接口永久可用。"
         Write-Host ""
         Write-Info "安装完成报告: $($script:ReportPath)"
     }
@@ -921,7 +979,20 @@ function Show-CompletionPage {
         Write-Host "==============================================================" -ForegroundColor Yellow
         Write-Host ""
         Write-Warning "当前终端还无法识别新安装的命令。"
+        Write-Host ""
+        Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
+        Write-Host "  【下一步说明】" -ForegroundColor Cyan
+        Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Info "这是第一阶段完成，不是失败。"
+        Write-Info "Node.js 已安装完成（或 Claude Code npm 全局安装完成），但"
+        Write-Info "当前终端窗口的 PATH 尚未刷新，暂时无法识别新命令。"
+        Write-Host ""
         Write-Info "下一步: 关闭此窗口，重新双击「开始安装.cmd」。"
+        Write-Info "脚本会继续安装 Claude Code 并配置 DeepSeek。"
+        Write-Host ""
+        Write-Info "类比：就像手机安装完 App 后需要点图标打开，"
+        Write-Info "终端也需要关闭重开才能识别新安装的程序。"
     }
     else {
         Write-Host "==============================================================" -ForegroundColor Red
@@ -1160,13 +1231,14 @@ function Show-MainMenu {
     Write-Host "  [1] 一键安装（推荐）                                        " -ForegroundColor Green
     Write-Host "      自动检测 → 安装 → 配置 → 测试 → 生成报告               " -ForegroundColor White
     Write-Host "  [2] 遇到问题：一键诊断                                      " -ForegroundColor White
-    Write-Host "  [3] 修改 / 恢复 / 卸载配置                                  " -ForegroundColor White
-    Write-Host "  [4] 高级选项                                                " -ForegroundColor White
-    Write-Host "  [5] 退出                                                    " -ForegroundColor White
+    Write-Host "  [3] 缺少依赖：一键修复依赖（Node.js/npm/Claude）            " -ForegroundColor White
+    Write-Host "  [4] 修改 / 恢复 / 卸载配置                                  " -ForegroundColor White
+    Write-Host "  [5] 高级选项                                                " -ForegroundColor White
+    Write-Host "  [6] 退出                                                    " -ForegroundColor White
     Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host ""
 
-    $choice = Read-Host "请输入选项编号 (1-5，直接回车默认选 1)"
+    $choice = Read-Host "请输入选项编号 (1-6，直接回车默认选 1)"
 
     if ([string]::IsNullOrWhiteSpace($choice)) {
         $choice = "1"
@@ -1182,21 +1254,31 @@ function Show-MainMenu {
             Start-DoctorOnly
         }
         "3" {
+            Write-Log "INFO" "用户选择: 一键修复依赖"
+            $repairScript = Join-Path $ScriptDir "repair-deps.ps1"
+            if (Test-Path $repairScript) {
+                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $repairScript
+            }
+            else {
+                Write-Error-Msg "找不到 repair-deps.ps1，请确认文件完整。"
+            }
+        }
+        "4" {
             Write-Log "INFO" "用户选择: 恢复或卸载配置"
             Start-UninstallMenu
         }
-        "4" {
+        "5" {
             Write-Log "INFO" "用户选择: 高级选项"
             Show-AdvancedMenu
         }
-        "5" {
+        "6" {
             Write-Log "INFO" "用户选择: 退出"
             Write-Info "感谢使用！"
             Write-Info "如遇问题请运行「一键诊断.cmd」获取诊断报告。"
             exit 0
         }
         default {
-            Write-Error-Msg "无效选项，请输入 1-5。"
+            Write-Error-Msg "无效选项，请输入 1-6。"
             Show-MainMenu
         }
     }
@@ -1241,6 +1323,71 @@ function Show-AdvancedMenu {
 
 function Main {
     try {
+        # ============================================================
+        # 路径安全检查（所有模式均执行）
+        # ============================================================
+        $pathRisk = Test-UserPathRisk
+
+        if ($pathRisk.IsBlocked) {
+            Write-Host ""
+            Write-Host "==============================================================" -ForegroundColor Red
+            Write-Host "  [ERROR] 检测到 ZIP 临时目录运行" -ForegroundColor Red
+            Write-Host "==============================================================" -ForegroundColor Red
+            Write-Host ""
+            Write-Warning "当前运行路径疑似在压缩包临时目录中。"
+            Write-Warning "请先完整解压 ZIP 到普通文件夹，例如："
+            Write-Host "  D:\ClaudeDeepSeek" -ForegroundColor Cyan
+            Write-Warning "然后再双击 [开始安装.cmd]。"
+            Write-Warning "不要在压缩包预览窗口中直接运行。"
+            Write-Host ""
+            if (-not $NonInteractive) {
+                Read-Host "按回车键退出..."
+            }
+            exit 1
+        }
+
+        if ($pathRisk.RiskLevel -eq "WARN") {
+            Write-Host ""
+            Write-Host "==============================================================" -ForegroundColor Yellow
+            Write-Host "  [WARN] 当前运行路径存在风险" -ForegroundColor Yellow
+            Write-Host "==============================================================" -ForegroundColor Yellow
+            Write-Host ""
+            foreach ($item in $pathRisk.RiskItems) {
+                Write-Warning "  - $item"
+            }
+            Write-Host ""
+            foreach ($sg in $pathRisk.Suggestions) {
+                Write-Info $sg
+            }
+            Write-Host ""
+            Write-Info "这些风险不会阻止安装，但建议移动项目文件夹以避免潜在问题。"
+            if (-not $NonInteractive) {
+                $continueAnyway = Read-Host "按回车继续（风险自担），或输入 Q 退出"
+                if ($continueAnyway -eq "Q" -or $continueAnyway -eq "q") {
+                    Write-Info "已退出。请移动项目文件夹后重新运行。"
+                    exit 0
+                }
+            }
+            Write-Log "WARN" "路径风险警告已确认继续: $($pathRisk.Path)"
+        }
+
+        # -FixDeps 模式：转发到 repair-deps.ps1
+        if ($FixDeps) {
+            Write-Log "INFO" "-FixDeps 模式：转发到 repair-deps.ps1"
+            $repairScript = Join-Path $ScriptDir "repair-deps.ps1"
+            if (Test-Path $repairScript) {
+                $repairArgs = @("-File", $repairScript)
+                if ($NonInteractive) { $repairArgs += "-NonInteractive" }
+                if ($TestSafe) { $repairArgs += "-TestSafe" }
+                if ($DryRun) { $repairArgs += "-DryRun" }
+                & powershell.exe -NoProfile -ExecutionPolicy Bypass @repairArgs
+            }
+            else {
+                Write-Error-Msg "找不到 repair-deps.ps1，请确认文件完整。"
+            }
+            exit 0
+        }
+
         # 显示免责声明
         $agreed = Show-Disclaimer
         if (-not $agreed) {

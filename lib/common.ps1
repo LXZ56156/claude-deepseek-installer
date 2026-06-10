@@ -126,6 +126,199 @@ function Backup-File {
 }
 
 # ============================================================
+# ZIP 内运行检测
+# ============================================================
+
+function Test-IsZipInternalPath {
+    <#
+    .SYNOPSIS
+        检测当前脚本运行路径是否疑似压缩包临时目录。
+        如果用户在 ZIP 预览窗口中直接双击 .cmd，路径会在临时目录。
+    .RETURNS
+        包含 IsZipTemp, Reason, Path 的哈希表
+    #>
+    param(
+        [string]$PathToCheck = $null
+    )
+
+    $result = @{
+        IsZipTemp = $false
+        Reason    = ""
+        Path      = ""
+    }
+
+    if (-not $PathToCheck) {
+        $PathToCheck = (Get-Location).Path
+    }
+    $result.Path = $PathToCheck
+
+    # 不区分大小写检测临时解压目录特征
+    $lower = $PathToCheck.ToLowerInvariant()
+
+    # $env:TEMP 下的临时解压目录
+    $tempPath = if ($env:TEMP) { $env:TEMP.ToLowerInvariant() } else { "" }
+    if ($tempPath -and $lower.StartsWith($tempPath)) {
+        # 进一步检测：是否在 TEMP 下的压缩包子目录
+        if ($lower -match "\\temp\\rar\$" -or
+            $lower -match "\\temp\\7z" -or
+            $lower -match "\\temp\\.zip" -or
+            $lower -match "\\temp\\compressed" -or
+            $lower -match "\\appdata\\local\\temp\\rar\$" -or
+            $lower -match "\\appdata\\local\\temp\\7z" -or
+            $lower -match "\\appdata\\local\\temp\\.zip" -or
+            $lower -match "\\appdata\\local\\temp\\compressed") {
+            $result.IsZipTemp = $true
+            $result.Reason = "检测到当前路径在压缩包临时解压目录中。请先完整解压 ZIP 到普通文件夹。"
+            return $result
+        }
+        # TEMP 下但不是明确压缩包目录：只警告不阻止
+        $result.IsZipTemp = $true
+        $result.Reason = "当前路径在系统临时目录中，可能直接来自压缩包。请先完整解压 ZIP 到普通文件夹。"
+        return $result
+    }
+
+    # 常见压缩软件临时目录特征
+    $zipTempMarkers = @(
+        "\\temp\\rar$",
+        "\\temp\\7z",
+        "\\temp\\.zip",
+        "\\temp\\compressed",
+        "\\temporary internet files",
+        "rar$\\",
+        "\\7z",
+        "\\_zip_"
+    )
+    foreach ($marker in $zipTempMarkers) {
+        if ($lower.Contains($marker.ToLowerInvariant())) {
+            $result.IsZipTemp = $true
+            $result.Reason = "检测到路径包含压缩包临时目录特征。请先完整解压 ZIP 到普通文件夹。"
+            return $result
+        }
+    }
+
+    return $result
+}
+
+# ============================================================
+# 路径风险检测
+# ============================================================
+
+function Test-UserPathRisk {
+    <#
+    .SYNOPSIS
+        检测项目运行路径中存在的风险因素。
+    .PARAMETER PathToCheck
+        要检测的路径。默认使用当前目录。
+    .RETURNS
+        包含 RiskLevel, RiskItems, Suggestions, IsBlocked 的哈希表
+        RiskLevel: BLOCK|WARN|INFO
+    #>
+    param(
+        [string]$PathToCheck = $null
+    )
+
+    $result = @{
+        RiskLevel   = "INFO"
+        RiskItems   = [System.Collections.ArrayList]::new()
+        IsBlocked   = $false
+        Suggestions = [System.Collections.ArrayList]::new()
+        Path        = ""
+    }
+
+    if (-not $PathToCheck) {
+        $PathToCheck = (Get-Location).Path
+    }
+    $result.Path = $PathToCheck
+
+    # 先检测 ZIP 临时目录（这是 BLOCK 级别的）
+    $zipCheck = Test-IsZipInternalPath -PathToCheck $PathToCheck
+    if ($zipCheck.IsZipTemp) {
+        $result.RiskLevel = "BLOCK"
+        $result.IsBlocked = $true
+        [void]$result.RiskItems.Add("ZIP临时目录: $($zipCheck.Reason)")
+        [void]$result.Suggestions.Add("请先完整解压 ZIP 到普通文件夹，例如 D:\ClaudeDeepSeek，然后再双击开始安装.cmd。不要在压缩包预览窗口中直接运行。")
+        return $result
+    }
+
+    $risks = [System.Collections.ArrayList]::new()
+
+    # 中文字符检测
+    if ($PathToCheck -match '[一-鿿]') {
+        [void]$risks.Add("路径包含中文字符，可能导致 CMD/PowerShell 解析异常")
+    }
+
+    # 空格检测
+    if ($PathToCheck.Contains(" ")) {
+        [void]$risks.Add("路径包含空格，可能影响某些脚本执行")
+    }
+
+    # 特殊字符检测
+    if ($PathToCheck -match '[&^!()]') {
+        [void]$risks.Add("路径包含特殊字符 (& ^ ! 括号)，可能导致命令行解析异常")
+    }
+
+    # OneDrive 检测
+    if ($PathToCheck.ToLowerInvariant().Contains("onedrive")) {
+        [void]$risks.Add("路径在 OneDrive 同步目录中，可能因同步冲突导致文件锁定或版本异常")
+    }
+
+    # Desktop/Downloads/微信/QQ 等常见接收目录
+    $desktopLower = [Environment]::GetFolderPath("Desktop").ToLowerInvariant()
+    if ($PathToCheck.ToLowerInvariant().StartsWith($desktopLower)) {
+        [void]$risks.Add("路径在桌面目录中，桌面路径可能包含空格或特殊字符")
+    }
+
+    $userProfile = (Get-UserProfilePath).ToLowerInvariant()
+    if ($PathToCheck.ToLowerInvariant().StartsWith("$userProfile\downloads")) {
+        [void]$risks.Add("路径在下载目录中，部分安全软件可能拦截脚本运行")
+    }
+
+    if ($PathToCheck -match '(微信|WeChat|QQ|Tencent Files|钉钉|DingTalk)') {
+        [void]$risks.Add("路径包含即时通讯软件接收目录，可能因文件锁定或权限问题导致运行失败")
+    }
+
+    # 路径长度检测
+    $pathLen = $PathToCheck.Length
+    if ($pathLen -gt 240) {
+        [void]$risks.Add("路径过长 ($pathLen 字符，超过 240)，可能导致 Windows 路径长度限制问题")
+    }
+    elseif ($pathLen -gt 180) {
+        [void]$risks.Add("路径较长 ($pathLen 字符)，建议使用更短的路径")
+    }
+
+    # UNC 路径检测
+    if ($PathToCheck.StartsWith("\\")) {
+        [void]$risks.Add("当前使用 UNC 网络路径，可能导致脚本执行权限问题。建议复制到本地磁盘。")
+    }
+
+    # WSL 路径（从 Windows 访问 WSL 文件系统）
+    if ($PathToCheck.ToLowerInvariant().Contains("\\wsl.localhost") -or
+        $PathToCheck.ToLowerInvariant().Contains("\\wsl$")) {
+        [void]$risks.Add("当前在 WSL 文件系统路径中运行 Windows 脚本。请在 Windows 本地磁盘中解压运行，或在 WSL 内使用 install_wsl.sh。")
+    }
+
+    # 评估风险级别
+    if ($risks.Count -gt 0) {
+        $result.RiskLevel = "WARN"
+        foreach ($r in $risks) { [void]$result.RiskItems.Add($r) }
+
+        [void]$result.Suggestions.Add("建议将项目文件夹移动到 D:\ClaudeDeepSeek（或类似不含中文、空格、特殊字符的路径），可以避免大多数路径相关问题。")
+
+        # 如果路径有特殊字符 + 中文，提升严重程度
+        $hasSpecial = $PathToCheck -match '[&^!()]'
+        $hasChinese = $PathToCheck -match '[一-鿿]'
+        if ($hasSpecial -and $hasChinese) {
+            if ($result.Suggestions.Count -gt 0) {
+                $result.Suggestions.Clear()
+            }
+            [void]$result.Suggestions.Add("当前路径同时包含中文和特殊字符，强烈建议移动项目到 D:\ClaudeDeepSeek 以避免命令行解析错误。")
+        }
+    }
+
+    return $result
+}
+
+# ============================================================
 # API Key 脱敏函数
 # ============================================================
 

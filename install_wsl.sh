@@ -1893,6 +1893,33 @@ print(f'快速模型: {e.get(\"ANTHROPIC_SMALL_FAST_MODEL\", \"(未设置)\")}')
             echo "  生成时间: $(date)"
             echo "============================================================"
             echo ""
+            echo "【一眼结论】"
+            echo ""
+            if [ -f /etc/os-release ]; then
+                . /etc/os-release 2>/dev/null
+                echo "  运行环境: ${NAME:-未知} ${VERSION:-}"
+            fi
+            echo "  是否 WSL: $(if grep -qi microsoft /proc/version 2>/dev/null; then echo '是（WSL和Windows是两套环境，配置不共享）'; else echo '否/不确定'; fi)"
+            echo "  Claude Code: $(claude --version 2>/dev/null || echo '未安装')"
+            echo "  Node.js: $(node --version 2>/dev/null || echo '未安装')"
+            echo "  npm: $(npm --version 2>/dev/null || echo '未安装')"
+            if [ -f "$config_file" ]; then
+                if validate_settings_json "$config_file" 2>/dev/null; then
+                    local st
+                    st=$(read_config_value "$config_file" "ANTHROPIC_AUTH_TOKEN" "" 2>/dev/null || echo "")
+                    if [ -n "$st" ]; then
+                        echo "  DeepSeek 配置: 已配置 (Key: $(mask_api_key "$st"))"
+                    else
+                        echo "  DeepSeek 配置: JSON 存在但 API Key 为空"
+                    fi
+                else
+                    echo "  DeepSeek 配置: JSON 损坏"
+                fi
+            else
+                echo "  DeepSeek 配置: 未配置"
+            fi
+            echo "  建议动作: 请只发送此 report.txt。不要发送 backup/、logs/、full-report-*。"
+            echo ""
             echo "系统信息:"
             if [ -f /etc/os-release ]; then
                 . /etc/os-release 2>/dev/null
@@ -2082,6 +2109,15 @@ print_final_summary() {
     info "  2. 如需诊断: ./install_wsl.sh --mode doctor"
     info "  3. 如在 Windows 侧使用 Claude Code: 运行一键诊断.cmd"
     info "  4. 日志文件: $LOG_FILE"
+    echo ""
+    info "安装完成不代表 API 永久可用。"
+    info "如果 Claude Code 能启动但模型调用失败，请优先检查："
+    info "  1. DeepSeek API Key 是否正确"
+    info "  2. DeepSeek 账户余额是否充足"
+    info "  3. 当前网络是否能访问 api.deepseek.com"
+    info "  4. DeepSeek 官方接口或模型名是否发生变化"
+    info ""
+    info "本工具只负责本地安装和配置，不销售 API，不保证第三方接口永久可用。"
     echo ""
 }
 # ============================================================

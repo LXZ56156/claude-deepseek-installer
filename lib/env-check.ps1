@@ -549,19 +549,53 @@ function Test-NodeJsInstalled {
 function Test-NpmInstalled {
     <#
     .SYNOPSIS
-        检测 npm 是否可用
+        检测 npm 是否可用。
+        注意区分以下状态:
+          - Node 未安装 / 版本过低
+          - npm 未安装（Node 存在但 npm 缺失）
+          - npm 可用
     .RETURNS
-        包含 Installed, Version, ErrorMessage 的哈希表
+        包含 Installed, Version, Status, ErrorMessage 的哈希表
+        Status: ok | failed_missing_node | failed_node_too_old | failed_missing_npm | failed_npm_broken
     #>
     $result = @{
         Installed    = $false
         Version      = $null
+        Status       = ""
         ErrorMessage = ""
     }
 
+    # 先检测 Node.js 是否存在
+    $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $nodeCmd) {
+        $result.Status = "failed_missing_node"
+        $result.ErrorMessage = "Node.js 未安装，npm 是 Node.js 的一部分，需要先安装 Node.js。"
+        return $result
+    }
+
+    # 检测 Node.js 版本
+    $nodeResult = Invoke-CommandSafe -Command "node" -Arguments @("--version")
+    if ($nodeResult.Success) {
+        $rawVersion = $nodeResult.Output.Trim()
+        try {
+            $clean = $rawVersion -replace '^v', ''
+            $major = [int]($clean.Split('.')[0])
+            if ($major -lt 18) {
+                $result.Status = "failed_node_too_old"
+                $result.ErrorMessage = "Node.js 版本 $rawVersion 低于 v18，npm 可能也不可用。请升级 Node.js LTS。"
+                return $result
+            }
+        }
+        catch {
+            # 无法解析版本，继续检测 npm
+        }
+    }
+
+    # 检测 npm 命令
     $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
     if (-not $npmCmd) {
-        $result.ErrorMessage = "未检测到 npm。Node.js/npm 环境可能不完整，请检查 Node.js 安装。"
+        $result.Status = "failed_missing_npm"
+        $result.ErrorMessage = "检测到 Node.js 存在，但 npm 不可用。这通常表示 Node.js 安装不完整，或当前终端 PATH 未刷新。请先关闭此窗口重新打开后再试。如果仍失败，请重新安装 Node.js LTS。"
         return $result
     }
 
@@ -569,9 +603,11 @@ function Test-NpmInstalled {
     if ($npmResult.Success) {
         $result.Version = $npmResult.Output.Trim()
         $result.Installed = $true
+        $result.Status = "ok"
     }
     else {
-        $result.ErrorMessage = "npm 命令存在但无法执行，环境可能异常。"
+        $result.Status = "failed_npm_broken"
+        $result.ErrorMessage = "npm 命令存在但无法执行（执行 --version 失败），环境可能异常。请检查 Node.js 安装是否完整。"
     }
 
     return $result

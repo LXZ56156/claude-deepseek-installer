@@ -601,6 +601,149 @@ function Check-WSL {
 # 生成报告
 # ============================================================
 
+function Write-QuickSummary {
+    <#
+    .SYNOPSIS
+        生成「一眼结论」区，让售后第一屏就能看懂问题。
+    #>
+    Add-ReportLine ""
+    Add-ReportLine "【一眼结论】（快速判断问题，发给技术支持时最有用）"
+    Add-ReportLine ""
+
+    # 运行环境判断
+    Add-ReportLine "  运行环境: Windows"
+    $wslCheck = Test-WslInstalled
+    if ($wslCheck.Installed) {
+        Add-ReportLine "  WSL 状态: 已启用（但当前在 Windows 中运行）"
+        Add-ReportLine "  注意: Windows 和 WSL 是两套环境，配置不共享"
+    }
+
+    # Claude Code 状态
+    $claudeVer = Test-ClaudeInstalled
+    if ($claudeVer) {
+        Add-ReportLine "  Claude Code: 已安装 ($claudeVer)"
+    }
+    else {
+        $claudeCmdExists = Test-CommandAvailable -CommandName "claude"
+        if ($claudeCmdExists) {
+            Add-ReportLine "  Claude Code: 已安装但可能不可用（PATH 未刷新或安装不完整）"
+        }
+        else {
+            Add-ReportLine "  Claude Code: 未安装"
+        }
+    }
+
+    # Node.js 状态
+    $nodeInfo = Test-NodeJsInstalled
+    if ($nodeInfo.IsSupported) {
+        Add-ReportLine "  Node.js: 正常 ($($nodeInfo.Version))"
+    }
+    elseif ($nodeInfo.Installed) {
+        Add-ReportLine "  Node.js: 版本过低 ($($nodeInfo.Version)) — 需要 >= 18"
+    }
+    else {
+        Add-ReportLine "  Node.js: 未安装"
+    }
+
+    # npm 状态
+    $npmInfo = Test-NpmInstalled
+    if ($npmInfo.Installed) {
+        Add-ReportLine "  npm: 正常 ($($npmInfo.Version))"
+    }
+    else {
+        $npmDetail = switch ($npmInfo.Status) {
+            "failed_missing_node" { "Node.js 未安装" }
+            "failed_node_too_old" { "Node.js 版本过低" }
+            "failed_missing_npm" { "npm 不可用（Node.js 存在但 npm 缺失，需重装 Node.js）" }
+            "failed_npm_broken" { "npm 命令存在但无法执行" }
+            default { $npmInfo.ErrorMessage }
+        }
+        Add-ReportLine "  npm: 不可用 — $npmDetail"
+    }
+
+    # DeepSeek 配置状态
+    $configInfo = Test-ClaudeConfigExists
+    if ($configInfo.Exists) {
+        if ($configInfo.IsValid) {
+            $config = Read-JsonFileSafe -FilePath $configInfo.Path
+            $hasKey = $null
+            if ($config -and $config.env -and ($config.env.PSObject.Properties.Name -contains "ANTHROPIC_AUTH_TOKEN")) {
+                $hasKey = $config.env.ANTHROPIC_AUTH_TOKEN
+            }
+            if (-not [string]::IsNullOrWhiteSpace($hasKey)) {
+                Add-ReportLine "  DeepSeek 配置: 已配置"
+            }
+            else {
+                Add-ReportLine "  DeepSeek 配置: JSON 存在但 API Key 为空"
+            }
+        }
+        else {
+            Add-ReportLine "  DeepSeek 配置: JSON 损坏（已备份，需重建）"
+        }
+    }
+    else {
+        Add-ReportLine "  DeepSeek 配置: 未配置"
+    }
+
+    # API 测试状态（从检测结果中提取）
+    $apiCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -match "Anthropic Format smoke test" }
+    if ($apiCheck) {
+        if ($apiCheck.Status -eq "OK") {
+            Add-ReportLine "  API 测试: 通过"
+        }
+        elseif ($apiCheck.Status -eq "SKIP") {
+            Add-ReportLine "  API 测试: 跳过 — 未验证 API 是否可用"
+        }
+        else {
+            Add-ReportLine "  API 测试: 失败 — $($apiCheck.Detail)"
+        }
+    }
+    else {
+        Add-ReportLine "  API 测试: 未执行"
+    }
+
+    # 路径风险
+    $pathRisk = Test-UserPathRisk
+    if ($pathRisk.IsBlocked) {
+        Add-ReportLine "  路径风险: ZIP 临时目录 — 请解压到普通文件夹"
+    }
+    elseif ($pathRisk.RiskLevel -eq "WARN") {
+        Add-ReportLine "  路径风险: 建议移动项目文件夹"
+    }
+    else {
+        Add-ReportLine "  路径风险: 正常"
+    }
+
+    # 建议动作
+    Add-ReportLine ""
+    Add-ReportLine "  建议动作:"
+    $hasErrors = ($script:DoctorState.Errors.Count -gt 0)
+    $claudeMissing = (-not $claudeVer)
+    $nodeMissing = (-not $nodeInfo.IsSupported)
+    $configMissing = (-not $configInfo.Exists -or -not $configInfo.IsValid)
+
+    if ($pathRisk.IsBlocked) {
+        Add-ReportLine "    1. 先完整解压 ZIP 到 D:\ClaudeDeepSeek"
+    }
+    if ($nodeMissing) {
+        Add-ReportLine "    - 运行「一键修复依赖.cmd」安装 Node.js"
+    }
+    if ($claudeMissing -and -not $nodeMissing) {
+        Add-ReportLine "    - 运行「开始安装.cmd」安装 Claude Code"
+    }
+    if ($configMissing) {
+        Add-ReportLine "    - 运行「开始安装.cmd」配置 DeepSeek API Key"
+    }
+    if ($hasErrors) {
+        Add-ReportLine "    - 检查下方 [ERROR] 项目并逐项解决"
+    }
+    if (-not $hasErrors -and -not $nodeMissing -and -not $claudeMissing -and -not $configMissing) {
+        Add-ReportLine "    - 所有检测正常，无需额外操作"
+    }
+    Add-ReportLine "    - 请只发送 report.txt，不要发送 backup/、logs/、reports/full-report-*"
+    Add-ReportLine ""
+}
+
 function Write-ReportSummary {
     Add-ReportLine ""
     Add-ReportLine "【环境摘要】"
@@ -724,6 +867,7 @@ function Main {
 
     # 生成报告
     Write-ReportHeader
+    Write-QuickSummary
     Write-ReportSummary
     Write-ReportChecks
     Write-ReportErrors
