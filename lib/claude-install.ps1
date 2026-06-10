@@ -31,6 +31,23 @@ function Test-ClaudeCommandExisting {
         Error   = ""
     }
 
+    # Mock decision support（仅在 CCDI_MOCK_INSTALL_DECISION=1 且 CCDI_TEST_MODE=1 时生效）
+    if ($env:CCDI_MOCK_INSTALL_DECISION -eq "1" -and $env:CCDI_TEST_MODE -eq "1") {
+        $mockClaude = if ($env:CCDI_MOCK_CLAUDE) { $env:CCDI_MOCK_CLAUDE } else { "missing" }
+        Write-Log "DEBUG" "MOCK: Test-ClaudeCommandExisting -> CCDI_MOCK_CLAUDE=$mockClaude"
+        switch ($mockClaude) {
+            "ok" {
+                return @{ Exists = $true; Usable = $true; Version = "1.0.0-mock"; Error = "" }
+            }
+            "broken" {
+                return @{ Exists = $true; Usable = $false; Version = $null; Error = "mock: claude command exists but --version fails (corrupt or residual)" }
+            }
+            default {
+                return @{ Exists = $false; Usable = $false; Version = $null; Error = "mock: claude not found" }
+            }
+        }
+    }
+
     # 刷新 PATH 后检测
     Refresh-CurrentProcessPath
 
@@ -139,6 +156,18 @@ function Test-ClaudeOfficialInstallNetwork {
         Details         = ""
     }
 
+    # Mock decision support（仅在 CCDI_MOCK_INSTALL_DECISION=1 且 CCDI_TEST_MODE=1 时生效）
+    if ($env:CCDI_MOCK_INSTALL_DECISION -eq "1" -and $env:CCDI_TEST_MODE -eq "1") {
+        $mockOfficial = if ($env:CCDI_MOCK_OFFICIAL) { $env:CCDI_MOCK_OFFICIAL } else { "unreachable" }
+        Write-Log "DEBUG" "MOCK: Test-ClaudeOfficialInstallNetwork -> CCDI_MOCK_OFFICIAL=$mockOfficial"
+        if ($mockOfficial -eq "reachable") {
+            return @{ Reachable = $true; InstallScriptOk = $true; DownloadsOk = $true; Details = "mock: official channel reachable" }
+        }
+        else {
+            return @{ Reachable = $false; InstallScriptOk = $false; DownloadsOk = $false; Details = "mock: official channel unreachable" }
+        }
+    }
+
     Write-Log "DEBUG" "检测 Claude 官方安装通道..."
 
     # 1. 检测 install.ps1（严格检测：HTTP 200 + 内容下载成功且非空）
@@ -225,6 +254,47 @@ function Test-NpmMirrorClaudeCodeNetwork {
         Error        = ""
     }
 
+    # Mock decision support（仅在 CCDI_MOCK_INSTALL_DECISION=1 且 CCDI_TEST_MODE=1 时生效）
+    if ($env:CCDI_MOCK_INSTALL_DECISION -eq "1" -and $env:CCDI_TEST_MODE -eq "1") {
+        $mockNode = if ($env:CCDI_MOCK_NODE) { $env:CCDI_MOCK_NODE } else { "missing" }
+        $mockNpm = if ($env:CCDI_MOCK_NPM) { $env:CCDI_MOCK_NPM } else { "missing" }
+        $mockMirror = if ($env:CCDI_MOCK_NPMMIRROR) { $env:CCDI_MOCK_NPMMIRROR } else { "unreachable" }
+        Write-Log "DEBUG" "MOCK: Test-NpmMirrorClaudeCodeNetwork -> NODE=$mockNode NPM=$mockNpm NPMMIRROR=$mockMirror"
+
+        if ($mockNode -eq "ok") {
+            $result.NodeOk = $true
+        }
+        elseif ($mockNode -eq "old") {
+            $result.NodeOk = $false
+            $result.Error = "mock: Node.js version too old (needs >= 18)"
+            return $result
+        }
+        else {
+            $result.NodeOk = $false
+            $result.Error = "mock: Node.js not installed"
+            return $result
+        }
+
+        if ($mockNpm -eq "ok") {
+            $result.NpmAvailable = $true
+        }
+        else {
+            $result.NpmAvailable = $false
+            $result.Error = if ($mockNpm -eq "broken") { "mock: npm command exists but fails" } else { "mock: npm not available" }
+            return $result
+        }
+
+        if ($mockMirror -eq "reachable") {
+            $result.Reachable = $true
+        }
+        else {
+            $result.Reachable = $false
+            $result.Error = "mock: npmmirror unreachable"
+        }
+
+        return $result
+    }
+
     # 1. 检查 Node.js >= 18
     $nodeInfo = Test-NodeJsInstalled
     if (-not $nodeInfo.Installed -or -not $nodeInfo.IsSupported) {
@@ -292,6 +362,17 @@ function Install-ClaudeCodeNative {
     }
 
     if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
+        # Mock decision support（仅在 CCDI_MOCK_INSTALL_DECISION=1 时覆盖 TestSafe 行为）
+        if ($env:CCDI_MOCK_INSTALL_DECISION -eq "1" -and $env:CCDI_TEST_MODE -eq "1") {
+            $mockNative = if ($env:CCDI_MOCK_NATIVE_INSTALL) { $env:CCDI_MOCK_NATIVE_INSTALL } else { "fail" }
+            Write-Log "DEBUG" "MOCK: Install-ClaudeCodeNative -> CCDI_MOCK_NATIVE_INSTALL=$mockNative"
+            if ($mockNative -eq "success") {
+                return @{ Success = $true; Error = ""; Status = "installed_mock" }
+            }
+            else {
+                return @{ Success = $false; Error = "mock: native install failed"; Status = "failed_mock" }
+            }
+        }
         Write-Log "INFO" "TestSafe: 跳过 Native Install 执行"
         $result.Status = "skipped_test_safe"
         $result.Error = "skipped_test_safe"
@@ -369,6 +450,17 @@ function Install-ClaudeCodeNpmMirror {
     }
 
     if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
+        # Mock decision support（仅在 CCDI_MOCK_INSTALL_DECISION=1 时覆盖 TestSafe 行为）
+        if ($env:CCDI_MOCK_INSTALL_DECISION -eq "1" -and $env:CCDI_TEST_MODE -eq "1") {
+            $mockNpmInstall = if ($env:CCDI_MOCK_NPM_INSTALL) { $env:CCDI_MOCK_NPM_INSTALL } else { "fail" }
+            Write-Log "DEBUG" "MOCK: Install-ClaudeCodeNpmMirror -> CCDI_MOCK_NPM_INSTALL=$mockNpmInstall"
+            if ($mockNpmInstall -eq "success") {
+                return @{ Success = $true; Error = ""; Status = "installed_mock" }
+            }
+            else {
+                return @{ Success = $false; Error = "mock: npm mirror install failed"; Status = "failed_mock" }
+            }
+        }
         Write-Log "INFO" "TestSafe: 跳过 npm mirror 安装"
         $result.Status = "skipped_test_safe"
         $result.Error = "skipped_test_safe"
@@ -489,8 +581,11 @@ function Install-ClaudeCodeAuto {
     # ============================================================
     # TestSafe 模式
     # ============================================================
+    # Mock decision support: 当 CCDI_MOCK_INSTALL_DECISION=1 时，不要提前返回，
+    # 而是继续走完整决策树，由子函数的 mock 逻辑返回模拟结果。
     $isTestSafe = $TestSafe -or ($env:CCDI_TEST_MODE -eq "1")
-    if ($isTestSafe) {
+    $isMockDecision = ($env:CCDI_MOCK_INSTALL_DECISION -eq "1" -and $env:CCDI_TEST_MODE -eq "1")
+    if ($isTestSafe -and -not $isMockDecision) {
         Write-Warning "当前为测试安全模式：不会安装、更新或卸载 Claude Code。"
         Write-Info "将只检查 claude 命令是否存在，并继续后续沙盒配置验证。"
 
@@ -588,7 +683,21 @@ function Install-ClaudeCodeAuto {
         $nativeResult = Install-ClaudeCodeNative
 
         if ($nativeResult.Success) {
-            # 验证安装
+            # 验证安装（mock 模式下自动信任安装结果）
+            if ($isMockDecision) {
+                Write-Log "DEBUG" "MOCK: trusting native install success"
+                $result.Success = $true
+                $result.Method = "official_native"
+                $result.Status = "installed"
+                $result.Version = "1.0.0-mock"
+                Update-CcdiState -Updates @{
+                    claudeWasAlreadyInstalled = $false
+                    claudeInstallMethod       = "official_native"
+                    claudeInstallStatus       = "installed"
+                } | Out-Null
+                Write-Success "Claude Code 安装完成 (mock Native Install)"
+                return $result
+            }
             Refresh-CurrentProcessPath
             $verifyResult = Test-ClaudeCommandExisting
             if ($verifyResult.Exists) {
@@ -655,17 +764,32 @@ function Install-ClaudeCodeAuto {
         Write-Error-Msg "官方安装通道不可用，镜像安装需要 Node.js 18+ 和 npm。"
 
         # 尝试 winget 安装 Node.js（仅交互模式）
-        $wingetOk = Test-CommandAvailable -CommandName "winget"
+        $wingetOk = if ($isMockDecision) {
+            ($env:CCDI_MOCK_WINGET -eq "ok")
+        }
+        else {
+            Test-CommandAvailable -CommandName "winget"
+        }
         if ($wingetOk -and -not $NonInteractive) {
             Write-Info "检测到 winget，可以自动安装 Node.js LTS。"
-            if (Confirm-UserChoice -Message "是否使用 winget 安装 Node.js LTS？（将修改系统环境）") {
+            if ($isMockDecision -or (Confirm-UserChoice -Message "是否使用 winget 安装 Node.js LTS？（将修改系统环境）")) {
+                if ($isMockDecision) {
+                    Write-Log "DEBUG" "MOCK: auto-confirming winget Node.js install prompt"
+                }
                 Write-Info "正在使用 winget 安装 Node.js LTS（可能需要几分钟）..."
-                $installResult = Invoke-CommandSafe -Command "winget" -Arguments @(
-                    "install", "OpenJS.NodeJS.LTS",
-                    "--accept-package-agreements",
-                    "--accept-source-agreements",
-                    "--silent"
-                ) -TimeoutSec 900 -ProgressMessage "仍在安装 Node.js LTS，请勿关闭窗口。"
+                $installResult = if ($isMockDecision) {
+                    $mockNodeInstall = if ($env:CCDI_MOCK_NODE_INSTALL) { $env:CCDI_MOCK_NODE_INSTALL } else { "fail" }
+                    Write-Log "DEBUG" "MOCK: winget install Node.js -> CCDI_MOCK_NODE_INSTALL=$mockNodeInstall"
+                    @{ Success = ($mockNodeInstall -eq "success"); Error = if ($mockNodeInstall -eq "success") { "" } else { "mock: winget install failed" } }
+                }
+                else {
+                    Invoke-CommandSafe -Command "winget" -Arguments @(
+                        "install", "OpenJS.NodeJS.LTS",
+                        "--accept-package-agreements",
+                        "--accept-source-agreements",
+                        "--silent"
+                    ) -TimeoutSec 900 -ProgressMessage "仍在安装 Node.js LTS，请勿关闭窗口。"
+                }
 
                 if ($installResult.Success) {
                     Write-Success "Node.js 安装完成！"
@@ -719,6 +843,18 @@ function Install-ClaudeCodeAuto {
         return $result
     }
 
+    if (-not $mirrorCheck.NpmAvailable) {
+        # npm 不可用（Node.js 存在但 npm 缺失或损坏）
+        Write-Error-Msg "npm 不可用: $($mirrorCheck.Error)"
+        Write-Info "官方安装通道不可用，镜像安装需要 npm。"
+        Write-Info "请确认 Node.js 安装是否完整，然后重新打开终端重试。"
+        $result.Status = "failed_missing_node_or_npm"
+        Update-CcdiState -Updates @{
+            claudeInstallStatus = "failed_missing_node_or_npm"
+        } | Out-Null
+        return $result
+    }
+
     if (-not $mirrorCheck.Reachable) {
         # npmmirror 不可达
         Write-Error-Msg "npm 镜像仓库不可达: $($mirrorCheck.Error)"
@@ -757,7 +893,21 @@ function Install-ClaudeCodeAuto {
         return $result
     }
 
-    # 3c. 验证安装
+    # 3c. 验证安装（mock 模式下自动信任安装结果）
+    if ($isMockDecision) {
+        Write-Log "DEBUG" "MOCK: trusting npm mirror install success"
+        $result.Success = $true
+        $result.Method = "npm_npmmirror"
+        $result.Status = "installed"
+        $result.Version = "1.0.0-mock"
+        Update-CcdiState -Updates @{
+            claudeWasAlreadyInstalled = $false
+            claudeInstallMethod       = "npm_npmmirror"
+            claudeInstallStatus       = "installed"
+        } | Out-Null
+        Write-Success "Claude Code 安装完成 (mock npm mirror)"
+        return $result
+    }
     Refresh-CurrentProcessPath
     $verifyResult = Test-ClaudeCommandExisting
     if ($verifyResult.Exists) {

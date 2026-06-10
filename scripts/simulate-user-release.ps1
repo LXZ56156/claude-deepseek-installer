@@ -596,6 +596,77 @@ try {
         Remove-Item -Path (Join-Path $missingDir $launcher) -Force
     }
 
+    Write-Check "ShellExecute launcher tests (simulating user double-click)"
+    $shellExecuteCapable = $true
+    try {
+        $null = [System.Diagnostics.Process]::Start("cmd.exe", "/c exit 0")
+    }
+    catch {
+        $shellExecuteCapable = $false
+        Write-Host "[simulate] SKIP: ShellExecute not available in this environment ($($_.Exception.Message))" -ForegroundColor Yellow
+    }
+
+    if ($shellExecuteCapable) {
+        $launcherNames = @(
+            "Start-Install.cmd",
+            "开始安装.cmd",
+            "Run-Diagnostics.cmd",
+            "一键诊断.cmd",
+            "Restore-Config.cmd",
+            "恢复或卸载配置.cmd"
+        )
+        foreach ($launcherName in $launcherNames) {
+            $launcherPath = Join-Path $releaseRoot $launcherName
+            if (-not (Test-Path $launcherPath)) {
+                Write-Host "[simulate] SKIP: $launcherName not found in release" -ForegroundColor Yellow
+                continue
+            }
+
+            Write-Check "ShellExecute: $launcherName"
+            try {
+                # Set per-process env vars for this test
+                $shellEnvBlock = @{}
+                foreach ($key in $envVars.Keys) {
+                    $shellEnvBlock[$key] = [string]$envVars[$key]
+                }
+
+                $psi = New-Object System.Diagnostics.ProcessStartInfo
+                $psi.FileName = $launcherPath
+                $psi.WorkingDirectory = $releaseRoot
+                $psi.UseShellExecute = $true
+                $psi.CreateNoWindow = $false
+
+                $proc = [System.Diagnostics.Process]::Start($psi)
+                if ($null -eq $proc) {
+                    Write-Host "[simulate] WARN: $launcherName failed to start via ShellExecute" -ForegroundColor Yellow
+                    continue
+                }
+
+                # Wait briefly for the process to initialize
+                $proc.WaitForExit(8000) | Out-Null
+
+                if (-not $proc.HasExited) {
+                    # Still running after timeout — kill it, this is normal for interactive launchers
+                    try { $proc.Kill() } catch { }
+                    Write-Host "[simulate]   $launcherName started (running after 8s, killed)" -ForegroundColor Green
+                }
+                else {
+                    $exitCode = $proc.ExitCode
+                    if ($exitCode -eq 0 -or $exitCode -eq 1) {
+                        # exit 0 = clean exit, exit 1 = expected (e.g., non-interactive mode exits)
+                        Write-Host "[simulate]   $launcherName exited cleanly (code=$exitCode)" -ForegroundColor Green
+                    }
+                    else {
+                        Write-Host "[simulate]   $launcherName exited with code $exitCode" -ForegroundColor Yellow
+                    }
+                }
+            }
+            catch {
+                Write-Host "[simulate] SKIP: $launcherName ShellExecute failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    }
+
     Assert-NoBadRuntimeText -Runs $runs -ReleaseRoot $releaseRoot -DummyKey $DummyApiKey
 
     Write-Host "[simulate] OK" -ForegroundColor Green

@@ -10,6 +10,12 @@
 # Notes:
 #   This script only orchestrates existing validation tools.
 #   Flows that write Claude config must use CCDI_TEST_MODE + CCDI_TEST_USERPROFILE.
+#
+# Mode coverage (v1.3.2):
+#   Smoke:  git diff --check + check.ps1 (PS 5.1 + pwsh)
+#   Full:   Smoke + AST parse + ux-check.ps1 + install-decision-matrix.ps1 + Core sandbox
+#   Release: package-release.ps1 + simulate-user-release.ps1 + windows-scenario-matrix.ps1 (-Quick)
+#   All:    Full + Release + real settings.json unchanged check
 # ============================================================
 
 param(
@@ -230,6 +236,9 @@ function Invoke-FullValidation {
     Invoke-ValidationStep -Name "scripts/ux-check.ps1" -ScriptBlock ([scriptblock]{
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\ux-check.ps1")
     })
+    Invoke-ValidationStep -Name "scripts/install-decision-matrix.ps1 (mock)" -ScriptBlock ([scriptblock]{
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\install-decision-matrix.ps1")
+    })
     Invoke-ValidationStep -Name "Core TestSafe sandbox flow" -ScriptBlock ([scriptblock]{ Invoke-CoreSandboxFlow })
 }
 
@@ -241,6 +250,9 @@ function Invoke-ReleaseValidation {
     })
     Invoke-ValidationStep -Name "release ZIP user simulation" -ScriptBlock ([scriptblock]{
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\simulate-user-release.ps1") -Arguments @("-Version", $Version)
+    })
+    Invoke-ValidationStep -Name "Windows scenario matrix" -ScriptBlock ([scriptblock]{
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\windows-scenario-matrix.ps1") -Arguments @("-Version", $Version, "-Quick")
     })
 }
 
