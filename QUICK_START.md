@@ -73,6 +73,12 @@ claude
 
 双击 **`一键修复依赖.cmd`** — 检测并修复缺失的 Node.js、npm、Claude Code。
 
+- 不会修改已配置的 DeepSeek API Key
+- 不会删除已有 Claude 配置
+- 安装系统软件时会先询问用户
+- 如果提示 NEEDS_RESTART，关闭窗口后重新双击「开始安装.cmd」
+- 生成的 repair-deps-report 仅用于依赖状态；完整诊断仍用「一键诊断.cmd」的 report.txt
+
 ### 还不行？运行诊断
 
 双击 **`一键诊断.cmd`**，把项目根目录下生成的 `report.txt`（分享版）文件发给技术支持。历史报告保存在 `reports/`。
@@ -93,7 +99,7 @@ claude
 |------|-----------|
 | `开始安装.cmd` | 首次安装 / 重新安装 |
 | `一键诊断.cmd` | 遇到问题 / 售后支持 |
-| `一键修复依赖.cmd` | 缺 Node.js/npm/Claude 时修复 |
+| `一键修复依赖.cmd` | 缺 Node.js/npm/Claude 时修复（不会修改 Key，不会删除配置） |
 | `恢复或卸载配置.cmd` | 换 Key / 恢复备份 / 清除配置 |
 
 ---

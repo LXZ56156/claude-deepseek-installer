@@ -108,7 +108,7 @@
 |------|------|--------|
 | `开始安装.cmd` | 一键安装 | 双击运行 |
 | `一键诊断.cmd` | 环境诊断 | 有问题时双击 |
-| `一键修复依赖.cmd` | 修复 Node.js/npm/Claude 缺失 | 缺依赖时双击 |
+| `一键修复依赖.cmd` | 修复 Node.js/npm/Claude 缺失（不会修改 Key/配置） | 缺依赖时双击 |
 | `恢复或卸载配置.cmd` | 配置管理 | 换 Key / 恢复备份时双击 |
 
 ---
@@ -278,12 +278,19 @@ powershell -ExecutionPolicy Bypass -File .\doctor.ps1 -ShareSafe
 
 ## 售后流程
 
+### 第 0 步：先试「一键修复依赖」
+
+双击 **`一键修复依赖.cmd`** — 检测并修复缺失的 Node.js、npm、Claude Code。
+- 不会修改已配置的 DeepSeek API Key
+- 不会删除已有 Claude 配置
+- 如果提示 NEEDS_RESTART，关闭窗口后重新双击「开始安装.cmd」
+
 ### 第 1 步：双击「一键诊断.cmd」
 
-这会生成 3 个文件：
+这会生成分享版报告：
 - `report.txt` — **分享版**（已脱敏，可发送给售后）
 - `reports/report-YYYYMMDD-HHMMSS.txt` — 分享版历史记录
-- `reports/full-report-YYYYMMDD-HHMMSS.txt` — **完整版**（仅本地保存）
+- `reports/full-report-YYYYMMDD-HHMMSS.txt` — **完整版**（仅本地保存，需手动运行不加 -ShareSafe 的 doctor.ps1）
 
 ### 第 2 步：发送 report.txt
 

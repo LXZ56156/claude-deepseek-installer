@@ -135,16 +135,19 @@ function Test-IsZipInternalPath {
         检测当前脚本运行路径是否疑似压缩包临时目录。
         如果用户在 ZIP 预览窗口中直接双击 .cmd，路径会在临时目录。
     .RETURNS
-        包含 IsZipTemp, Reason, Path 的哈希表
+        包含 IsZipTemp, IsTempPath, Reason, Path 的哈希表。
+        IsZipTemp = true  → 明确压缩包临时目录，必须 BLOCK
+        IsTempPath = true → 普通 TEMP 目录，只 WARN
     #>
     param(
         [string]$PathToCheck = $null
     )
 
     $result = @{
-        IsZipTemp = $false
-        Reason    = ""
-        Path      = ""
+        IsZipTemp  = $false
+        IsTempPath = $false
+        Reason     = ""
+        Path       = ""
     }
 
     if (-not $PathToCheck) {
@@ -152,48 +155,39 @@ function Test-IsZipInternalPath {
     }
     $result.Path = $PathToCheck
 
-    # 不区分大小写检测临时解压目录特征
+    # 不区分大小写检测
     $lower = $PathToCheck.ToLowerInvariant()
-
-    # $env:TEMP 下的临时解压目录
     $tempPath = if ($env:TEMP) { $env:TEMP.ToLowerInvariant() } else { "" }
-    if ($tempPath -and $lower.StartsWith($tempPath)) {
-        # 进一步检测：是否在 TEMP 下的压缩包子目录
-        if ($lower -match "\\temp\\rar\$" -or
-            $lower -match "\\temp\\7z" -or
-            $lower -match "\\temp\\.zip" -or
-            $lower -match "\\temp\\compressed" -or
-            $lower -match "\\appdata\\local\\temp\\rar\$" -or
-            $lower -match "\\appdata\\local\\temp\\7z" -or
-            $lower -match "\\appdata\\local\\temp\\.zip" -or
-            $lower -match "\\appdata\\local\\temp\\compressed") {
-            $result.IsZipTemp = $true
-            $result.Reason = "检测到当前路径在压缩包临时解压目录中。请先完整解压 ZIP 到普通文件夹。"
-            return $result
-        }
-        # TEMP 下但不是明确压缩包目录：只警告不阻止
-        $result.IsZipTemp = $true
-        $result.Reason = "当前路径在系统临时目录中，可能直接来自压缩包。请先完整解压 ZIP 到普通文件夹。"
-        return $result
-    }
 
-    # 常见压缩软件临时目录特征
-    $zipTempMarkers = @(
-        "\\temp\\rar$",
-        "\\temp\\7z",
-        "\\temp\\.zip",
-        "\\temp\\compressed",
-        "\\temporary internet files",
-        "rar$\\",
+    # ============================================================
+    # 第 1 遍：明确压缩包临时目录特征 → IsZipTemp = true（BLOCK）
+    # ============================================================
+    $explicitZipMarkers = @(
+        "\\rar$",
         "\\7z",
-        "\\_zip_"
+        "\\7zs",
+        "\\7zo",
+        "\\compressed",
+        "\\temporary internet files",
+        "_zip_",
+        "\\.zip"
     )
-    foreach ($marker in $zipTempMarkers) {
+
+    foreach ($marker in $explicitZipMarkers) {
         if ($lower.Contains($marker.ToLowerInvariant())) {
             $result.IsZipTemp = $true
-            $result.Reason = "检测到路径包含压缩包临时目录特征。请先完整解压 ZIP 到普通文件夹。"
+            $result.Reason = "检测到路径包含压缩包临时目录特征。请先完整解压 ZIP 到普通文件夹，例如 D:\\ClaudeDeepSeek。"
             return $result
         }
+    }
+
+    # ============================================================
+    # 第 2 遍：普通 TEMP 目录 → IsTempPath = true（WARN，不 BLOCK）
+    # ============================================================
+    if ($tempPath -and $lower.StartsWith($tempPath)) {
+        $result.IsTempPath = $true
+        $result.Reason = "当前路径在系统临时目录中，文件可能被自动清理导致数据丢失。建议移动到 D:\\ClaudeDeepSeek。"
+        return $result
     }
 
     return $result
@@ -238,6 +232,13 @@ function Test-UserPathRisk {
         [void]$result.RiskItems.Add("ZIP临时目录: $($zipCheck.Reason)")
         [void]$result.Suggestions.Add("请先完整解压 ZIP 到普通文件夹，例如 D:\ClaudeDeepSeek，然后再双击开始安装.cmd。不要在压缩包预览窗口中直接运行。")
         return $result
+    }
+
+    # 普通 TEMP 目录：只 WARN，不 BLOCK
+    if ($zipCheck.IsTempPath) {
+        $result.RiskLevel = "WARN"
+        [void]$result.RiskItems.Add("临时目录: $($zipCheck.Reason)")
+        [void]$result.Suggestions.Add("建议将项目移动到 D:\ClaudeDeepSeek 等普通文件夹。")
     }
 
     $risks = [System.Collections.ArrayList]::new()

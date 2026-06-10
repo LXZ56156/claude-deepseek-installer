@@ -1102,7 +1102,7 @@ function Start-DoctorOnly {
 
     $doctorScript = Join-Path $ScriptDir "doctor.ps1"
     if (Test-Path $doctorScript) {
-        & $doctorScript -SkipApiTest:$script:EffectiveSkipApiTest
+        & $doctorScript -ShareSafe -SkipApiTest:$script:EffectiveSkipApiTest
     }
     else {
         Write-Error-Msg "找不到 doctor.ps1，请确认文件完整。"
@@ -1230,7 +1230,7 @@ function Show-MainMenu {
     Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host "  [1] 一键安装（推荐）                                        " -ForegroundColor Green
     Write-Host "      自动检测 → 安装 → 配置 → 测试 → 生成报告               " -ForegroundColor White
-    Write-Host "  [2] 遇到问题：一键诊断                                      " -ForegroundColor White
+    Write-Host "  [2] 遇到问题：一键诊断（生成可发送的 report.txt）            " -ForegroundColor White
     Write-Host "  [3] 缺少依赖：一键修复依赖（Node.js/npm/Claude）            " -ForegroundColor White
     Write-Host "  [4] 修改 / 恢复 / 卸载配置                                  " -ForegroundColor White
     Write-Host "  [5] 高级选项                                                " -ForegroundColor White

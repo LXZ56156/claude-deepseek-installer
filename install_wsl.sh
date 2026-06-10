@@ -222,9 +222,30 @@ sanitize_text() {
 }
 
 print_share_safety_notice() {
-    info "请只发送 report.txt。"
-    warn "不要发送 backup/、logs/ 或 reports/full-report-*。"
-    warn "backup/ 可能包含完整 API Key，仅用于本机恢复。"
+    info "请只发送此分享报告文件，不要发送 backup/、logs/ 或 full-report-*。"
+    warn "backup/ 可能包含完整 API Key，仅用于本机恢复，不要发送给任何人。"
+}
+
+print_wsl_dependency_help() {
+    local context="${1:-general}"
+
+    echo ""
+    if [ "$context" = "configure-json" ]; then
+        info "配置 DeepSeek 只需要 node 或 python3 任意一个可用。"
+        info "如果两者都没有，默认不会自动安装系统依赖。"
+        info "如需允许自动安装 python3，请使用 --install-deps。"
+        echo "  ./install_wsl.sh --mode configure --non-interactive --install-deps"
+        echo "  或手动安装: sudo apt update && sudo apt install -y python3"
+    else
+        info "默认不会自动安装系统依赖。"
+        info "如需允许脚本自动安装 Claude Code 所需依赖，请运行:"
+        echo "  ./install_wsl.sh --mode install --install-deps"
+        echo ""
+        info "也可以手动安装:"
+        echo "  sudo apt update"
+        echo "  sudo apt install -y curl nodejs npm python3"
+    fi
+    echo ""
 }
 
 write_sanitized_file() {
@@ -326,6 +347,7 @@ ensure_json_processor() {
             info "非交互模式下不会自动安装系统依赖。"
             info "请手动安装: sudo apt-get install python3"
             info "或使用 --install-deps 参数。"
+            print_wsl_dependency_help "configure-json"
             return 1
         fi
     fi
@@ -907,6 +929,7 @@ check_environment() {
     else
         error "curl 未安装！"
         info "请运行: sudo apt-get update && sudo apt-get install -y curl"
+        print_wsl_dependency_help "install"
         issues=$((issues + 1))
     fi
 
@@ -957,6 +980,7 @@ check_environment() {
         info "  方法2: 使用 nvm (https://github.com/nvm-sh/nvm)"
             info "  方法3: 从 https://nodejs.org 下载"
         fi
+        print_wsl_dependency_help "install"
         node_ok=0
         issues=$((issues + 1))
     fi
@@ -967,6 +991,7 @@ check_environment() {
         if [ "$node_ok" -eq 1 ]; then
             error "npm 未安装！（Node.js 存在但 npm 缺失，环境异常）"
             info "请检查 Node.js 安装是否完整。"
+            print_wsl_dependency_help "install"
             issues=$((issues + 1))
         fi
     fi
@@ -1023,6 +1048,7 @@ install_nodejs_interactive() {
             info "已取消 Node.js 安装。"
             info "请手动安装 Node.js 18+ 后重新运行本脚本。"
             info "下载地址: https://nodejs.org (选择 LTS 版本)"
+            print_wsl_dependency_help "install"
             return 1
         fi
         log "INFO" "用户授权安装 Node.js"
@@ -1918,7 +1944,7 @@ print(f'快速模型: {e.get(\"ANTHROPIC_SMALL_FAST_MODEL\", \"(未设置)\")}')
             else
                 echo "  DeepSeek 配置: 未配置"
             fi
-            echo "  建议动作: 请只发送此 report.txt。不要发送 backup/、logs/、full-report-*。"
+            echo "  建议动作: 请只发送此分享报告文件。不要发送 backup/、logs/、reports/full-report-*。backup/ 可能包含完整 API Key，仅用于本机恢复，不要发送给任何人。"
             echo ""
             echo "系统信息:"
             if [ -f /etc/os-release ]; then
@@ -1962,6 +1988,7 @@ print(f'快速模型: {e.get(\"ANTHROPIC_SMALL_FAST_MODEL\", \"(未设置)\")}')
         )"
         write_sanitized_file "$share_report" "$share_report_content"
         success "分享版报告已生成: $share_report"
+        info "请发送此分享报告文件，不要发送 backup/、logs/ 或 full-report-*。"
         info "你可以将此文件发给卖家/技术支持，不会泄露个人路径信息。"
         print_share_safety_notice
     fi

@@ -69,6 +69,107 @@ function Add-CR {
 }
 
 # ============================================================
+# Claude Code 修复函数
+# ============================================================
+
+function Invoke-ClaudeRepair {
+    param(
+        [bool]$NodeReady,
+        [bool]$NpmReady,
+        [bool]$ClaudeMissingOrBroken
+    )
+
+    # 如果 Claude 已安装，无需修复
+    if (-not $ClaudeMissingOrBroken) {
+        Add-CR "Claude Code 修复" "OK" "已安装可用"
+        return
+    }
+
+    # Node/npm 不满足时，不尝试安装 Claude
+    if (-not $NodeReady -or -not $NpmReady) {
+        Add-CR "Claude Code 修复" "SKIP" "请先修复 Node.js/npm，重开终端后再运行"
+        return
+    }
+
+    # TestSafe 模式：报告但不安装
+    if ($IsTestSafe) {
+        Add-CR "Claude Code 修复" "SKIP" "测试安全模式：真实模式下会询问是否安装 Claude Code"
+        return
+    }
+
+    # 确定是否可以安装
+    $canInstall = $false
+    if ($IsTestSafe) {
+        $canInstall = $false
+    }
+    elseif ($NonInteractive) {
+        $canInstall = $AllowInstall
+    }
+    elseif ($Yes -and $AllowInstall) {
+        $canInstall = $true
+    }
+    else {
+        # 交互模式：询问用户
+        Write-Host ""
+        Write-Warning "检测到 Claude Code 未安装。"
+        Write-Info "是否现在安装 Claude Code？这将下载并安装 Anthropic 官方 Claude Code 工具。"
+        $canInstall = Confirm-UserChoice -Message "是否现在安装 Claude Code？"
+    }
+
+    if (-not $canInstall) {
+        if ($NonInteractive) {
+            Add-CR "Claude Code 修复" "SKIP" "非交互模式未授权安装；如需安装请使用 -AllowInstall"
+            Write-Info "非交互模式下未授权安装。"
+            Write-Info "如需自动安装 Claude Code，请使用 -AllowInstall 参数。"
+        }
+        else {
+            Add-CR "Claude Code 修复" "SKIP" "用户取消安装，可稍后运行开始安装.cmd"
+        }
+        return
+    }
+
+    Write-Info "正在安装 Claude Code..."
+    $installResult = Install-ClaudeCodeAuto -TestSafe:$false -NonInteractive:$NonInteractive
+
+    # 根据安装结果分类处理
+    switch ($installResult.Status) {
+        "installed" {
+            Add-CR "Claude Code 修复" "OK" "安装完成: $($installResult.Version)"
+        }
+        "skipped_existing" {
+            Add-CR "Claude Code 修复" "OK" "已安装: $($installResult.Version)"
+        }
+        "node_installed_needs_restart" {
+            Add-CR "Claude Code 修复" "NEEDS_RESTART" "已完成第一阶段 Node.js 安装，需要关闭窗口后重新运行"
+            Set-Variable -Scope 1 -Name needsRestart -Value $true
+            return
+        }
+        "installed_needs_restart" {
+            Add-CR "Claude Code 修复" "NEEDS_RESTART" "Claude Code 已安装但 PATH 未刷新，需要关闭窗口后重新运行"
+            Set-Variable -Scope 1 -Name needsRestart -Value $true
+            return
+        }
+        "failed_missing_node_or_npm" {
+            Add-CR "Claude Code 修复" "ERROR" "缺少 Node.js/npm，无法安装 Claude"
+        }
+        "failed_npmmirror_unreachable" {
+            Add-CR "Claude Code 修复" "ERROR" "官方和镜像通道不可达，请检查网络后重试"
+        }
+        "failed_official_and_mirror" {
+            Add-CR "Claude Code 修复" "ERROR" "官方安装和镜像安装均失败，请运行一键诊断.cmd"
+        }
+        "skipped_test_safe_missing" {
+            Add-CR "Claude Code 修复" "SKIP" "测试安全模式未安装"
+        }
+        default {
+            Add-CR "Claude Code 修复" "WARN" "状态: $($installResult.Status)"
+        }
+    }
+
+    # 安装完成后，由调用方刷新 claudeVer 变量
+}
+
+# ============================================================
 # 主流程
 # ============================================================
 
@@ -267,10 +368,9 @@ function Start-RepairDeps {
         Add-CR "Claude Code 状态" "OK" "已安装可用"
     }
     elseif (-not $needsRestart) {
-        Write-Host ""
-        Write-Warning "Claude Code 未安装。"
-        Write-Info "请在修复 Node.js 后，重新运行 [开始安装.cmd]。"
-        Write-Info "该脚本会自动检测并安装 Claude Code。"
+        Invoke-ClaudeRepair -NodeReady:($nodeInfo.IsSupported) -NpmReady:$npmInfo.Installed -ClaudeMissingOrBroken:(-not $claudeVer)
+        # 刷新 Claude 检测结果（可能刚安装完成）
+        $claudeVer = Test-ClaudeInstalled
     }
 
     # ============================================================
@@ -366,7 +466,8 @@ function Generate-Report {
         Add-RL "  2. 如仍不可用，重新安装 Node.js LTS"
     }
     elseif (-not $claudeVer) {
-        Add-RL "  1. 运行 [开始安装.cmd] 自动安装 Claude Code"
+        Add-RL "  1. 如果 Node.js 和 npm 已正常，重新运行本工具可安装 Claude Code"
+        Add-RL "  2. 或运行 [开始安装.cmd] 自动安装 Claude Code"
     }
     else {
         Add-RL "  所有依赖已就绪，无需进一步操作。"
