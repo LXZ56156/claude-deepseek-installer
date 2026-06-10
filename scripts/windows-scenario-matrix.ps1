@@ -6,7 +6,8 @@
 
 param(
     [string]$Version = "1.3.2",
-    [switch]$Quick
+    [switch]$Quick,
+    [switch]$AssumePreviousSimulationPassed
 )
 
 Set-StrictMode -Version Latest
@@ -205,11 +206,20 @@ if (-not $Quick) {
     Write-Host ("  simulate-user-release.ps1: exit={0}" -f $simResult.ExitCode) -ForegroundColor $colorS
 }
 else {
-    Write-Host "  simulate-user-release.ps1: SKIP (Quick mode)" -ForegroundColor Yellow
-    $toolResults["simulate"] = @{
-        Name = "simulate-user-release.ps1"; ExitCode = 0; Success = $true
-        Output = "SKIP (Quick mode)"; Error = ""
+    $skipReason = if ($AssumePreviousSimulationPassed) {
+        "SKIP (Quick mode; assume passed — Release validation already ran simulate-user-release.ps1)"
+    } else {
+        "SKIP (Quick mode; run without -Quick or pass -AssumePreviousSimulationPassed to trust prior run)"
     }
+    Write-Host ("  simulate-user-release.ps1: {0}" -f $skipReason) -ForegroundColor Yellow
+    $toolResults["simulate"] = @{
+        Name = "simulate-user-release.ps1"
+        ExitCode = 0
+        Success = $AssumePreviousSimulationPassed
+        Output = $skipReason
+        Error = ""
+    }
+    $toolResults["simulateSkipped"] = $true
 }
 
 # Scenario coverage determination
@@ -255,8 +265,11 @@ foreach ($scenario in $scenarios) {
             $evidence = "install-decision-matrix.ps1 DEC-002"
         }
         "WIN-CONFIG-001" {
-            if ($toolResults["simulate"].Success) { $result = "PASS" }
-            else { $result = if ($Quick) { "SKIP" } else { "FAIL" }; $suggestion = "Run simulate-user-release.ps1" }
+            if ($toolResults["simulateSkipped"] -and -not $AssumePreviousSimulationPassed) {
+                $result = "SKIP"; $suggestion = "Run without -Quick or pass -AssumePreviousSimulationPassed"
+            } elseif ($toolResults["simulate"].Success) {
+                $result = "PASS"
+            } else { $result = "FAIL"; $suggestion = "Run simulate-user-release.ps1" }
             $evidence = "simulate-user-release.ps1 corrupt JSON flow"
         }
         "WIN-DEPS-001" {
@@ -275,18 +288,27 @@ foreach ($scenario in $scenarios) {
             $evidence = "install-decision-matrix.ps1 DEC-004 + DEC-005"
         }
         "WIN-UNINSTALL-001" {
-            if ($toolResults["simulate"].Success) { $result = "PASS" }
-            else { $result = if ($Quick) { "SKIP" } else { "FAIL" }; $suggestion = "Run simulate-user-release.ps1" }
+            if ($toolResults["simulateSkipped"] -and -not $AssumePreviousSimulationPassed) {
+                $result = "SKIP"; $suggestion = "Run without -Quick or pass -AssumePreviousSimulationPassed"
+            } elseif ($toolResults["simulate"].Success) {
+                $result = "PASS"
+            } else { $result = "FAIL"; $suggestion = "Run simulate-user-release.ps1" }
             $evidence = "simulate-user-release.ps1 uninstall/restore flow"
         }
         "WIN-REPORT-001" {
-            if ($uxResult.Success -and $toolResults["simulate"].Success) { $result = "PASS" }
-            else { $result = if ($Quick) { "SKIP" } else { "FAIL" }; $suggestion = "Check ux-check sanitize + simulate leak check" }
+            if ($toolResults["simulateSkipped"] -and -not $AssumePreviousSimulationPassed) {
+                $result = "SKIP"; $suggestion = "Run without -Quick or pass -AssumePreviousSimulationPassed"
+            } elseif ($uxResult.Success -and $toolResults["simulate"].Success) {
+                $result = "PASS"
+            } else { $result = "FAIL"; $suggestion = "Check ux-check sanitize + simulate leak check" }
             $evidence = "ux-check.ps1 sanitize + simulate leak check"
         }
         "WIN-ZIP-001" {
-            if ($toolResults["simulate"].Success) { $result = "PASS" }
-            else { $result = if ($Quick) { "SKIP" } else { "FAIL" }; $suggestion = "Run simulate-user-release.ps1 full flow" }
+            if ($toolResults["simulateSkipped"] -and -not $AssumePreviousSimulationPassed) {
+                $result = "SKIP"; $suggestion = "Run without -Quick or pass -AssumePreviousSimulationPassed"
+            } elseif ($toolResults["simulate"].Success) {
+                $result = "PASS"
+            } else { $result = "FAIL"; $suggestion = "Run simulate-user-release.ps1 full flow" }
             $evidence = "simulate-user-release.ps1 full user flow"
         }
     }
@@ -341,6 +363,15 @@ Write-ReportLine "  - .cmd double-click real GUI ShellExecute behavior"
 Write-ReportLine "  - PowerShell 5.1 Chinese path real encoding verification"
 Write-ReportLine "  - Multi-version Node.js (nvm) coexistence verification"
 Write-ReportLine ""
+
+if ($Quick -and $AssumePreviousSimulationPassed) {
+    Write-ReportLine ""
+    Write-ReportLine "Note: simulate-user-release.ps1 was skipped (-Quick mode)."
+    Write-ReportLine "  -AssumePreviousSimulationPassed is set — trusting that Release validation"
+    Write-ReportLine "  already ran simulate-user-release.ps1 successfully before this matrix run."
+    Write-ReportLine "  Scenarios that depend on simulate results are marked PASS based on that prior run."
+    Write-ReportLine ""
+}
 
 Write-ReportLine "WSL NOT modified in this round:"
 Write-ReportLine "  All changes are Windows-side validation only."

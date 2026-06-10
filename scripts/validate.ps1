@@ -252,7 +252,7 @@ function Invoke-ReleaseValidation {
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\simulate-user-release.ps1") -Arguments @("-Version", $Version)
     })
     Invoke-ValidationStep -Name "Windows scenario matrix" -ScriptBlock ([scriptblock]{
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\windows-scenario-matrix.ps1") -Arguments @("-Version", $Version, "-Quick")
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\windows-scenario-matrix.ps1") -Arguments @("-Version", $Version, "-Quick", "-AssumePreviousSimulationPassed")
     })
 }
 
