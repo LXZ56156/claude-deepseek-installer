@@ -262,11 +262,6 @@ function Test-UserPathRisk {
 
     $risks = [System.Collections.ArrayList]::new()
 
-    # 中文字符检测
-    if ($PathToCheck -match '[一-鿿]') {
-        [void]$risks.Add("路径包含中文字符，可能导致 CMD/PowerShell 解析异常")
-    }
-
     # 空格检测
     if ($PathToCheck.Contains(" ")) {
         [void]$risks.Add("路径包含空格，可能影响某些脚本执行")
@@ -322,17 +317,7 @@ function Test-UserPathRisk {
         $result.RiskLevel = "WARN"
         foreach ($r in $risks) { [void]$result.RiskItems.Add($r) }
 
-        [void]$result.Suggestions.Add("建议将项目文件夹移动到 D:\ClaudeDeepSeek（或类似不含中文、空格、特殊字符的路径），可以避免大多数路径相关问题。")
-
-        # 如果路径有特殊字符 + 中文，提升严重程度
-        $hasSpecial = $PathToCheck -match '[&^!()]'
-        $hasChinese = $PathToCheck -match '[一-鿿]'
-        if ($hasSpecial -and $hasChinese) {
-            if ($result.Suggestions.Count -gt 0) {
-                $result.Suggestions.Clear()
-            }
-            [void]$result.Suggestions.Add("当前路径同时包含中文和特殊字符，强烈建议移动项目到 D:\ClaudeDeepSeek 以避免命令行解析错误。")
-        }
+        [void]$result.Suggestions.Add("建议将项目文件夹移动到 D:\ClaudeDeepSeek（或类似不含空格、特殊字符的路径），可以避免大多数路径相关问题。")
     }
 
     return $result

@@ -142,7 +142,13 @@ $pathRiskCases = @(
         ExpectedLevel = "BLOCK"
     },
     @{
-        Name          = "Chinese space path"
+        Name          = "Chinese only path"
+        Path          = "D:\中文路径\Claude"
+        ShouldBlock   = $false
+        ExpectedLevel = "INFO"
+    },
+    @{
+        Name          = "Space path"
         Path          = "D:\中文 路径\Claude"
         ShouldBlock   = $false
         ExpectedLevel = "WARN"
