@@ -114,7 +114,8 @@ function Remove-DeepSeekEnvConfig {
     $envHash = @{}
     $removedCount = 0
 
-    if (($config.PSObject.Properties.Name -contains "env") -and $null -ne $config.env) {
+    $configProps = @(Get-JsonPropertyNamesSafe -Object $config)
+    if (($configProps -contains "env") -and $null -ne $config.env) {
         if ($config.env -is [System.Management.Automation.PSCustomObject]) {
             foreach ($prop in $config.env.PSObject.Properties) {
                 if ($prop.Name -in $managedFields) {

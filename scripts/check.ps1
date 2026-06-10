@@ -171,6 +171,47 @@ foreach ($case in $pathRiskCases) {
     Write-Host "[check]   $($case.Name): $($pathRisk.RiskLevel), blocked=$($pathRisk.IsBlocked)"
 }
 
+Write-Host "[check] Empty env StrictMode safety"
+$emptyEnvRoot = Join-Path $RootDir ".sandbox\check-empty-env"
+$emptyEnvHome = Join-Path $emptyEnvRoot "userprofile"
+$emptyEnvClaude = Join-Path $emptyEnvHome ".claude"
+$emptyEnvSettings = Join-Path $emptyEnvClaude "settings.json"
+$oldEmptyEnvTestMode = $env:CCDI_TEST_MODE
+$oldEmptyEnvUserProfile = $env:CCDI_TEST_USERPROFILE
+
+Remove-Item $emptyEnvRoot -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $emptyEnvClaude | Out-Null
+
+try {
+    $env:CCDI_TEST_MODE = "1"
+    $env:CCDI_TEST_USERPROFILE = $emptyEnvHome
+
+    [System.IO.File]::WriteAllText(
+        $emptyEnvSettings,
+        "{`"env`":{}}",
+        (New-Object System.Text.UTF8Encoding($false))
+    )
+
+    $status = Get-DeepSeekConfigStatus
+    if ($status.IsConfigured) {
+        throw "Empty env should not be configured"
+    }
+    if ($status.ErrorMessage -notmatch "env 字段为空对象") {
+        throw "Empty env should report empty object, got: $($status.ErrorMessage)"
+    }
+
+    $apiKey = Get-ApiKeyFromConfig
+    if ($null -ne $apiKey) {
+        throw "Empty env should not return API key"
+    }
+}
+finally {
+    if ($oldEmptyEnvTestMode) { $env:CCDI_TEST_MODE = $oldEmptyEnvTestMode } else { Remove-Item Env:\CCDI_TEST_MODE -ErrorAction SilentlyContinue }
+    if ($oldEmptyEnvUserProfile) { $env:CCDI_TEST_USERPROFILE = $oldEmptyEnvUserProfile } else { Remove-Item Env:\CCDI_TEST_USERPROFILE -ErrorAction SilentlyContinue }
+    Remove-Item $emptyEnvRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+Write-Host "[check] Empty env StrictMode safety OK"
+
 function Write-NetworkCheckResult {
     param(
         [string]$Name,

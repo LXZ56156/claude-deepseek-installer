@@ -522,7 +522,8 @@ function Merge-SettingsJson {
 
     # 如果已有 env 字段，合并；否则新建
     $mergedEnv = @{}
-    if (($existing.PSObject.Properties.Name -contains "env") -and $null -ne $existing.env) {
+    $existingProps = @($existing.PSObject.Properties | ForEach-Object { $_.Name })
+    if (($existingProps -contains "env") -and $null -ne $existing.env) {
         # 防御：仅当 env 是 PSCustomObject（JSON 对象）时才枚举属性。
         # 如果旧配置中 env 是字符串/数组/布尔值/数字等非对象类型，
         # 枚举其 PSObject.Properties 会产生 Length、Count 等错误字段。
@@ -954,8 +955,10 @@ function Get-SafeConfigContent {
 
     # 克隆对象并脱敏
     $clone = $json | ConvertTo-Json -Depth 10 | ConvertFrom-Json
-    if (($clone.PSObject.Properties.Name -contains "env") -and $null -ne $clone.env) {
-        if ($clone.env.PSObject.Properties.Name -contains "ANTHROPIC_AUTH_TOKEN") {
+    $cloneProps = @($clone.PSObject.Properties | ForEach-Object { $_.Name })
+    if (($cloneProps -contains "env") -and $null -ne $clone.env) {
+        $cloneEnvProps = @($clone.env.PSObject.Properties | ForEach-Object { $_.Name })
+        if ($cloneEnvProps -contains "ANTHROPIC_AUTH_TOKEN") {
             $clone.env.ANTHROPIC_AUTH_TOKEN = Mask-ApiKey -Key $clone.env.ANTHROPIC_AUTH_TOKEN
         }
     }

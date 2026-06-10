@@ -215,6 +215,36 @@ function Read-ClaudeConfig {
     return Read-JsonFileSafe -FilePath $configPath
 }
 
+function Get-JsonPropertyNamesSafe {
+    param(
+        [Parameter(Mandatory = $false)]
+        $Object
+    )
+
+    if ($null -eq $Object) {
+        return @()
+    }
+
+    if (-not ($Object -is [System.Management.Automation.PSCustomObject])) {
+        return @()
+    }
+
+    return @($Object.PSObject.Properties | ForEach-Object { $_.Name })
+}
+
+function Test-JsonPropertyExists {
+    param(
+        [Parameter(Mandatory = $false)]
+        $Object,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    $names = @(Get-JsonPropertyNamesSafe -Object $Object)
+    return ($names -contains $Name)
+}
+
 function Get-DeepSeekConfigStatus {
     <#
     .SYNOPSIS
@@ -236,7 +266,8 @@ function Get-DeepSeekConfigStatus {
         return $result
     }
 
-    if (-not ($config.PSObject.Properties.Name -contains "env")) {
+    $configNames = @(Get-JsonPropertyNamesSafe -Object $config)
+    if (-not ($configNames -contains "env")) {
         $result.ErrorMessage = "配置文件中没有 env 字段"
         return $result
     }
@@ -249,9 +280,20 @@ function Get-DeepSeekConfigStatus {
         return $result
     }
 
+    if (-not ($env -is [System.Management.Automation.PSCustomObject])) {
+        $result.ErrorMessage = "env 字段类型异常"
+        return $result
+    }
+
+    $envNames = @(Get-JsonPropertyNamesSafe -Object $env)
+    if ($envNames.Count -eq 0) {
+        $result.ErrorMessage = "env 字段为空对象，未配置 DeepSeek"
+        return $result
+    }
+
     # 检查 ANTHROPIC_BASE_URL
     $hasDeepSeekBaseUrl = $false
-    if ($env.PSObject.Properties.Name -contains "ANTHROPIC_BASE_URL") {
+    if ($envNames -contains "ANTHROPIC_BASE_URL") {
         $result.BaseUrl = $env.ANTHROPIC_BASE_URL
         if ($result.BaseUrl -match "api.deepseek.com") {
             $hasDeepSeekBaseUrl = $true
@@ -259,7 +301,7 @@ function Get-DeepSeekConfigStatus {
     }
 
     # 检查 ANTHROPIC_AUTH_TOKEN（排除空字符串情况）
-    if ($env.PSObject.Properties.Name -contains "ANTHROPIC_AUTH_TOKEN" `
+    if ($envNames -contains "ANTHROPIC_AUTH_TOKEN" `
         -and -not [string]::IsNullOrEmpty($env.ANTHROPIC_AUTH_TOKEN)) {
         $result.HasApiKey = $true
         $result.MaskedKey = Mask-ApiKey -Key $env.ANTHROPIC_AUTH_TOKEN
@@ -286,9 +328,13 @@ function Get-ApiKeyFromConfig {
     #>
     $config = Read-ClaudeConfig
     if ($null -eq $config) { return $null }
-    if (-not ($config.PSObject.Properties.Name -contains "env")) { return $null }
+    $configNames = @(Get-JsonPropertyNamesSafe -Object $config)
+    if (-not ($configNames -contains "env")) { return $null }
     if ($null -eq $config.env) { return $null }
-    if (-not ($config.env.PSObject.Properties.Name -contains "ANTHROPIC_AUTH_TOKEN")) { return $null }
+    if (-not ($config.env -is [System.Management.Automation.PSCustomObject])) { return $null }
+
+    $envNames = @(Get-JsonPropertyNamesSafe -Object $config.env)
+    if (-not ($envNames -contains "ANTHROPIC_AUTH_TOKEN")) { return $null }
 
     return $config.env.ANTHROPIC_AUTH_TOKEN
 }

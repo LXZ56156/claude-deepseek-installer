@@ -295,12 +295,13 @@ function Check-Files {
             # 检查具体字段
             $config = Read-ClaudeConfig
             if ($config) {
-                if ($config.PSObject.Properties.Name -contains "env") {
+                $configProps = @(Get-JsonPropertyNamesSafe -Object $config)
+                if ($configProps -contains "env") {
                     $env = $config.env
-                    Add-CheckResult "env 字段" "OK" "存在 ($(($env.PSObject.Properties | Measure-Object).Count) 个变量)"
+                    $envProps = @(Get-JsonPropertyNamesSafe -Object $env)
+                    Add-CheckResult "env 字段" "OK" "存在 ($($envProps.Count) 个变量)"
 
                     # 检查关键字段
-                    $envProps = $env.PSObject.Properties.Name
 
                     if ($envProps -contains "ANTHROPIC_BASE_URL") {
                         $baseUrl = $env.ANTHROPIC_BASE_URL
@@ -468,10 +469,11 @@ function Check-DeepSeekApi {
     $baseUrl = "https://api.deepseek.com/anthropic"
     $testModel = "deepseek-v4-flash"
     if ($config -and $config.env) {
-        if ($config.env.PSObject.Properties.Name -contains "ANTHROPIC_BASE_URL") {
+        $envProps = @(Get-JsonPropertyNamesSafe -Object $config.env)
+        if ($envProps -contains "ANTHROPIC_BASE_URL") {
             $baseUrl = $config.env.ANTHROPIC_BASE_URL
         }
-        if ($config.env.PSObject.Properties.Name -contains "ANTHROPIC_SMALL_FAST_MODEL") {
+        if ($envProps -contains "ANTHROPIC_SMALL_FAST_MODEL") {
             $testModel = $config.env.ANTHROPIC_SMALL_FAST_MODEL
         }
     }
@@ -667,8 +669,11 @@ function Write-QuickSummary {
         if ($configInfo.IsValid) {
             $config = Read-JsonFileSafe -FilePath $configInfo.Path
             $hasKey = $null
-            if ($config -and $config.env -and ($config.env.PSObject.Properties.Name -contains "ANTHROPIC_AUTH_TOKEN")) {
-                $hasKey = $config.env.ANTHROPIC_AUTH_TOKEN
+            if ($config -and $config.env) {
+                $envProps = @(Get-JsonPropertyNamesSafe -Object $config.env)
+                if ($envProps -contains "ANTHROPIC_AUTH_TOKEN") {
+                    $hasKey = $config.env.ANTHROPIC_AUTH_TOKEN
+                }
             }
             if (-not [string]::IsNullOrWhiteSpace($hasKey)) {
                 Add-ReportLine "  DeepSeek 配置: 已配置"
