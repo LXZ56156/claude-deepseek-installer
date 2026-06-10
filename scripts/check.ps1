@@ -78,6 +78,7 @@ $requiredCommands = @(
     "Initialize-CcdiState",
     "Update-CcdiState",
     "Read-CcdiState",
+    "Get-CcdiStateValue",
     "Test-ClaudeCommandExisting",
     "Test-HttpEndpointReachable",
     "Test-ClaudeOfficialInstallNetwork",
@@ -211,6 +212,70 @@ finally {
     Remove-Item $emptyEnvRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 Write-Host "[check] Empty env StrictMode safety OK"
+
+Write-Host "[check] Partial CCDI state StrictMode safety"
+$partialStateRoot = Join-Path $RootDir ".sandbox\check-partial-state"
+$partialStateHome = Join-Path $partialStateRoot "userprofile"
+$partialStateDir = Join-Path $partialStateHome ".claude-deepseek-installer"
+$partialStateFile = Join-Path $partialStateDir "state.json"
+$partialStateRunner = Join-Path $partialStateRoot "show-status-only.ps1"
+
+$oldPartialStateTestMode = $env:CCDI_TEST_MODE
+$oldPartialStateUserProfile = $env:CCDI_TEST_USERPROFILE
+
+Remove-Item $partialStateRoot -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $partialStateDir | Out-Null
+
+try {
+    $env:CCDI_TEST_MODE = "1"
+    $env:CCDI_TEST_USERPROFILE = $partialStateHome
+
+    [System.IO.File]::WriteAllText(
+        $partialStateFile,
+        "{`"claudeInstallMethod`":`"existing`",`"claudeWasAlreadyInstalled`":true,`"claudeInstallStatus`":`"skipped_existing`"}",
+        (New-Object System.Text.UTF8Encoding($false))
+    )
+
+    $state = Read-CcdiState
+    $method = Get-CcdiStateValue -State $state -Name "claudeInstallMethod" -Default "(未知)"
+    $installedAt = Get-CcdiStateValue -State $state -Name "installedAt" -Default "(未记录)"
+
+    if ($method -ne "existing") {
+        throw "Partial state method read failed"
+    }
+
+    if ($installedAt -ne "(未记录)") {
+        throw "Missing installedAt should return default"
+    }
+
+    Set-Content -Path $partialStateRunner -Encoding UTF8 -Value @"
+param([string]`$ProfilePath)
+`$env:CCDI_TEST_MODE = "1"
+`$env:CCDI_TEST_USERPROFILE = `$ProfilePath
+& "$RootDir\uninstall-config.ps1" -ShowStatusOnly
+exit `$LASTEXITCODE
+"@
+
+    $showStatusOutput = powershell.exe -NoProfile -ExecutionPolicy Bypass -File $partialStateRunner $partialStateHome 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "uninstall-config -ShowStatusOnly failed with partial state"
+    }
+
+    $showStatusText = ($showStatusOutput | Out-String)
+    if ($showStatusText -notmatch "安装方式: existing") {
+        throw "uninstall-config -ShowStatusOnly did not read partial state"
+    }
+    if ($showStatusText -notmatch "安装时间: \(未记录\)") {
+        throw "uninstall-config -ShowStatusOnly did not show default installedAt"
+    }
+}
+finally {
+    if ($oldPartialStateTestMode) { $env:CCDI_TEST_MODE = $oldPartialStateTestMode } else { Remove-Item Env:\CCDI_TEST_MODE -ErrorAction SilentlyContinue }
+    if ($oldPartialStateUserProfile) { $env:CCDI_TEST_USERPROFILE = $oldPartialStateUserProfile } else { Remove-Item Env:\CCDI_TEST_USERPROFILE -ErrorAction SilentlyContinue }
+    Remove-Item $partialStateRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "[check] Partial CCDI state StrictMode safety OK"
 
 Write-Host "[check] API test exception handling"
 $oldApiStatus = $env:CCDI_TEST_API_STATUS

@@ -46,6 +46,38 @@ function Read-CcdiState {
     return $state
 }
 
+function Get-CcdiStateValue {
+    <#
+    .SYNOPSIS
+        安全读取 CCDI 状态字段，兼容旧版或残缺 state.json。
+    #>
+    param(
+        [Parameter(Mandatory = $false)]
+        $State,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $false)]
+        $Default = $null
+    )
+
+    if ($null -eq $State) {
+        return $Default
+    }
+
+    if (-not ($State -is [System.Management.Automation.PSCustomObject])) {
+        return $Default
+    }
+
+    $names = @($State.PSObject.Properties | ForEach-Object { $_.Name })
+    if ($names -contains $Name) {
+        return $State.$Name
+    }
+
+    return $Default
+}
+
 function Write-CcdiState {
     <#
     .SYNOPSIS

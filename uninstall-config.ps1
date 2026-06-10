@@ -7,6 +7,7 @@
 #   powershell -ExecutionPolicy Bypass -File .\uninstall-config.ps1 -RestoreLatest -Yes
 #   powershell -ExecutionPolicy Bypass -File .\uninstall-config.ps1 -DeleteSettings -Yes
 #   powershell -ExecutionPolicy Bypass -File .\uninstall-config.ps1 -ListBackups
+#   powershell -ExecutionPolicy Bypass -File .\uninstall-config.ps1 -ShowStatusOnly
 #
 # 功能:
 #   恢复旧配置备份，或清空 DeepSeek API 配置
@@ -18,6 +19,7 @@ param(
     [switch]$RestoreLatest,
     [switch]$DeleteSettings,
     [switch]$ListBackups,
+    [switch]$ShowStatusOnly,
     [switch]$Yes,
     [switch]$NonInteractive
 )
@@ -218,12 +220,26 @@ function Show-StateAndCurrentConfig {
     $state = Read-CcdiState
 
     if ($state) {
-        $wasAlreadyInstalledText = if ($state.claudeWasAlreadyInstalled) { "是" } else { "否" }
+        $installMethod = Get-CcdiStateValue -State $state -Name "claudeInstallMethod" -Default "(未知)"
+        $installStatus = Get-CcdiStateValue -State $state -Name "claudeInstallStatus" -Default "(未知)"
+        $installedAt = Get-CcdiStateValue -State $state -Name "installedAt" -Default "(未记录)"
+        $wasAlreadyInstalled = Get-CcdiStateValue -State $state -Name "claudeWasAlreadyInstalled" -Default $null
+
+        $wasAlreadyInstalledText = if ($wasAlreadyInstalled -eq $true) {
+            "是"
+        }
+        elseif ($wasAlreadyInstalled -eq $false) {
+            "否"
+        }
+        else {
+            "(未记录)"
+        }
+
         Write-Info "本工具记录的安装信息:"
-        Write-Info "  安装方式: $($state.claudeInstallMethod)"
+        Write-Info "  安装方式: $installMethod"
         Write-Info "  Claude Code 原本已安装: $wasAlreadyInstalledText"
-        Write-Info "  安装状态: $($state.claudeInstallStatus)"
-        Write-Info "  安装时间: $($state.installedAt)"
+        Write-Info "  安装状态: $installStatus"
+        Write-Info "  安装时间: $installedAt"
         Write-Host ""
     }
 
@@ -234,19 +250,22 @@ function Show-StateAndCurrentConfig {
     Write-Info ""
 
     if ($state) {
-        if ($state.claudeWasAlreadyInstalled -eq $true) {
+        if ($wasAlreadyInstalled -eq $true) {
             Write-Warning "Claude Code 原本已存在（非本工具安装），不建议卸载 Claude Code。"
             Write-Info "本工具仅管理 DeepSeek 配置的恢复/清理。"
         }
-        elseif ($state.claudeInstallMethod -eq "npm") {
+        elseif ($installMethod -eq "npm" -or $installMethod -eq "npm_npmmirror") {
             Write-Info "Claude Code 通过 npm 安装。如需卸载，可运行: npm uninstall -g @anthropic-ai/claude-code"
         }
-        elseif ($state.claudeInstallMethod -eq "native") {
+        elseif ($installMethod -eq "native" -or $installMethod -eq "official_native") {
             Write-Info "Claude Code 通过官方 Native Install 安装。本工具暂不自动卸载。"
             Write-Info "卸载请参考 Claude Code 官方文档。本工具仅管理配置。"
         }
-        elseif ($state.claudeInstallMethod -eq "node-via-winget") {
+        elseif ($installMethod -eq "node-via-winget") {
             Write-Info "Node.js 通过 winget 安装（Claude Code 尚未完成安装）。"
+        }
+        elseif ($installMethod -eq "existing") {
+            Write-Info "Claude Code 是运行前已存在的安装。本工具仅管理 DeepSeek 配置。"
         }
     }
     else {
@@ -293,6 +312,10 @@ if ($ListBackups) {
 }
 
 Show-StateAndCurrentConfig
+
+if ($ShowStatusOnly) {
+    exit 0
+}
 
 $assumeYes = $Yes -or $NonInteractive
 
