@@ -155,36 +155,55 @@ function Test-IsZipInternalPath {
     }
     $result.Path = $PathToCheck
 
-    # 不区分大小写检测
-    $lower = $PathToCheck.ToLowerInvariant()
-    $tempPath = if ($env:TEMP) { $env:TEMP.ToLowerInvariant() } else { "" }
+    $normalized = ($PathToCheck -replace '/', '\').TrimEnd('\')
+    $lower = $normalized.ToLowerInvariant()
 
-    # ============================================================
-    # 第 1 遍：明确压缩包临时目录特征 → IsZipTemp = true（BLOCK）
-    # ============================================================
-    $explicitZipMarkers = @(
-        "\\rar$",
-        "\\7z",
-        "\\7zs",
-        "\\7zo",
-        "\\compressed",
-        "\\temporary internet files",
-        "_zip_",
-        "\\.zip"
-    )
+    $tempPath = ""
+    if ($env:TEMP) {
+        $tempPath = (($env:TEMP -replace '/', '\').TrimEnd('\')).ToLowerInvariant()
+    }
 
-    foreach ($marker in $explicitZipMarkers) {
-        if ($lower.Contains($marker.ToLowerInvariant())) {
-            $result.IsZipTemp = $true
-            $result.Reason = "检测到路径包含压缩包临时目录特征。请先完整解压 ZIP 到普通文件夹，例如 D:\\ClaudeDeepSeek。"
-            return $result
-        }
+    $isUnderTemp = $false
+    if ($tempPath) {
+        $isUnderTemp = ($lower -eq $tempPath -or $lower.StartsWith($tempPath + "\"))
+    }
+
+    $rarRegex = '(?i)(^|\\)rar\$[^\\]*(\\|$)'
+    $sevenZipRegex = '(?i)(^|\\)7z[^\\]*(\\|$)'
+    $explorerZipRegex = '(?i)(^|\\)temp\d*_[^\\]*\.zip(\\|$)'
+    $zipSegmentRegex = '(?i)(^|\\)[^\\]*\.zip(\\|$)'
+    $temporaryInternetRegex = '(?i)(^|\\)temporary internet files(\\|$)'
+    $compressedRegex = '(?i)(^|\\)compressed(\\|$)'
+
+    # 明确压缩包临时目录特征 → IsZipTemp = true（BLOCK）
+    if ($lower -match $rarRegex) {
+        $result.IsZipTemp = $true
+        $result.Reason = "检测到 WinRAR 临时解压目录。请先完整解压 ZIP 到普通文件夹，例如 D:\\ClaudeDeepSeek。"
+        return $result
+    }
+
+    if ($isUnderTemp -and $lower -match $sevenZipRegex) {
+        $result.IsZipTemp = $true
+        $result.Reason = "检测到 7-Zip 临时解压目录。请先完整解压 ZIP 到普通文件夹，例如 D:\\ClaudeDeepSeek。"
+        return $result
+    }
+
+    if ($isUnderTemp -and ($lower -match $explorerZipRegex -or $lower -match $zipSegmentRegex -or $lower.Contains("_zip_"))) {
+        $result.IsZipTemp = $true
+        $result.Reason = "检测到 Windows 压缩包临时目录。请先完整解压 ZIP 到普通文件夹，例如 D:\\ClaudeDeepSeek。"
+        return $result
+    }
+
+    if ($lower -match $temporaryInternetRegex -or $lower -match $compressedRegex) {
+        $result.IsZipTemp = $true
+        $result.Reason = "检测到压缩包或浏览器临时目录。请先完整解压 ZIP 到普通文件夹，例如 D:\\ClaudeDeepSeek。"
+        return $result
     }
 
     # ============================================================
     # 第 2 遍：普通 TEMP 目录 → IsTempPath = true（WARN，不 BLOCK）
     # ============================================================
-    if ($tempPath -and $lower.StartsWith($tempPath)) {
+    if ($isUnderTemp) {
         $result.IsTempPath = $true
         $result.Reason = "当前路径在系统临时目录中，文件可能被自动清理导致数据丢失。建议移动到 D:\\ClaudeDeepSeek。"
         return $result

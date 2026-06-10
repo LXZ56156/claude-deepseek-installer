@@ -101,6 +101,76 @@ if ($masked -eq $key -or $masked -notmatch "\*\*\*\*") {
     throw "Mask-ApiKey did not mask the key"
 }
 
+Write-Host "[check] Path risk detection"
+$pathRiskTempRoot = if ($env:TEMP) {
+    $env:TEMP
+}
+else {
+    [System.IO.Path]::GetTempPath().TrimEnd('\', '/')
+}
+
+$pathRiskCases = @(
+    @{
+        Name          = "Recommended path"
+        Path          = "D:\ClaudeDeepSeek"
+        ShouldBlock   = $false
+        ExpectedLevel = "INFO"
+    },
+    @{
+        Name          = "Normal temp path"
+        Path          = Join-Path $pathRiskTempRoot "ClaudeDeepSeek"
+        ShouldBlock   = $false
+        ExpectedLevel = "WARN"
+    },
+    @{
+        Name          = "WinRAR temp path"
+        Path          = Join-Path $pathRiskTempRoot 'Rar$EXa123\ClaudeDeepSeek'
+        ShouldBlock   = $true
+        ExpectedLevel = "BLOCK"
+    },
+    @{
+        Name          = "7Zip temp path"
+        Path          = Join-Path $pathRiskTempRoot "7zO123456\ClaudeDeepSeek"
+        ShouldBlock   = $true
+        ExpectedLevel = "BLOCK"
+    },
+    @{
+        Name          = "Explorer Temp1 zip path"
+        Path          = Join-Path $pathRiskTempRoot "Temp1_package.zip\ClaudeDeepSeek"
+        ShouldBlock   = $true
+        ExpectedLevel = "BLOCK"
+    },
+    @{
+        Name          = "Chinese space path"
+        Path          = "D:\中文 路径\Claude"
+        ShouldBlock   = $false
+        ExpectedLevel = "WARN"
+    },
+    @{
+        Name          = "WSL UNC path"
+        Path          = "\\wsl.localhost\Ubuntu\home\user\repo"
+        ShouldBlock   = $false
+        ExpectedLevel = "WARN"
+    },
+    @{
+        Name          = "Non-temp 7zip-like folder"
+        Path          = "D:\tools\7zip-helper\Claude"
+        ShouldBlock   = $false
+        ExpectedLevel = $null
+    }
+)
+
+foreach ($case in $pathRiskCases) {
+    $pathRisk = Test-UserPathRisk -PathToCheck $case.Path
+    if ($pathRisk.IsBlocked -ne $case.ShouldBlock) {
+        throw "Path risk failed: $($case.Name). Path=$($case.Path), IsBlocked=$($pathRisk.IsBlocked), expected=$($case.ShouldBlock), RiskLevel=$($pathRisk.RiskLevel)"
+    }
+    if ($case.ExpectedLevel -and $pathRisk.RiskLevel -ne $case.ExpectedLevel) {
+        throw "Path risk level failed: $($case.Name). RiskLevel=$($pathRisk.RiskLevel), expected=$($case.ExpectedLevel)"
+    }
+    Write-Host "[check]   $($case.Name): $($pathRisk.RiskLevel), blocked=$($pathRisk.IsBlocked)"
+}
+
 function Write-NetworkCheckResult {
     param(
         [string]$Name,
