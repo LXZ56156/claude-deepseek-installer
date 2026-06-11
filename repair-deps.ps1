@@ -321,13 +321,8 @@ function Start-RepairDeps {
                     }
                 }
 
-                Write-Info "正在使用 winget 安装 Node.js LTS（可能需要几分钟）..."
-                $installResult = Invoke-CommandSafe -Command "winget" -Arguments @(
-                    "install", "OpenJS.NodeJS.LTS",
-                    "--accept-package-agreements",
-                    "--accept-source-agreements",
-                    "--silent"
-                ) -TimeoutSec 900 -ProgressMessage "仍在安装 Node.js LTS，请勿关闭窗口。"
+                Write-Info "正在使用 winget 安装 Node.js LTS，安装进度将直接显示在下方..."
+                $installResult = Install-NodeJsViaWinget -TimeoutSec 900
 
                 if ($installResult.Success) {
                     Write-Success "Node.js LTS 安装完成！"

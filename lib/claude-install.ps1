@@ -934,6 +934,88 @@ function Invoke-ClaudeDoctorInteractiveSafe {
     return $result
 }
 
+function Install-NodeJsViaWinget {
+    <#
+    .SYNOPSIS
+        使用 winget 安装 Node.js LTS，保留终端输出让用户看到下载进度。
+        不使用 Invoke-CommandSafe / cmd.exe / stdout 重定向，确保 winget
+        的进度条直接显示在用户终端中。
+    .PARAMETER TimeoutSec
+        超时秒数，默认 900（15分钟）。
+    .PARAMETER TestSafe
+        测试安全模式：跳过真实安装。
+    .RETURNS
+        包含 Success, ExitCode, Error 的哈希表
+    #>
+    param(
+        [int]$TimeoutSec = 900,
+        [switch]$TestSafe
+    )
+
+    $result = @{
+        Success  = $false
+        ExitCode = -1
+        Error    = ""
+    }
+
+    if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
+        Write-Log "INFO" "TestSafe: 跳过 winget install Node.js"
+        $result.Error = "skipped_test_safe"
+        return $result
+    }
+
+    Write-Info "正在使用 winget 安装 Node.js LTS，安装进度将直接显示在下方。"
+    Write-Info "下载约 80MB，请耐心等待（通常 3-8 分钟）..."
+    Write-Host ""
+
+    try {
+        $proc = Start-Process -FilePath "winget" -ArgumentList @(
+            "install", "OpenJS.NodeJS.LTS",
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+            "--silent"
+        ) -NoNewWindow -PassThru
+
+        Write-Log "INFO" "winget install Node.js started, PID=$($proc.Id), timeout=${TimeoutSec}s"
+
+        $finished = $proc.WaitForExit($TimeoutSec * 1000)
+
+        if ($finished) {
+            $result.ExitCode = $proc.ExitCode
+            $result.Success = ($proc.ExitCode -eq 0)
+            if ($result.Success) {
+                Write-Success "Node.js LTS 安装完成！"
+                Write-Log "INFO" "winget install Node.js succeeded, ExitCode=$($proc.ExitCode)"
+            }
+            else {
+                $result.Error = "winget 返回非零退出码: $($proc.ExitCode)"
+                Write-Error-Msg $result.Error
+                Write-Log "ERROR" $result.Error
+            }
+        }
+        else {
+            # 超时
+            Write-Warning "winget 安装 Node.js 超时（${TimeoutSec}秒），正在终止..."
+            try {
+                if (-not $proc.HasExited) {
+                    $proc.Kill()
+                }
+            }
+            catch {
+                Write-Log "WARN" "终止 winget 进程失败: $_"
+            }
+            $result.Error = "winget 安装超时 (${TimeoutSec}秒)"
+            Write-Log "ERROR" $result.Error
+        }
+    }
+    catch {
+        $result.Error = "winget 安装异常: $_"
+        Write-Log "ERROR" $result.Error
+    }
+
+    return $result
+}
+
 # ============================================================
 # 统一安装入口
 # ============================================================
@@ -1165,19 +1247,13 @@ function Install-ClaudeCodeAuto {
                 if ($isMockDecision) {
                     Write-Log "DEBUG" "MOCK: auto-confirming winget Node.js install prompt"
                 }
-                Write-Info "正在使用 winget 安装 Node.js LTS（可能需要几分钟）..."
                 $installResult = if ($isMockDecision) {
                     $mockNodeInstall = if ($env:CCDI_MOCK_NODE_INSTALL) { $env:CCDI_MOCK_NODE_INSTALL } else { "fail" }
                     Write-Log "DEBUG" "MOCK: winget install Node.js -> CCDI_MOCK_NODE_INSTALL=$mockNodeInstall"
                     @{ Success = ($mockNodeInstall -eq "success"); Error = if ($mockNodeInstall -eq "success") { "" } else { "mock: winget install failed" } }
                 }
                 else {
-                    Invoke-CommandSafe -Command "winget" -Arguments @(
-                        "install", "OpenJS.NodeJS.LTS",
-                        "--accept-package-agreements",
-                        "--accept-source-agreements",
-                        "--silent"
-                    ) -TimeoutSec 900 -ProgressMessage "仍在安装 Node.js LTS，请勿关闭窗口。"
+                    $installResult = Install-NodeJsViaWinget -TimeoutSec 900
                 }
 
                 if ($installResult.Success) {
