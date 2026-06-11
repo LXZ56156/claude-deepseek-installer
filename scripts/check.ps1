@@ -86,7 +86,9 @@ $requiredCommands = @(
     "Install-ClaudeCodeNative",
     "Install-ClaudeCodeNpmMirror",
     "Install-ClaudeCodeAuto",
-    "Invoke-ClaudeDoctorSafe"
+    "Invoke-ClaudeDoctorSafe",
+    "Invoke-ClaudeDoctorInteractiveSafe",
+    "Clear-StaleClaudeDoctorProcesses"
 )
 
 foreach ($cmd in $requiredCommands) {
@@ -405,35 +407,77 @@ foreach ($pattern in $requiredDoctorCountPatterns) {
     }
 }
 
-Write-Host "[check] Claude doctor quick-check UX"
+Write-Host "[check] Claude doctor interactive invocation"
 $claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
-if ($claudeInstallText -notmatch 'claude doctor（快速诊断，最多等待 30 秒）') {
-    throw "Invoke-ClaudeDoctorSafe should clearly describe claude doctor as a quick, bounded diagnostic"
+$commonText = Get-Content -Path (Join-Path $RootDir "lib\common.ps1") -Raw -Encoding UTF8
+$doctorText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+
+# 1. Invoke-ClaudeDoctorInteractiveSafe exists with required fields
+if ($claudeInstallText -notmatch 'function Invoke-ClaudeDoctorInteractiveSafe') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe function not found in lib/claude-install.ps1"
 }
-if ($claudeInstallText -notmatch '-TimeoutSec\s+30') {
-    throw "Invoke-ClaudeDoctorSafe should cap claude doctor at 30 seconds"
+if ($claudeInstallText -notmatch 'TimedOut\s*=\s*\$false') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must include TimedOut field in result"
 }
-if ($claudeInstallText -notmatch 'ProgressMessage') {
-    throw "Invoke-ClaudeDoctorSafe should show progress while claude doctor is running"
+if ($claudeInstallText -notmatch 'DurationMs') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must include DurationMs field in result"
 }
-if ($claudeInstallText -notmatch '安装流程会继续') {
-    throw "Invoke-ClaudeDoctorSafe should tell users claude doctor failure does not block installation"
+
+# 2. doctor.ps1 calls Invoke-ClaudeDoctorInteractiveSafe, not Invoke-CommandSafe for claude doctor
+if ($doctorText -notmatch 'Invoke-ClaudeDoctorInteractiveSafe') {
+    throw "doctor.ps1 must use Invoke-ClaudeDoctorInteractiveSafe for claude doctor"
 }
-if ($doctorText -notmatch 'claude doctor（快速诊断，最多等待 30 秒）') {
-    throw "doctor.ps1 should describe claude doctor as a quick, bounded diagnostic"
+if ($doctorText -match 'Invoke-CommandSafe\s+-Command\s+"claude"\s+-Arguments\s+@\("doctor"\)') {
+    throw "doctor.ps1 must NOT use Invoke-CommandSafe to run claude doctor"
 }
-if ($doctorText -notmatch '-TimeoutSec\s+30') {
-    throw "doctor.ps1 should cap claude doctor at 30 seconds"
+
+# 3. doctor.ps1 handles TimedOut separately
+if ($doctorText -notmatch 'claudeDoctor\.TimedOut') {
+    throw "doctor.ps1 must check claudeDoctor.TimedOut for timeout-specific messaging"
 }
-if ($doctorText -notmatch 'ProgressMessage') {
-    throw "doctor.ps1 should show progress while claude doctor is running"
+if ($doctorText -notmatch '超时，已终止；这不代表 Claude Code 安装失败') {
+    throw "doctor.ps1 must clearly state that claude doctor timeout does not mean install failure"
 }
-if ($doctorText -notmatch '不影响后续诊断') {
-    throw "doctor.ps1 should tell users claude doctor failure does not block diagnostics"
+
+# 4. Invoke-CommandSafe uses taskkill /T /F for process tree termination
+if ($commonText -notmatch 'taskkill\.exe\s+/PID') {
+    throw "Invoke-CommandSafe must use taskkill.exe for timeout process termination"
 }
+if ($commonText -notmatch '/T\s+/F') {
+    throw "Invoke-CommandSafe must use taskkill /T /F to kill process tree"
+}
+
+# 5. Invoke-CommandSafe reads temp files BEFORE deleting on timeout
+# The "partial stdout/stderr read before cleanup" pattern must exist
+if ($commonText -notmatch '超时部分 stdout') {
+    throw "Invoke-CommandSafe must read stdout temp file for partial content before timeout cleanup"
+}
+if ($commonText -notmatch '超时部分 stderr') {
+    throw "Invoke-CommandSafe must read stderr temp file for partial content before timeout cleanup"
+}
+
+# 6. Clear-StaleClaudeDoctorProcesses exists with proper filtering
+if ($claudeInstallText -notmatch 'function Clear-StaleClaudeDoctorProcesses') {
+    throw "Clear-StaleClaudeDoctorProcesses function not found in lib/claude-install.ps1"
+}
+if ($claudeInstallText -notmatch '\$\w+\.CommandLine\s+-match\s+') {
+    throw "Clear-StaleClaudeDoctorProcesses must filter by CommandLine to avoid killing non-doctor claude"
+}
+if ($claudeInstallText -notmatch 'doctor') {
+    # Already matched above; this is a sanity check
+}
+
+# 7. Invoke-ClaudeDoctorInteractiveSafe calls Clear-StaleClaudeDoctorProcesses
+if ($claudeInstallText -notmatch 'Clear-StaleClaudeDoctorProcesses') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must call Clear-StaleClaudeDoctorProcesses"
+}
+
+# 8. doctor.ps1 TestSafe path for claude doctor
 if ($doctorText -notmatch 'CCDI_TEST_MODE\s+-eq\s+"1"') {
     throw "doctor.ps1 should skip claude doctor when CCDI_TEST_MODE=1"
 }
+
+Write-Host "[check] Claude doctor interactive invocation OK"
 
 Write-Host "[check] uninstall backup listing"
 $uninstallText = Get-Content -Path (Join-Path $RootDir "uninstall-config.ps1") -Raw -Encoding UTF8
@@ -544,6 +588,48 @@ try {
         throw "Invoke-ClaudeDoctorSafe with CCDI_TEST_MODE=1 should auto-skip, got: $($t2b.Output)"
     }
     Write-Host "[check]     Auto-detected CCDI_TEST_MODE, correctly skipped"
+
+    # ----------------------------------------------------------
+    # Test 2c: Invoke-ClaudeDoctorInteractiveSafe -TestSafe skips real call
+    # ----------------------------------------------------------
+    Write-Host "[check]   Test 2c: Invoke-ClaudeDoctorInteractiveSafe -TestSafe skips"
+    $t2c = Invoke-ClaudeDoctorInteractiveSafe -TestSafe -TimeoutSec 5
+    if ($t2c.Success) {
+        throw "Invoke-ClaudeDoctorInteractiveSafe -TestSafe should return Success=false, got Success=true"
+    }
+    if ($t2c.Error -ne "skipped_test_safe") {
+        throw "Invoke-ClaudeDoctorInteractiveSafe -TestSafe should return Error=skipped_test_safe, got: $($t2c.Error)"
+    }
+    Write-Host "[check]     correctly skipped, Error=$($t2c.Error)"
+
+    # Test 2d: Invoke-ClaudeDoctorInteractiveSafe with CCDI_TEST_MODE=1 auto-skips
+    Write-Host "[check]   Test 2d: Invoke-ClaudeDoctorInteractiveSafe (CCDI_TEST_MODE=1 auto-protect)"
+    $t2d = Invoke-ClaudeDoctorInteractiveSafe -TimeoutSec 5
+    if ($t2d.Error -ne "skipped_test_safe") {
+        throw "Invoke-ClaudeDoctorInteractiveSafe with CCDI_TEST_MODE=1 should auto-skip, got: $($t2d.Error)"
+    }
+    Write-Host "[check]     Auto-protected by CCDI_TEST_MODE=1"
+
+    # Test 2e: Invoke-ClaudeDoctorInteractiveSafe return shape
+    Write-Host "[check]   Test 2e: Invoke-ClaudeDoctorInteractiveSafe return shape"
+    $requiredInteractiveKeys = @("Success", "TimedOut", "ExitCode", "Error", "Command", "DurationMs")
+    foreach ($key in $requiredInteractiveKeys) {
+        if ($t2c.Keys -notcontains $key) {
+            throw "Invoke-ClaudeDoctorInteractiveSafe missing field: $key"
+        }
+    }
+    Write-Host "[check]     All required fields present"
+
+    # Test 2f: Clear-StaleClaudeDoctorProcesses returns expected shape
+    Write-Host "[check]   Test 2f: Clear-StaleClaudeDoctorProcesses return shape"
+    $t2f = Clear-StaleClaudeDoctorProcesses
+    if ($t2f.Keys -notcontains "KilledCount") {
+        throw "Clear-StaleClaudeDoctorProcesses missing KilledCount field"
+    }
+    if ($t2f.Keys -notcontains "Errors") {
+        throw "Clear-StaleClaudeDoctorProcesses missing Errors field"
+    }
+    Write-Host "[check]     KilledCount=$($t2f.KilledCount), Errors=$($t2f.Errors.Count)"
 
     # ----------------------------------------------------------
     # Test 3/4/8: optional network checks

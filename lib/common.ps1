@@ -777,6 +777,8 @@ function Invoke-CommandSafe {
 
         $proc = Start-Process -FilePath $cmdExe -ArgumentList $argumentLine -NoNewWindow -PassThru
 
+        Write-Log "DEBUG" "Invoke-CommandSafe: resolved=$startFile, cwd=$(Get-Location), args=$argumentLine, cmdPid=$($proc.Id)"
+
         # 等待进程完成，设置超时；长命令可选择性输出心跳提示。
         $finished = $false
         $deadline = (Get-Date).AddSeconds($TimeoutSec)
@@ -800,19 +802,89 @@ function Invoke-CommandSafe {
         }
 
         if (-not $finished) {
-            # 超时：强制终止进程
+            # 超时：先读取临时文件内容用于诊断，再杀进程树，最后清理
+            Write-Log "ERROR" "命令超时 (${TimeoutSec}s): $Command $argumentLine"
+
+            # 超时后先保存临时文件内容，再清理
+            if (Test-Path $tmpOut) {
+                try {
+                    $partialOut = Get-Content $tmpOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                    if (-not [string]::IsNullOrWhiteSpace($partialOut)) {
+                        $maxPartialLen = 4000
+                        $result.Output = if ($partialOut.Length -gt $maxPartialLen) {
+                            $partialOut.Substring(0, $maxPartialLen) + "`n...[截断]"
+                        } else { $partialOut }
+                        Write-Log "INFO" "超时部分 stdout ($($partialOut.Length) bytes): $(if ($partialOut.Length -gt 500) { $partialOut.Substring(0, 500) + '...' } else { $partialOut })"
+                    }
+                }
+                catch { Write-Log "WARN" "读取超时 stdout 失败: $_" }
+            }
+            if (Test-Path $tmpErr) {
+                try {
+                    $partialErr = Get-Content $tmpErr -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                    if (-not [string]::IsNullOrWhiteSpace($partialErr)) {
+                        $maxPartialLen = 4000
+                        $result.Error = if ($partialErr.Length -gt $maxPartialLen) {
+                            $partialErr.Substring(0, $maxPartialLen) + "`n...[截断]"
+                        } else { $partialErr }
+                        Write-Log "INFO" "超时部分 stderr ($($partialErr.Length) bytes): $(if ($partialErr.Length -gt 500) { $partialErr.Substring(0, 500) + '...' } else { $partialErr })"
+                    }
+                }
+                catch { Write-Log "WARN" "读取超时 stderr 失败: $_" }
+            }
+
+            if ([string]::IsNullOrWhiteSpace($result.Error)) {
+                $result.Error = "命令执行超时 (${TimeoutSec}秒): $Command"
+            }
+
+            # 杀进程树：优先 taskkill /T /F，fallback 到 Stop-Process
             try {
                 if (-not $proc.HasExited) {
-                    $proc.Kill()
+                    $procId = $proc.Id
+                    Write-Log "INFO" "正在用 taskkill /T /F 终止进程树 PID=$procId"
+                    $killResult = & taskkill.exe /PID $procId /T /F 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Log "INFO" "已终止进程树 PID=$($procId): $killResult"
+                    }
+                    else {
+                        Write-Log "WARN" "taskkill 返回非零 ($LASTEXITCODE): $killResult, 尝试 Stop-Process fallback"
+                        # 查找子进程并逐级终止
+                        $childProcs = Get-CimInstance Win32_Process -Filter "ParentProcessId=$procId" -ErrorAction SilentlyContinue
+                        if (-not $childProcs) {
+                            $childProcs = Get-WmiObject Win32_Process -Filter "ParentProcessId=$procId" -ErrorAction SilentlyContinue
+                        }
+                        if ($childProcs) {
+                            foreach ($child in $childProcs) {
+                                try {
+                                    Stop-Process -Id $child.ProcessId -Force -ErrorAction Stop
+                                    Write-Log "INFO" "已终止子进程 PID=$($child.ProcessId)"
+                                }
+                                catch {
+                                    Write-Log "WARN" "终止子进程失败 PID=$($child.ProcessId): $_"
+                                }
+                            }
+                        }
+                        Stop-Process -Id $procId -Force -ErrorAction Stop
+                        Write-Log "INFO" "已通过 Stop-Process 终止父进程 PID=$procId"
+                    }
                     $proc.WaitForExit(5000) | Out-Null
                 }
             }
             catch {
-                Write-Log "WARN" "终止超时命令时发生异常: $_"
+                Write-Log "WARN" "终止超时进程树时发生异常: $_"
+                try {
+                    if (-not $proc.HasExited) {
+                        $proc.Kill()
+                        $proc.WaitForExit(5000) | Out-Null
+                    }
+                }
+                catch {
+                    Write-Log "ERROR" "fallback Kill 也失败: $_"
+                }
             }
-            $result.Error = "命令执行超时 (${TimeoutSec}秒): $Command"
+
             $result.Success = $false
-            Write-Log "ERROR" "命令超时: $Command $argumentLine"
+            # 清理临时文件
             foreach ($tmpPath in @($tmpOut, $tmpErr, $tmpExit)) {
                 if ($tmpPath -and (Test-Path $tmpPath)) {
                     Remove-Item $tmpPath -Force -ErrorAction SilentlyContinue
