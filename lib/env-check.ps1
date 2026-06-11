@@ -224,7 +224,7 @@ function Get-WslUbuntuVersionInfo {
         $versionResult = Invoke-CommandSafe -Command "wsl" -Arguments @(
             "-d", $ubuntuDistroName, "bash", "-c",
             "cat /etc/os-release 2>/dev/null | grep '^ID=' | cut -d= -f2"
-        )
+        ) -TimeoutSec 8
 
         if ($versionResult.Success) {
             $distroId = $versionResult.Output.Trim().ToLower()
@@ -241,7 +241,7 @@ function Get-WslUbuntuVersionInfo {
         $verResult = Invoke-CommandSafe -Command "wsl" -Arguments @(
             "-d", $ubuntuDistroName, "bash", "-c",
             "lsb_release -rs 2>/dev/null || grep '^VERSION_ID=' /etc/os-release 2>/dev/null | cut -d= -f2"
-        )
+        ) -TimeoutSec 8
 
         if ($verResult.Success) {
             $version = $verResult.Output.Trim()
@@ -367,7 +367,7 @@ function Test-GitInstalled {
     .SYNOPSIS
         检测 Git 是否安装并返回版本
     #>
-    $result = Invoke-CommandSafe -Command "git" -Arguments @("--version")
+    $result = Invoke-CommandSafe -Command "git" -Arguments @("--version") -TimeoutSec 5
     if ($result.Success) {
         return $result.Output.Trim()
     }
@@ -379,7 +379,7 @@ function Test-CodeInstalled {
     .SYNOPSIS
         检测 VS Code (code 命令) 是否可用
     #>
-    $result = Invoke-CommandSafe -Command "code" -Arguments @("--version")
+    $result = Invoke-CommandSafe -Command "code" -Arguments @("--version") -TimeoutSec 5
     if ($result.Success) {
         return $result.Output.Trim()
     }
@@ -391,7 +391,7 @@ function Test-VSCodeExtensionInstalled {
     .SYNOPSIS
         检测 Claude Code VS Code 扩展是否安装
     #>
-    $codeResult = Invoke-CommandSafe -Command "code" -Arguments @("--list-extensions")
+    $codeResult = Invoke-CommandSafe -Command "code" -Arguments @("--list-extensions") -TimeoutSec 8
     if (-not $codeResult.Success) {
         return $false
     }
@@ -411,14 +411,14 @@ function Test-WslInstalled {
         Distributions  = @()
     }
 
-    $result = Invoke-CommandSafe -Command "wsl" -Arguments @("--version")
+    $result = Invoke-CommandSafe -Command "wsl" -Arguments @("--version") -TimeoutSec 8
     if ($result.Success) {
         $info.Installed = $true
         $info.Version = ($result.Output -replace "`0", "").Trim()
     }
 
     # 获取发行版列表
-    $listResult = Invoke-CommandSafe -Command "wsl" -Arguments @("-l", "-v")
+    $listResult = Invoke-CommandSafe -Command "wsl" -Arguments @("-l", "-v") -TimeoutSec 8
     if ($listResult.Success) {
         $info.Installed = $true
         if (-not $info.Version) {
@@ -496,7 +496,7 @@ function Test-ClaudeInstalled {
     .RETURNS
         版本字符串，未安装返回 $null
     #>
-    $result = Invoke-CommandSafe -Command "claude" -Arguments @("--version")
+    $result = Invoke-CommandSafe -Command "claude" -Arguments @("--version") -TimeoutSec 5
     if ($result.Success) {
         return $result.Output.Trim()
     }
@@ -530,7 +530,7 @@ function Test-NodeJsInstalled {
     }
 
     # 获取版本
-    $nodeResult = Invoke-CommandSafe -Command "node" -Arguments @("--version")
+    $nodeResult = Invoke-CommandSafe -Command "node" -Arguments @("--version") -TimeoutSec 5
     if (-not $nodeResult.Success) {
         $result.ErrorMessage = "无法获取 Node.js 版本信息。"
         return $result
@@ -587,7 +587,7 @@ function Test-NpmInstalled {
     }
 
     # 检测 Node.js 版本
-    $nodeResult = Invoke-CommandSafe -Command "node" -Arguments @("--version")
+    $nodeResult = Invoke-CommandSafe -Command "node" -Arguments @("--version") -TimeoutSec 5
     if ($nodeResult.Success) {
         $rawVersion = $nodeResult.Output.Trim()
         try {
@@ -612,7 +612,7 @@ function Test-NpmInstalled {
         return $result
     }
 
-    $npmResult = Invoke-CommandSafe -Command "npm" -Arguments @("--version")
+    $npmResult = Invoke-CommandSafe -Command "npm" -Arguments @("--version") -TimeoutSec 5
     if ($npmResult.Success) {
         $result.Version = $npmResult.Output.Trim()
         $result.Installed = $true

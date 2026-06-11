@@ -53,7 +53,7 @@ function Test-ClaudeCommandExisting {
 
     if (Test-CommandAvailable -CommandName "claude") {
         $result.Exists = $true
-        $verResult = Invoke-CommandSafe -Command "claude" -Arguments @("--version") -TimeoutSec 30
+        $verResult = Invoke-CommandSafe -Command "claude" -Arguments @("--version") -TimeoutSec 5
         if ($verResult.Success -and -not [string]::IsNullOrWhiteSpace($verResult.Output)) {
             $result.Usable = $true
             $result.Version = $verResult.Output.Trim()
@@ -396,10 +396,10 @@ function Install-ClaudeCodeNative {
             return $result
         }
 
-        Write-Info "正在执行官方安装脚本（可能需要几分钟）..."
-        $installResult = Invoke-CommandSafe -Command "powershell" -Arguments @(
+        Write-Info "正在执行官方安装脚本，安装进度将直接显示在下方..."
+        $installResult = Invoke-VisibleInstallCommand -FilePath "powershell" -Arguments @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tempInstallScript
-        ) -TimeoutSec 600 -ProgressMessage "仍在安装 Claude Code，请勿关闭窗口。"
+        ) -TimeoutSec 600 -TestSafe:$TestSafe
 
         # 清理临时脚本
         Remove-Item $tempInstallScript -Force -ErrorAction SilentlyContinue
@@ -467,14 +467,21 @@ function Install-ClaudeCodeNpmMirror {
         return $result
     }
 
-    Write-Info "正在使用 npm + npmmirror 镜像安装 Claude Code..."
-    Write-Info "执行: npm install -g @anthropic-ai/claude-code --registry=https://registry.npmmirror.com"
+    Write-Info "正在使用 npm + npmmirror 镜像安装 Claude Code，安装进度将直接显示在下方..."
     Write-Log "INFO" "执行: npm install -g @anthropic-ai/claude-code --registry=https://registry.npmmirror.com"
 
-    $installResult = Invoke-CommandSafe -Command "npm" -Arguments @(
+    # 解析 npm 实际路径（Windows 下通常是 npm.cmd）
+    $npmPath = "npm"
+    try {
+        $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
+        if ($npmCmd -and $npmCmd.Source) { $npmPath = $npmCmd.Source }
+    }
+    catch { Write-Log "DEBUG" "Get-Command npm 失败，使用默认 npm" }
+
+    $installResult = Invoke-VisibleInstallCommand -FilePath $npmPath -Arguments @(
         "install", "-g", "@anthropic-ai/claude-code",
         "--registry=https://registry.npmmirror.com"
-    ) -TimeoutSec 900 -ProgressMessage "仍在通过 npm 镜像安装 Claude Code，请勿关闭窗口。"
+    ) -TimeoutSec 900 -TestSafe:$TestSafe
 
     if ($installResult.Success) {
         Write-Success "npm 镜像安装 Claude Code 成功！"
@@ -934,12 +941,120 @@ function Invoke-ClaudeDoctorInteractiveSafe {
     return $result
 }
 
+function Invoke-VisibleInstallCommand {
+    <#
+    .SYNOPSIS
+        执行外部安装命令，输出直连用户终端（不重定向）。
+        用于 winget / npm install / powershell -File 等长时间命令，
+        让用户看到真实进度而非心跳提示。
+    .PARAMETER FilePath
+        可执行文件路径。
+    .PARAMETER Arguments
+        参数数组。
+    .PARAMETER TimeoutSec
+        超时秒数，默认 600。
+    .PARAMETER TestSafe
+        测试安全模式：跳过真实执行。
+    .PARAMETER Cwd
+        工作目录，默认当前目录。
+    .RETURNS
+        包含 Success, ExitCode, Error, DurationMs, Command, Pid 的哈希表
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [string[]]$Arguments = @(),
+        [int]$TimeoutSec = 600,
+        [switch]$TestSafe,
+        [string]$Cwd = ""
+    )
+
+    $result = @{
+        Success    = $false
+        ExitCode   = -1
+        Error      = ""
+        DurationMs = 0
+        Command    = "$FilePath $($Arguments -join ' ')"
+        Pid        = 0
+    }
+
+    if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
+        Write-Log "INFO" "TestSafe: 跳过可见安装命令: $($result.Command)"
+        $result.Error = "skipped_test_safe"
+        return $result
+    }
+
+    Write-Log "INFO" "Invoke-VisibleInstallCommand: $($result.Command), TimeoutSec=$TimeoutSec, cwd=$(if ($Cwd) { $Cwd } else { (Get-Location).Path })"
+
+    try {
+        $startParams = @{
+            FilePath     = $FilePath
+            ArgumentList = $Arguments
+            NoNewWindow  = $true
+            PassThru     = $true
+            ErrorAction  = 'Stop'
+        }
+        if ($Cwd) {
+            $startParams.WorkingDirectory = $Cwd
+        }
+
+        $proc = Start-Process @startParams
+        $result.Pid = $proc.Id
+        Write-Log "INFO" "进程已启动 PID=$($proc.Id)"
+
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $finished = $proc.WaitForExit($TimeoutSec * 1000)
+        $sw.Stop()
+        $result.DurationMs = $sw.ElapsedMilliseconds
+
+        if ($finished) {
+            $result.ExitCode = $proc.ExitCode
+            $result.Success = ($proc.ExitCode -eq 0)
+            if (-not $result.Success) {
+                $result.Error = "$FilePath 返回非零退出码: $($proc.ExitCode)"
+            }
+            Write-Log "INFO" "Invoke-VisibleInstallCommand 完成: ExitCode=$($proc.ExitCode), DurationMs=$($result.DurationMs)"
+        }
+        else {
+            # 超时：杀进程树
+            Write-Log "WARN" "Invoke-VisibleInstallCommand 超时 (${TimeoutSec}s)，正在终止进程树 PID=$($proc.Id)"
+            try {
+                if (-not $proc.HasExited) {
+                    $tkResult = & taskkill.exe /PID $proc.Id /T /F 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Log "INFO" "taskkill /T /F 成功 PID=$($proc.Id): $tkResult"
+                    }
+                    else {
+                        Write-Log "WARN" "taskkill 失败 (exit=$LASTEXITCODE): $tkResult，尝试 Stop-Process"
+                        Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+                        Write-Log "INFO" "Stop-Process fallback 成功 PID=$($proc.Id)"
+                    }
+                }
+            }
+            catch {
+                Write-Log "ERROR" "终止进程树失败 PID=$($proc.Id): $_"
+                try {
+                    if (-not $proc.HasExited) { $proc.Kill() }
+                }
+                catch {
+                    Write-Log "ERROR" "Kill 也失败: $_"
+                }
+            }
+            $result.Error = "命令超时 (${TimeoutSec}秒): $FilePath"
+        }
+    }
+    catch {
+        $result.Error = "执行异常: $_"
+        Write-Log "ERROR" "Invoke-VisibleInstallCommand 异常: $_"
+    }
+
+    return $result
+}
+
 function Install-NodeJsViaWinget {
     <#
     .SYNOPSIS
         使用 winget 安装 Node.js LTS，保留终端输出让用户看到下载进度。
-        不使用 Invoke-CommandSafe / cmd.exe / stdout 重定向，确保 winget
-        的进度条直接显示在用户终端中。
     .PARAMETER TimeoutSec
         超时秒数，默认 900（15分钟）。
     .PARAMETER TestSafe
@@ -952,68 +1067,21 @@ function Install-NodeJsViaWinget {
         [switch]$TestSafe
     )
 
-    $result = @{
-        Success  = $false
-        ExitCode = -1
-        Error    = ""
-    }
-
     if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
         Write-Log "INFO" "TestSafe: 跳过 winget install Node.js"
-        $result.Error = "skipped_test_safe"
-        return $result
+        return @{ Success = $false; ExitCode = -1; Error = "skipped_test_safe" }
     }
 
     Write-Info "正在使用 winget 安装 Node.js LTS，安装进度将直接显示在下方。"
     Write-Info "下载约 80MB，请耐心等待（通常 3-8 分钟）..."
     Write-Host ""
 
-    try {
-        $proc = Start-Process -FilePath "winget" -ArgumentList @(
-            "install", "OpenJS.NodeJS.LTS",
-            "--accept-package-agreements",
-            "--accept-source-agreements",
-            "--silent"
-        ) -NoNewWindow -PassThru
-
-        Write-Log "INFO" "winget install Node.js started, PID=$($proc.Id), timeout=${TimeoutSec}s"
-
-        $finished = $proc.WaitForExit($TimeoutSec * 1000)
-
-        if ($finished) {
-            $result.ExitCode = $proc.ExitCode
-            $result.Success = ($proc.ExitCode -eq 0)
-            if ($result.Success) {
-                Write-Success "Node.js LTS 安装完成！"
-                Write-Log "INFO" "winget install Node.js succeeded, ExitCode=$($proc.ExitCode)"
-            }
-            else {
-                $result.Error = "winget 返回非零退出码: $($proc.ExitCode)"
-                Write-Error-Msg $result.Error
-                Write-Log "ERROR" $result.Error
-            }
-        }
-        else {
-            # 超时
-            Write-Warning "winget 安装 Node.js 超时（${TimeoutSec}秒），正在终止..."
-            try {
-                if (-not $proc.HasExited) {
-                    $proc.Kill()
-                }
-            }
-            catch {
-                Write-Log "WARN" "终止 winget 进程失败: $_"
-            }
-            $result.Error = "winget 安装超时 (${TimeoutSec}秒)"
-            Write-Log "ERROR" $result.Error
-        }
-    }
-    catch {
-        $result.Error = "winget 安装异常: $_"
-        Write-Log "ERROR" $result.Error
-    }
-
-    return $result
+    return Invoke-VisibleInstallCommand -FilePath "winget" -Arguments @(
+        "install", "OpenJS.NodeJS.LTS",
+        "--accept-package-agreements",
+        "--accept-source-agreements",
+        "--silent"
+    ) -TimeoutSec $TimeoutSec -TestSafe:$TestSafe
 }
 
 # ============================================================
@@ -1253,7 +1321,7 @@ function Install-ClaudeCodeAuto {
                     @{ Success = ($mockNodeInstall -eq "success"); Error = if ($mockNodeInstall -eq "success") { "" } else { "mock: winget install failed" } }
                 }
                 else {
-                    $installResult = Install-NodeJsViaWinget -TimeoutSec 900
+                    Install-NodeJsViaWinget -TimeoutSec 900
                 }
 
                 if ($installResult.Success) {
@@ -1412,7 +1480,7 @@ function Install-ClaudeCodeAuto {
         Write-Info "请关闭此窗口后重新双击 [开始安装.cmd]。"
         Write-Info "如果仍不行，请运行 [一键诊断.cmd] 获取诊断报告。"
 
-        $npmPrefix = Invoke-CommandSafe -Command "npm" -Arguments @("prefix", "-g")
+        $npmPrefix = Invoke-CommandSafe -Command "npm" -Arguments @("prefix", "-g") -TimeoutSec 8
         if ($npmPrefix.Success) {
             Write-Info "npm 全局安装路径: $($npmPrefix.Output.Trim())"
         }

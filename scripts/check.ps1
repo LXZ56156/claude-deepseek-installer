@@ -549,6 +549,85 @@ if ($doctorText -notmatch '超时保护不可用.*Start-Job 被禁用') {
 
 Write-Host "[check] Claude doctor interactive invocation OK"
 
+Write-Host "[check] Visible install command UX"
+$claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+
+# 20. Invoke-VisibleInstallCommand exists with required properties
+if ($claudeInstallText -notmatch 'function Invoke-VisibleInstallCommand') {
+    throw "Invoke-VisibleInstallCommand function not found in lib/claude-install.ps1"
+}
+if ($claudeInstallText -notmatch 'NoNewWindow\s*=\s*\$true' -or $claudeInstallText -notmatch 'PassThru\s*=\s*\$true') {
+    throw "Invoke-VisibleInstallCommand must use Start-Process with NoNewWindow and PassThru"
+}
+if ($claudeInstallText -notmatch 'taskkill\.exe\s+/PID.*\/T\s+\/F') {
+    throw "Invoke-VisibleInstallCommand must use taskkill /T /F for process tree kill on timeout"
+}
+if ($claudeInstallText -notmatch 'Stop-Process.*-Force') {
+    throw "Invoke-VisibleInstallCommand must have Stop-Process fallback"
+}
+
+# 21. Install-NodeJsViaWinget delegates to Invoke-VisibleInstallCommand (NOT Invoke-CommandSafe)
+if ($claudeInstallText -notmatch 'Install-NodeJsViaWinget[\s\S]{0,800}Invoke-VisibleInstallCommand') {
+    throw "Install-NodeJsViaWinget must delegate to Invoke-VisibleInstallCommand"
+}
+
+# 22. Install-ClaudeCodeNpmMirror must NOT use Invoke-CommandSafe for npm install
+if ($claudeInstallText -match 'Install-ClaudeCodeNpmMirror[\s\S]{0,800}Invoke-CommandSafe\s+-Command\s+"npm"') {
+    throw "Install-ClaudeCodeNpmMirror must NOT use Invoke-CommandSafe for npm install; use Invoke-VisibleInstallCommand"
+}
+if ($claudeInstallText -notmatch 'Install-ClaudeCodeNpmMirror[\s\S]{0,1500}Invoke-VisibleInstallCommand') {
+    throw "Install-ClaudeCodeNpmMirror must use Invoke-VisibleInstallCommand for npm install"
+}
+
+# 23. Install-ClaudeCodeNative execution phase must NOT use Invoke-CommandSafe
+if ($claudeInstallText -match 'Install-ClaudeCodeNative[\s\S]{0,1500}Invoke-CommandSafe\s+-Command\s+"powershell"[\s\S]{0,300}-File\s+\$tempInstallScript') {
+    throw "Install-ClaudeCodeNative execution must NOT use Invoke-CommandSafe; use Invoke-VisibleInstallCommand"
+}
+if ($claudeInstallText -notmatch 'Install-ClaudeCodeNative[\s\S]{0,1500}Invoke-VisibleInstallCommand') {
+    throw "Install-ClaudeCodeNative must use Invoke-VisibleInstallCommand for script execution"
+}
+
+# 24. No double-assignment: else branch of winget install if-expression must NOT have "$installResult ="
+if ($claudeInstallText -notmatch '\}\s*else\s*\{\s*Install-NodeJsViaWinget') {
+    # This is a soft check - the else branch should directly call, not assign
+    if ($claudeInstallText -match '\}\s*else\s*\{\s*\$installResult\s*=\s*Install-NodeJsViaWinget') {
+        throw "winget install else branch has redundant \$installResult = assignment"
+    }
+}
+
+# 25. repair-deps.ps1 must NOT use Invoke-CommandSafe for winget install
+$repairDepsText = Get-Content -Path (Join-Path $RootDir "repair-deps.ps1") -Raw -Encoding UTF8
+if ($repairDepsText -match 'Invoke-CommandSafe\s+-Command\s+"winget"') {
+    throw "repair-deps.ps1 must NOT use Invoke-CommandSafe for winget install; use Install-NodeJsViaWinget"
+}
+if ($repairDepsText -notmatch 'Install-NodeJsViaWinget') {
+    throw "repair-deps.ps1 must call Install-NodeJsViaWinget for Node.js installation"
+}
+
+# 26. Short timeouts for version checks
+$envCheckText = Get-Content -Path (Join-Path $RootDir "lib\env-check.ps1") -Raw -Encoding UTF8
+# All version check commands should have explicit TimeoutSec <= 10
+$quickTimeoutPatterns = @(
+    @{ Name = "git --version"; Pattern = 'git".*--version.*-TimeoutSec\s+(\d+)'; MaxSec = 10 },
+    @{ Name = "code --version"; Pattern = 'code".*--version.*-TimeoutSec\s+(\d+)'; MaxSec = 10 },
+    @{ Name = "code --list-extensions"; Pattern = '--list-extensions.*-TimeoutSec\s+(\d+)'; MaxSec = 10 },
+    @{ Name = "wsl --version"; Pattern = 'wsl".*--version.*-TimeoutSec\s+(\d+)'; MaxSec = 10 },
+    @{ Name = "wsl -l -v"; Pattern = '-l",\s*"-v.*-TimeoutSec\s+(\d+)'; MaxSec = 10 },
+    @{ Name = "claude --version"; Pattern = 'claude".*--version.*-TimeoutSec\s+(\d+)'; MaxSec = 10 },
+    @{ Name = "node --version"; Pattern = 'node".*--version.*-TimeoutSec\s+(\d+)'; MaxSec = 10 },
+    @{ Name = "npm --version"; Pattern = 'npm".*--version.*-TimeoutSec\s+(\d+)'; MaxSec = 10 }
+)
+foreach ($p in $quickTimeoutPatterns) {
+    if ($envCheckText -match $p.Pattern) {
+        $actualSec = [int]$matches[1]
+        if ($actualSec -gt $p.MaxSec) {
+            throw "$($p.Name) timeout is ${actualSec}s, should be <= $($p.MaxSec)s"
+        }
+    }
+}
+
+Write-Host "[check] Visible install command UX OK"
+
 Write-Host "[check] uninstall backup listing"
 $uninstallText = Get-Content -Path (Join-Path $RootDir "uninstall-config.ps1") -Raw -Encoding UTF8
 if ($uninstallText -match '\[void\]\s*\(\s*Show-ConfigBackups\s*\)') {
