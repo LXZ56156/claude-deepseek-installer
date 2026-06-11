@@ -70,13 +70,23 @@ foreach ($file in $psFiles) {
         [void]$issues.LOW.Add($issue)
     }
 
-    # MEDIUM: download timeout > 60s
+    # MEDIUM: download function default timeout > 30s
+    $downloadDefaults = [regex]::Matches($content, 'Invoke-VisibleFileDownload[\s\S]{0,300}\[int\]\$TimeoutSec\s*=\s*(\d+)')
+    foreach ($dd in $downloadDefaults) {
+        $ddSec = [int]$dd.Groups[1].Value
+        if ($ddSec -gt 30) {
+            $relPath3 = $file.FullName.Replace($RootDir, '').TrimStart('\', '/')
+            $issue = "MEDIUM: ${relPath3}: Invoke-VisibleFileDownload default TimeoutSec=${ddSec}s > 30s"
+            [void]$issues.MEDIUM.Add($issue)
+        }
+    }
+    # MEDIUM: download call site timeout > 30s
     $downloadTimeout = [regex]::Matches($content, 'Invoke-VisibleFileDownload[\s\S]{0,200}-TimeoutSec\s+(\d+)')
     foreach ($dt in $downloadTimeout) {
         $dtSec = [int]$dt.Groups[1].Value
-        if ($dtSec -gt 60) {
+        if ($dtSec -gt 30) {
             $relPath3 = $file.FullName.Replace($RootDir, '').TrimStart('\', '/')
-            $issue = "MEDIUM: ${relPath3}: Invoke-VisibleFileDownload timeout ${dtSec}s > 60s"
+            $issue = "MEDIUM: ${relPath3}: Invoke-VisibleFileDownload call site timeout ${dtSec}s > 30s"
             [void]$issues.MEDIUM.Add($issue)
         }
     }

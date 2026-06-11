@@ -1061,7 +1061,7 @@ function Invoke-VisibleFileDownload {
     .PARAMETER OutputPath
         输出文件路径。
     .PARAMETER TimeoutSec
-        超时秒数，默认 45。
+        超时秒数，默认 30。
     .PARAMETER TestSafe
         测试安全模式：跳过真实下载。
     .RETURNS
@@ -1072,7 +1072,7 @@ function Invoke-VisibleFileDownload {
         [string]$Url,
         [Parameter(Mandatory = $true)]
         [string]$OutputPath,
-        [int]$TimeoutSec = 45,
+        [int]$TimeoutSec = 30,
         [switch]$TestSafe
     )
 

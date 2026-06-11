@@ -669,9 +669,18 @@ if ($claudeInstallText -notmatch 'Install-ClaudeCodeNative[\s\S]{0,2000}Invoke-V
     throw "Install-ClaudeCodeNative must use Invoke-VisibleFileDownload for script download"
 }
 
-# 34. Invoke-VisibleFileDownload must have TimeoutSec <= 30
-if ($claudeInstallText -match 'Invoke-VisibleFileDownload[\s\S]{0,300}-TimeoutSec\s+([4-9]\d|\d{3,})') {
-    throw "Invoke-VisibleFileDownload TimeoutSec must be <= 30, found $($matches[1])s"
+# 34. Invoke-VisibleFileDownload function default AND all call sites must use TimeoutSec <= 30
+# 34a. Function definition default
+if ($claudeInstallText -match 'Invoke-VisibleFileDownload[\s\S]{0,300}\[int\]\$TimeoutSec\s*=\s*([4-9]\d|\d{3,})') {
+    throw "Invoke-VisibleFileDownload function default TimeoutSec must be <= 30, found $($matches[1])"
+}
+# 34b. All call sites
+$downloadCalls = [regex]::Matches($claudeInstallText, 'Invoke-VisibleFileDownload[\s\S]{0,300}?-TimeoutSec\s+(\d+)')
+foreach ($dc in $downloadCalls) {
+    $val = [int]$dc.Groups[1].Value
+    if ($val -gt 30) {
+        throw "Invoke-VisibleFileDownload call site has TimeoutSec $val (must be <= 30)"
+    }
 }
 
 # 35. Download failure must NOT show PowerShell stack traces in the main UI
