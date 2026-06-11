@@ -518,6 +518,35 @@ if ($claudeInstallText -notmatch 'Start-Job 创建 watchdog 失败') {
     throw "Invoke-ClaudeDoctorInteractiveSafe must log warning when Start-Job fails"
 }
 
+# 15. Start-Job failure branch must NOT execute & $claudePath doctor (must skip instead)
+# When watchdogAvailable is false, the code must return early with watchdog_unavailable_skipped
+if ($claudeInstallText -notmatch 'watchdog_unavailable_skipped') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must return watchdog_unavailable_skipped when Start-Job is unavailable"
+}
+
+# 16. "无超时保护下运行（最多等待 120 秒）" must NOT appear (unfulfilled promise)
+if ($claudeInstallText -match '无超时保护下运行') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must NOT promise timeout protection it cannot deliver"
+}
+
+# 17. Start-Job failure must log skip reason with "避免诊断流程卡死"
+if ($claudeInstallText -notmatch '已跳过 claude doctor，避免诊断流程卡死') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must log that claude doctor was skipped to avoid hang"
+}
+
+# 18. Invoke-ClaudeDoctorSafe must map watchdog_unavailable_skipped to skipped_watchdog_unavailable
+if ($claudeInstallText -notmatch 'skipped_watchdog_unavailable') {
+    throw "Invoke-ClaudeDoctorSafe must map watchdog_unavailable_skipped to skipped_watchdog_unavailable status"
+}
+
+# 19. doctor.ps1 must handle watchdog_unavailable_skipped as SKIP
+if ($doctorText -notmatch 'watchdog_unavailable_skipped') {
+    throw "doctor.ps1 must handle watchdog_unavailable_skipped error from Invoke-ClaudeDoctorInteractiveSafe"
+}
+if ($doctorText -notmatch '超时保护不可用.*Start-Job 被禁用') {
+    throw "doctor.ps1 must clearly explain that Start-Job disabled caused the skip"
+}
+
 Write-Host "[check] Claude doctor interactive invocation OK"
 
 Write-Host "[check] uninstall backup listing"

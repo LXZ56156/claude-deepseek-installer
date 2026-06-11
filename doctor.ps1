@@ -269,6 +269,9 @@ function Check-Commands {
                 Add-CheckResult "claude doctor" "WARN" "超时，已终止；这不代表 Claude Code 安装失败"
                 Add-Suggestion "claude doctor 在脚本中超时，但 claude --version 正常。请单独在终端手动运行 claude doctor 获取官方诊断输出。"
             }
+            elseif ($claudeDoctor.Error -eq "watchdog_unavailable_skipped") {
+                Add-CheckResult "claude doctor" "SKIP" "超时保护不可用（Start-Job 被禁用），已跳过，不影响主诊断"
+            }
             else {
                 Add-CheckResult "claude doctor" "WARN" "未完成: $($claudeDoctor.Error)"
             }

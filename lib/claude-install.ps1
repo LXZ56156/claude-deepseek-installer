@@ -668,6 +668,11 @@ function Invoke-ClaudeDoctorSafe {
         $result.Status = "skipped_test_safe"
         $result.Output = "skipped_test_safe"
     }
+    elseif ($doctor.Error -eq "watchdog_unavailable_skipped") {
+        Write-Log "INFO" "Invoke-ClaudeDoctorSafe: watchdog 不可用，已跳过 claude doctor"
+        $result.Status = "skipped_watchdog_unavailable"
+        $result.Output = "watchdog_unavailable_skipped"
+    }
     else {
         Write-Warning "claude doctor 未完成或返回异常，已跳过。安装流程会继续。"
         Write-Info "如需进一步排查，安装结束后可运行「一键诊断.cmd」。"
@@ -831,12 +836,19 @@ function Invoke-ClaudeDoctorInteractiveSafe {
         }
     }
     catch {
-        Write-Log "WARN" "Start-Job 创建 watchdog 失败（可能被安全策略禁用）: $_。claude doctor 将无超时保护运行。"
-        Write-Info "watchdog 不可用，claude doctor 将在无超时保护下运行（最多等待 120 秒）。"
+        Write-Log "WARN" "Start-Job 创建 watchdog 失败（可能被安全策略禁用）: $_。已跳过 claude doctor，避免诊断流程卡死。"
+        Write-Warning "watchdog 不可用，已跳过 claude doctor，不影响后续诊断。"
         $watchdogAvailable = $false
     }
 
     # --- 内联执行 claude doctor（继承当前终端 TTY 环境）---
+    if (-not $watchdogAvailable) {
+        $result.Error = "watchdog_unavailable_skipped"
+        $result.ExitCode = $null
+        Write-Log "INFO" "因 watchdog 不可用（Start-Job 被禁用），已跳过 claude doctor"
+        return $result
+    }
+
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $exitCode = -1
 
@@ -856,29 +868,28 @@ function Invoke-ClaudeDoctorInteractiveSafe {
 
     # --- 检查 Watchdog 状态 ---
     $watchdogFired = $false
-    if ($watchdogAvailable) {
-        try {
-            $jobState = $watchdogJob.State
-            Write-Log "DEBUG" "Watchdog job 状态: State=$jobState"
+    try {
+        $jobState = $watchdogJob.State
+        Write-Log "DEBUG" "Watchdog job 状态: State=$jobState"
 
-            if ($jobState -eq 'Running') {
-                # 正常完成，watchdog 没触发
-                Stop-Job $watchdogJob -ErrorAction SilentlyContinue
-                $watchdogFired = $false
-                Write-Log "DEBUG" "Watchdog 未触发，claude doctor 在超时前完成"
-            }
-            else {
-                # Watchdog 已结束 → 它触发了
-                $watchdogFired = $true
-                $watchdogLog = Receive-Job $watchdogJob -ErrorAction SilentlyContinue
-                Write-Log "INFO" "Watchdog 已触发：$watchdogLog"
-            }
+        if ($jobState -eq 'Running') {
+            # 正常完成，watchdog 没触发
+            Stop-Job $watchdogJob -ErrorAction SilentlyContinue
+            $watchdogFired = $false
+            Write-Log "DEBUG" "Watchdog 未触发，claude doctor 在超时前完成"
         }
-        catch {
-            Write-Log "WARN" "检查 watchdog 状态异常: $_"
+        else {
+            # Watchdog 已结束 → 它触发了
+            $watchdogFired = $true
+            $watchdogLog = Receive-Job $watchdogJob -ErrorAction SilentlyContinue
+            Write-Log "INFO" "Watchdog 已触发：$watchdogLog"
         }
-        finally {
-            Remove-Job $watchdogJob -Force -ErrorAction SilentlyContinue
+    }
+    catch {
+        Write-Log "WARN" "检查 watchdog 状态异常: $_"
+    }
+    finally {
+        Remove-Job $watchdogJob -Force -ErrorAction SilentlyContinue
             # 清理 watchdog 日志
             if (Test-Path $killLogPath) {
                 try {
@@ -893,7 +904,6 @@ function Invoke-ClaudeDoctorInteractiveSafe {
                 }
             }
         }
-    }
 
     # --- 处理结果 ---
     if ($watchdogFired) {
