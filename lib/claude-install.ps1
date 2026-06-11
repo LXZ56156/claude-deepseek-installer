@@ -380,19 +380,18 @@ function Install-ClaudeCodeNative {
     }
 
     Write-Info "正在使用 Claude 官方 Native Install 方式安装..."
-    Write-Log "INFO" "执行: irm https://claude.ai/install.ps1 | iex"
+    Write-Log "INFO" "下载 Claude 官方安装脚本: https://claude.ai/install.ps1"
 
     try {
         $tempInstallScript = Join-Path $env:TEMP "claude_native_install_${PID}_$(Get-Random).ps1"
-        $downloadResult = Invoke-CommandSafe -Command "powershell" -Arguments @(
-            "-NoProfile", "-Command",
-            "Invoke-RestMethod -Uri 'https://claude.ai/install.ps1' -OutFile '$tempInstallScript'"
-        ) -TimeoutSec 180 -ProgressMessage "仍在下载 Claude 官方安装脚本，请勿关闭窗口。"
+        $downloadResult = Invoke-VisibleFileDownload -Url "https://claude.ai/install.ps1" `
+            -OutputPath $tempInstallScript -TimeoutSec 45 -TestSafe:$TestSafe
 
-        if (-not $downloadResult.Success -or -not (Test-Path $tempInstallScript)) {
-            $result.Error = "下载官方安装脚本失败: $($downloadResult.Error)"
-            Write-Warning $result.Error
-            Write-Log "ERROR" $result.Error
+        if (-not $downloadResult.Success) {
+            # 详细错误仅写入日志，主界面只显示友好提示
+            $result.Error = "下载官方安装脚本失败: $($downloadResult.Status)"
+            Write-Log "ERROR" "Native Install 下载失败: Url=$($downloadResult.Url), Status=$($downloadResult.Status), Error=$($downloadResult.Error), DurationMs=$($downloadResult.DurationMs)"
+            Remove-Item $tempInstallScript -Force -ErrorAction SilentlyContinue
             return $result
         }
 
@@ -1047,6 +1046,131 @@ function Invoke-VisibleInstallCommand {
     catch {
         $result.Error = "执行异常: $_"
         Write-Log "ERROR" "Invoke-VisibleInstallCommand 异常: $_"
+    }
+
+    return $result
+}
+
+function Invoke-VisibleFileDownload {
+    <#
+    .SYNOPSIS
+        下载文件，显示明确阶段提示，不隐藏进度。
+        不使用 Invoke-CommandSafe / cmd.exe / 子进程包装。
+    .PARAMETER Url
+        下载地址。
+    .PARAMETER OutputPath
+        输出文件路径。
+    .PARAMETER TimeoutSec
+        超时秒数，默认 45。
+    .PARAMETER TestSafe
+        测试安全模式：跳过真实下载。
+    .RETURNS
+        包含 Success, Error, Status, DurationMs, Url, OutputPath 的哈希表
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Url,
+        [Parameter(Mandatory = $true)]
+        [string]$OutputPath,
+        [int]$TimeoutSec = 45,
+        [switch]$TestSafe
+    )
+
+    $result = @{
+        Success    = $false
+        Error      = ""
+        Status     = ""
+        DurationMs = 0
+        Url        = $Url
+        OutputPath = $OutputPath
+    }
+
+    if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
+        Write-Log "INFO" "TestSafe: 跳过下载 $Url"
+        $result.Error = "skipped_test_safe"
+        $result.Status = "skipped_test_safe"
+        return $result
+    }
+
+    Write-Info "正在下载 Claude 官方安装脚本..."
+    Write-Info "下载地址: $Url"
+    Write-Info "如果长时间无响应，将自动切换 npm 镜像安装。"
+    Write-Log "INFO" "Invoke-VisibleFileDownload: Url=$Url, OutputPath=$OutputPath, TimeoutSec=$TimeoutSec"
+    Write-Host ""
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+    try {
+        # 确保目标目录存在
+        $outDir = Split-Path -Parent $OutputPath
+        if (-not (Test-Path $outDir)) {
+            New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+        }
+
+        # 使用 Invoke-WebRequest 直接下载（不用子进程包装）
+        $response = Invoke-WebRequest -Uri $Url -Method GET `
+            -TimeoutSec $TimeoutSec -UseBasicParsing `
+            -ErrorAction Stop -MaximumRedirection 3
+
+        if ($response.StatusCode -eq 200) {
+            $content = $response.Content
+            if ([string]::IsNullOrWhiteSpace($content)) {
+                $result.Error = "下载成功但内容为空"
+                $result.Status = "failed_download_empty"
+                Write-Log "ERROR" "Invoke-VisibleFileDownload: 内容为空, Url=$Url"
+                $sw.Stop(); $result.DurationMs = $sw.ElapsedMilliseconds
+                return $result
+            }
+
+            # 写入文件（UTF-8 无 BOM）
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($OutputPath, $content, $utf8NoBom)
+
+            if (-not (Test-Path $OutputPath) -or (Get-Item $OutputPath).Length -eq 0) {
+                $result.Error = "文件写入失败或为空: $OutputPath"
+                $result.Status = "failed_download_write"
+                Write-Log "ERROR" "Invoke-VisibleFileDownload: 写入失败"
+                $sw.Stop(); $result.DurationMs = $sw.ElapsedMilliseconds
+                return $result
+            }
+
+            $sw.Stop(); $result.DurationMs = $sw.ElapsedMilliseconds
+            $result.Success = $true
+            $result.Status = "ok"
+            Write-Success "官方安装脚本下载完成 ($($result.DurationMs)ms, $($content.Length) bytes)"
+            Write-Log "INFO" "Invoke-VisibleFileDownload 成功: Url=$Url, size=$($content.Length), DurationMs=$($result.DurationMs)"
+        }
+        else {
+            $sw.Stop(); $result.DurationMs = $sw.ElapsedMilliseconds
+            $result.Error = "HTTP $($response.StatusCode)"
+            $result.Status = "failed_download"
+            Write-Log "ERROR" "Invoke-VisibleFileDownload: HTTP $($response.StatusCode), Url=$Url"
+        }
+    }
+    catch {
+        $sw.Stop(); $result.DurationMs = $sw.ElapsedMilliseconds
+        $result.Error = "下载异常: $($_.Exception.Message)"
+        $result.Status = "failed_download"
+
+        # 分析错误类型写入日志
+        if ($_.Exception -is [System.Net.WebException]) {
+            $webEx = $_.Exception
+            if ($webEx.Status -eq [System.Net.WebExceptionStatus]::Timeout) {
+                Write-Log "ERROR" "Invoke-VisibleFileDownload 超时: Url=$Url, TimeoutSec=$TimeoutSec"
+            }
+            elseif ($webEx.Status -eq [System.Net.WebExceptionStatus]::NameResolutionFailure) {
+                Write-Log "ERROR" "Invoke-VisibleFileDownload DNS 解析失败: Url=$Url"
+            }
+            elseif ($webEx.Status -eq [System.Net.WebExceptionStatus]::ConnectFailure) {
+                Write-Log "ERROR" "Invoke-VisibleFileDownload 连接失败: Url=$Url"
+            }
+            else {
+                Write-Log "ERROR" "Invoke-VisibleFileDownload 网络错误: Status=$($webEx.Status), Url=$Url"
+            }
+        }
+        else {
+            Write-Log "ERROR" "Invoke-VisibleFileDownload 异常: $_"
+        }
     }
 
     return $result

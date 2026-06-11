@@ -654,6 +654,32 @@ if ($claudeInstallText -match '&\s+\$claudePath\s+doctor\s*$' -and $claudeInstal
     throw "Invoke-ClaudeDoctorInteractiveSafe must pipe claude doctor output to Out-Host to prevent return stream pollution"
 }
 
+# 31. Invoke-VisibleFileDownload must exist
+if ($claudeInstallText -notmatch 'function Invoke-VisibleFileDownload') {
+    throw "Invoke-VisibleFileDownload function not found in lib/claude-install.ps1"
+}
+
+# 32. Native Install download must NOT use Invoke-CommandSafe
+if ($claudeInstallText -match 'Install-ClaudeCodeNative[\s\S]{0,2000}Invoke-CommandSafe[\s\S]{0,200}Invoke-RestMethod') {
+    throw "Install-ClaudeCodeNative download must NOT use Invoke-CommandSafe; use Invoke-VisibleFileDownload"
+}
+
+# 33. Native Install download must use Invoke-VisibleFileDownload
+if ($claudeInstallText -notmatch 'Install-ClaudeCodeNative[\s\S]{0,2000}Invoke-VisibleFileDownload') {
+    throw "Install-ClaudeCodeNative must use Invoke-VisibleFileDownload for script download"
+}
+
+# 34. Invoke-VisibleFileDownload must have TimeoutSec <= 60
+if ($claudeInstallText -notmatch 'Invoke-VisibleFileDownload[\s\S]{0,300}-TimeoutSec\s+(4|3|2)\d') {
+    throw "Invoke-VisibleFileDownload must be called with TimeoutSec <= 60 (actual download timeout matters)"
+}
+
+# 35. Download failure must NOT show PowerShell stack traces in the main UI
+#    The friendly fallback message must exist in the caller
+if ($claudeInstallText -notmatch 'Native Install 下载失败') {
+    throw "Install-ClaudeCodeNative must log download failure details (not show to user)"
+}
+
 Write-Host "[check] Install flow checks OK"
 
 Write-Host "[check] Visible install command UX OK"

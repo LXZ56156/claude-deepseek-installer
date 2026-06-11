@@ -27,7 +27,8 @@ $highRiskPatterns = @(
     @{ Name = "winget install"; Pattern = 'winget.*install' },
     @{ Name = "npm install -g claude-code"; Pattern = '\bnpm\b[\s\S]{0,20}\binstall\b[\s\S]{0,20}@anthropic-ai/claude-code' },
     @{ Name = "powershell -File (install script)"; Pattern = 'powershell.*-File.*install' },
-    @{ Name = "claude doctor"; Pattern = 'claude[\s\S]{0,50}doctor' }
+    @{ Name = "claude doctor"; Pattern = 'claude[\s\S]{0,50}doctor' },
+    @{ Name = "Invoke-RestMethod download hidden by Invoke-CommandSafe"; Pattern = 'Invoke-RestMethod.*claude\.ai/install\.ps1' }
 )
 
 foreach ($file in $psFiles) {
@@ -67,6 +68,17 @@ foreach ($file in $psFiles) {
     if ($content -match 'Start-Process' -and $content -match 'WaitForExit' -and $content -match '\.Kill\(\)' -and $content -notmatch 'taskkill.*\/T') {
         $issue = "LOW: $relPath uses Kill() without taskkill /T for process tree"
         [void]$issues.LOW.Add($issue)
+    }
+
+    # MEDIUM: download timeout > 60s
+    $downloadTimeout = [regex]::Matches($content, 'Invoke-VisibleFileDownload[\s\S]{0,200}-TimeoutSec\s+(\d+)')
+    foreach ($dt in $downloadTimeout) {
+        $dtSec = [int]$dt.Groups[1].Value
+        if ($dtSec -gt 60) {
+            $relPath3 = $file.FullName.Replace($RootDir, '').TrimStart('\', '/')
+            $issue = "MEDIUM: ${relPath3}: Invoke-VisibleFileDownload timeout ${dtSec}s > 60s"
+            [void]$issues.MEDIUM.Add($issue)
+        }
     }
 
     # LOW: missing explicit TimeoutSec
