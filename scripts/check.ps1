@@ -477,6 +477,47 @@ if ($doctorText -notmatch 'CCDI_TEST_MODE\s+-eq\s+"1"') {
     throw "doctor.ps1 should skip claude doctor when CCDI_TEST_MODE=1"
 }
 
+# 9. Invoke-ClaudeDoctorSafe must NOT contain Invoke-CommandSafe calling claude doctor
+if ($claudeInstallText -match 'Invoke-ClaudeDoctorSafe[\s\S]{0,500}Invoke-CommandSafe') {
+    throw "Invoke-ClaudeDoctorSafe must NOT use Invoke-CommandSafe internally; delegate to Invoke-ClaudeDoctorInteractiveSafe"
+}
+
+# 10. lib/claude-install.ps1 must NOT contain Invoke-CommandSafe + claude + doctor combined
+# Check each non-comment line: no line should have both Invoke-CommandSafe, claude, and doctor
+$claudeInstallLines = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Encoding UTF8
+foreach ($line in $claudeInstallLines) {
+    if ($line -match '^\s*#' -or $line -match '^\s*<#' -or $line -match '^\s*\.') { continue }
+    if ($line -match 'Invoke-CommandSafe' -and $line -match '\bclaude\b' -and $line -match '\bdoctor\b') {
+        throw "lib/claude-install.ps1 must NOT combine Invoke-CommandSafe with claude and doctor on same line: $line"
+    }
+}
+
+# 11. Invoke-ClaudeDoctorSafe must delegate to Invoke-ClaudeDoctorInteractiveSafe
+if ($claudeInstallText -notmatch 'function Invoke-ClaudeDoctorSafe[\s\S]{0,300}Invoke-ClaudeDoctorInteractiveSafe') {
+    throw "Invoke-ClaudeDoctorSafe must delegate to Invoke-ClaudeDoctorInteractiveSafe"
+}
+
+# 12. Clear-StaleClaudeDoctorProcesses must support -ParentPid for scoped cleanup
+if ($claudeInstallText -notmatch '\[int\]\$ParentPid') {
+    throw "Clear-StaleClaudeDoctorProcesses must have -ParentPid parameter for scoped cleanup"
+}
+if ($claudeInstallText -notmatch '\$ParentPid\s+-gt\s+0') {
+    throw "Clear-StaleClaudeDoctorProcesses must filter by ParentPid when specified"
+}
+
+# 13. Timeout post-cleanup must use -ParentPid (not -Force on global scope)
+if ($claudeInstallText -notmatch 'Clear-StaleClaudeDoctorProcesses\s+-ParentPid') {
+    throw "Timeout post-cleanup must use Clear-StaleClaudeDoctorProcesses -ParentPid for scoped cleanup"
+}
+
+# 14. Invoke-ClaudeDoctorInteractiveSafe must handle Start-Job failure gracefully
+if ($claudeInstallText -notmatch 'watchdogAvailable') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must handle Start-Job failure with watchdogAvailable flag"
+}
+if ($claudeInstallText -notmatch 'Start-Job 创建 watchdog 失败') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must log warning when Start-Job fails"
+}
+
 Write-Host "[check] Claude doctor interactive invocation OK"
 
 Write-Host "[check] uninstall backup listing"
