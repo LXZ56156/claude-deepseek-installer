@@ -385,7 +385,7 @@ function Install-ClaudeCodeNative {
     try {
         $tempInstallScript = Join-Path $env:TEMP "claude_native_install_${PID}_$(Get-Random).ps1"
         $downloadResult = Invoke-VisibleFileDownload -Url "https://claude.ai/install.ps1" `
-            -OutputPath $tempInstallScript -TimeoutSec 45 -TestSafe:$TestSafe
+            -OutputPath $tempInstallScript -TimeoutSec 30 -TestSafe:$TestSafe
 
         if (-not $downloadResult.Success) {
             # 详细错误仅写入日志，主界面只显示友好提示
