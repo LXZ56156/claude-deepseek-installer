@@ -410,9 +410,9 @@ function Install-ClaudeCodeNative {
             $result.Success = $true
         }
         else {
-            $result.Error = "Native Install 安装脚本执行未成功完成: $($installResult.Error)"
-            Write-Warning $result.Error
-            Write-Log "WARN" $result.Error
+            # 只记录详细错误到日志，不向用户展示 PowerShell 堆栈
+            $result.Error = "Native Install 安装脚本执行未成功完成"
+            Write-Log "ERROR" "Native Install 失败详情: ExitCode=$($installResult.ExitCode), Error=$($installResult.Error), DurationMs=$($installResult.DurationMs)"
         }
     }
     catch {
@@ -860,7 +860,8 @@ function Invoke-ClaudeDoctorInteractiveSafe {
     $exitCode = -1
 
     try {
-        & $claudePath doctor
+        # 管道到 Out-Host 确保 stdout 直显终端且不污染函数返回值
+        & $claudePath doctor *>&1 | Out-Host
         $exitCode = $LASTEXITCODE
     }
     catch {
@@ -1179,7 +1180,7 @@ function Install-ClaudeCodeAuto {
             Write-Success "Claude Code 已安装: $($existingCheck.Version)"
             Write-Info "已安装时不覆盖、不重装、不自动更新。"
 
-            [void](Invoke-ClaudeDoctorSafe)
+            # claude doctor is diagnostic-only; not called during install
 
             $result.Success = $true
             $result.Method = "existing"
@@ -1241,7 +1242,7 @@ function Install-ClaudeCodeAuto {
             $verifyResult = Test-ClaudeCommandExisting
             if ($verifyResult.Exists) {
                 Write-Success "Claude Code 安装验证通过 (Native Install): $($verifyResult.Version)"
-                [void](Invoke-ClaudeDoctorSafe)
+                # claude doctor is diagnostic-only; not called during install
 
                 $result.Success = $true
                 $result.Method = "official_native"
@@ -1260,7 +1261,7 @@ function Install-ClaudeCodeAuto {
                 $verifyResult2 = Test-ClaudeCommandExisting
                 if ($verifyResult2.Exists) {
                     Write-Success "Claude Code 安装验证通过（PATH 刷新后）: $($verifyResult2.Version)"
-                    [void](Invoke-ClaudeDoctorSafe)
+                    # claude doctor is diagnostic-only; not called during install
 
                     $result.Success = $true
                     $result.Method = "official_native"
@@ -1278,7 +1279,9 @@ function Install-ClaudeCodeAuto {
             }
         }
         else {
-            Write-Warning "Native Install 失败: $($nativeResult.Error)"
+            Write-Warning "Claude 官方安装通道执行失败，正在自动切换国内 npm 镜像安装。"
+            Write-Info "这通常是官方下载通道不稳定或被网络拦截，不代表安装失败。"
+            Write-Log "WARN" "Native Install 详细错误: $($nativeResult.Error)"
             Write-Info "将自动切换 npmmirror 镜像安装..."
         }
     }
@@ -1445,7 +1448,7 @@ function Install-ClaudeCodeAuto {
     $verifyResult = Test-ClaudeCommandExisting
     if ($verifyResult.Exists) {
         Write-Success "Claude Code 安装验证通过 (npm mirror): $($verifyResult.Version)"
-        [void](Invoke-ClaudeDoctorSafe)
+        # claude doctor is diagnostic-only; not called during install
 
         $result.Success = $true
         $result.Method = "npm_npmmirror"

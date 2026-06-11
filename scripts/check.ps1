@@ -626,6 +626,36 @@ foreach ($p in $quickTimeoutPatterns) {
     }
 }
 
+Write-Host "[check] Install flow: no claude doctor during install"
+
+# 27. Install-ClaudeCodeAuto must NOT call Invoke-ClaudeDoctorSafe or Invoke-ClaudeDoctorInteractiveSafe
+if ($claudeInstallText -match 'function Install-ClaudeCodeAuto[\s\S]{0,5000}Invoke-ClaudeDoctorSafe') {
+    throw "Install-ClaudeCodeAuto must NOT call Invoke-ClaudeDoctorSafe; claude doctor is diagnostic-only"
+}
+if ($claudeInstallText -match 'function Install-ClaudeCodeAuto[\s\S]{0,5000}Invoke-ClaudeDoctorInteractiveSafe') {
+    throw "Install-ClaudeCodeAuto must NOT call Invoke-ClaudeDoctorInteractiveSafe; claude doctor is diagnostic-only"
+}
+
+# 28. Native Install failure must show user-friendly message, NOT PowerShell stack traces
+if ($claudeInstallText -notmatch 'Claude 官方安装通道执行失败，正在自动切换国内 npm 镜像安装') {
+    throw "Native Install failure must show user-friendly message about automatic npm mirror fallback"
+}
+if ($claudeInstallText -notmatch '这通常是官方下载通道不稳定或被网络拦截，不代表安装失败') {
+    throw "Native Install failure must reassure user that install has not failed"
+}
+
+# 29. Native Install error detail must be logged, not displayed to user
+if ($claudeInstallText -notmatch 'Write-Log\s+"ERROR"\s+"Native Install 失败详情') {
+    throw "Native Install failure details must go to Write-Log, not user display"
+}
+
+# 30. Invoke-ClaudeDoctorInteractiveSafe must NOT pollute return stream with claude doctor stdout
+if ($claudeInstallText -match '&\s+\$claudePath\s+doctor\s*$' -and $claudeInstallText -notmatch 'Out-Host') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must pipe claude doctor output to Out-Host to prevent return stream pollution"
+}
+
+Write-Host "[check] Install flow checks OK"
+
 Write-Host "[check] Visible install command UX OK"
 
 Write-Host "[check] uninstall backup listing"
