@@ -50,6 +50,7 @@ $script:ApiTestFailed = $false
 $script:ApiTestFailReason = ""
 $script:TestProjectPath = $null
 $script:ReportPath = $null
+$script:EnvSnapshot = $null
 $script:UnsupportedSystem = $false
 $script:TestSafeMode = $TestSafe -or $DryRun -or ($env:CCDI_TEST_MODE -eq "1")
 $script:EffectiveSkipApiTest = $SkipApiTest -or $script:TestSafeMode
@@ -815,7 +816,9 @@ function Step-GenerateReport {
     $script:ReportPath = $reportPath
 
     # 收集信息：优先使用 EnvSnapshot 缓存，缺失字段 fallback 到实时检测
-    $snap = $script:EnvSnapshot
+    # 使用 Get-Variable 防御式读取：即使未来重构导致变量未定义也不抛异常
+    $snapVar = Get-Variable -Name EnvSnapshot -Scope Script -ErrorAction SilentlyContinue
+    $snap = if ($snapVar) { $snapVar.Value } else { $null }
     $winInfo = Get-WindowsVersionInfo
     $psInfo = Get-PowerShellVersionInfo
 
@@ -1194,13 +1197,17 @@ function Show-CompletionMenu {
                 }
                 Write-Info "正在打开安装报告..."
                 try {
-                    & notepad.exe $script:ReportPath 2>$null
-                    if ($LASTEXITCODE -ne 0) {
-                        throw "notepad 返回非零退出码"
-                    }
+                    Start-Process -FilePath "notepad.exe" -ArgumentList @($script:ReportPath) -ErrorAction Stop
+                    Write-Info "已打开报告: $($script:ReportPath)"
                 }
                 catch {
-                    Write-Warning "无法自动打开报告，请手动打开: $($script:ReportPath)"
+                    try {
+                        Invoke-Item -Path $script:ReportPath -ErrorAction Stop
+                        Write-Info "已打开报告: $($script:ReportPath)"
+                    }
+                    catch {
+                        Write-Warning "无法自动打开报告，请手动打开: $($script:ReportPath)"
+                    }
                 }
             }
             "3" {

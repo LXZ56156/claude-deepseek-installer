@@ -1196,9 +1196,17 @@ foreach ($field in $requiredSnapshotFields) {
     }
 }
 
-# 5. Step-GenerateReport must prioritize EnvSnapshot
-if ($startHereText -notmatch '\$snap\s*=\s*\$script:EnvSnapshot') {
-    throw "Step-GenerateReport must read `$script:EnvSnapshot"
+# 4b. State variables must pre-initialize EnvSnapshot to $null (StrictMode safety)
+if ($startHereText -notmatch '\$script:EnvSnapshot\s*=\s*\$null') {
+    throw "Start-Here.ps1 must pre-initialize `$script:EnvSnapshot = `$null in state variables section"
+}
+
+# 5. Step-GenerateReport must use Get-Variable for defensive EnvSnapshot read
+if ($startHereText -notmatch 'Get-Variable\s+-Name\s+EnvSnapshot\s+-Scope\s+Script\s+-ErrorAction\s+SilentlyContinue') {
+    throw "Step-GenerateReport must use Get-Variable -Name EnvSnapshot -Scope Script -ErrorAction SilentlyContinue"
+}
+if ($startHereText -notmatch 'if\s*\(\$snapVar\)\s*\{\s*\$snapVar\.Value\s*\}\s*else\s*\{\s*\$null\s*\}') {
+    throw "Step-GenerateReport must guard snapVar result with if/else null fallback"
 }
 if ($startHereText -notmatch 'if\s*\(\$snap\)') {
     throw "Step-GenerateReport must check `$snap before using cache"
@@ -1225,6 +1233,19 @@ foreach ($item in $requiredMenuItems) {
 # Show-CompletionMenu function must exist
 if ($startHereText -notmatch 'function Show-CompletionMenu') {
     throw "Start-Here.ps1 must define Show-CompletionMenu function"
+}
+
+# 7b. Show-CompletionMenu MUST NOT use $LASTEXITCODE for GUI program exit check
+if ($startHereText -match 'Show-CompletionMenu[\s\S]{0,800}\$LASTEXITCODE') {
+    throw "Show-CompletionMenu must NOT use `$LASTEXITCODE for GUI program (notepad) exit check"
+}
+# 7c. Show-CompletionMenu must use Start-Process for notepad
+if ($startHereText -notmatch 'Start-Process\s+-FilePath\s+"notepad\.exe"') {
+    throw "Show-CompletionMenu must use Start-Process -FilePath notepad.exe for report opening"
+}
+# 7d. Show-CompletionMenu must have Invoke-Item fallback
+if ($startHereText -notmatch 'Invoke-Item\s+-Path\s+\$script:ReportPath') {
+    throw "Show-CompletionMenu must have Invoke-Item fallback when notepad fails"
 }
 
 # 8. report/share-safe 报告正文不应出现 OAuth 作为隐私声明列举项

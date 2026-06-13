@@ -680,10 +680,15 @@ x-api-key: $TestApiKey
         $startHereText -match '\$script:EnvSnapshot\s*=\s*@\{'
     } "Step-CheckEnvironment 必须写入 EnvSnapshot"
 
-    # Step-GenerateReport 优先使用 EnvSnapshot
-    Assert "Step-GenerateReport 优先使用 EnvSnapshot" {
-        $startHereText -match '\$snap\s*=\s*\$script:EnvSnapshot'
-    } "Step-GenerateReport 必须优先使用 EnvSnapshot"
+    # 状态变量区必须预初始化 EnvSnapshot
+    Assert "状态变量区预初始化 EnvSnapshot = null" {
+        $startHereText -match '\$script:EnvSnapshot\s*=\s*\$null'
+    } "Start-Here.ps1 状态变量区必须预初始化 `$script:EnvSnapshot = `$null"
+
+    # Step-GenerateReport 必须使用 Get-Variable 防御式读取
+    Assert "Step-GenerateReport 使用 Get-Variable 防御式读取 EnvSnapshot" {
+        $startHereText -match 'Get-Variable\s+-Name\s+EnvSnapshot\s+-Scope\s+Script\s+-ErrorAction\s+SilentlyContinue'
+    } "Step-GenerateReport 必须使用 Get-Variable 读取 EnvSnapshot"
 
     Assert "Step-GenerateReport 不得无条件重复完整环境检测" {
         $startHereText -match 'if\s*\(\$snap\)' -and
@@ -705,6 +710,19 @@ x-api-key: $TestApiKey
     Assert "Show-CompletionMenu 函数存在" {
         $startHereText -match 'function Show-CompletionMenu'
     } "Start-Here.ps1 必须定义 Show-CompletionMenu 函数"
+
+    # Show-CompletionMenu 打开报告安全
+    Assert "Show-CompletionMenu 不使用 $LASTEXITCODE 检查 notepad" {
+        $startHereText -notmatch 'Show-CompletionMenu[\s\S]{0,800}\$LASTEXITCODE'
+    } "Show-CompletionMenu 不得使用 `$LASTEXITCODE 检查 GUI 程序退出码"
+
+    Assert "Show-CompletionMenu 使用 Start-Process 打开报告" {
+        $startHereText -match 'Start-Process\s+-FilePath\s+"notepad\.exe"'
+    } "Show-CompletionMenu 必须使用 Start-Process 打开 notepad"
+
+    Assert "Show-CompletionMenu 有 Invoke-Item fallback" {
+        $startHereText -match 'Invoke-Item\s+-Path\s+\$script:ReportPath'
+    } "Show-CompletionMenu 必须有 Invoke-Item fallback"
 
     # Privacy: report 正文不出现 OAuth 列举
     Assert "doctor.ps1 隐私声明不列举 OAuth" {
