@@ -501,6 +501,41 @@ x-api-key: $TestApiKey
     Assert "WSL 路径脱敏" { $sanitizedPath -notmatch '/home/TestUser' } "WSL 路径未脱敏"
 
     # ============================================================
+    # 16. install.ps1 兼容入口验证
+    # ============================================================
+    Write-CheckHeader "16. install.ps1 兼容入口验证"
+
+    $installPs1Path = Join-Path $ScriptRoot "install.ps1"
+    $installContent = Get-Content $installPs1Path -Raw -Encoding UTF8
+
+    Assert "install.ps1 包含弃用提示" {
+        ($installContent -match '旧入口') -or ($installContent -match '推荐入口是 Start-Here\.ps1')
+    } "install.ps1 缺少弃用提示"
+
+    Assert "install.ps1 转发到 Start-Here.ps1" {
+        $installContent -match 'Start-Here\.ps1'
+    } "install.ps1 未转发到 Start-Here.ps1"
+
+    Assert "install.ps1 不包含 Show-Menu" {
+        $installContent -notmatch 'function Show-Menu'
+    } "install.ps1 包含旧 Show-Menu 函数"
+
+    Assert "install.ps1 不包含 VS Code 扩展安装" {
+        $installContent -notmatch 'Step-InstallVSCodeExtension' -and
+        $installContent -notmatch 'code[\s\S]{0,100}--install-extension'
+    } "install.ps1 包含旧 VS Code 扩展安装逻辑"
+
+    Assert "install.ps1 不包含旧安装步骤函数" {
+        $installContent -notmatch 'function Step-InstallClaudeCode' -and
+        $installContent -notmatch 'function Step-ConfigureDeepSeek' -and
+        $installContent -notmatch 'function Step-CheckEnvironment'
+    } "install.ps1 包含旧独立安装步骤函数"
+
+    Assert "install.ps1 是轻量转发入口" {
+        ($installContent -split "`n").Count -le 120
+    } "install.ps1 超过 120 行，不是轻量入口"
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""

@@ -947,6 +947,65 @@ foreach ($cmdFile in $cmdFiles) {
 }
 Write-Host "[check] .cmd launchers: no BOM, pure ASCII"
 
+Write-Host "[check] Legacy install.ps1 entry point guardrails"
+$installPs1Text = Get-Content -Path (Join-Path $RootDir "install.ps1") -Raw -Encoding UTF8
+
+# 1. Must contain deprecation notice
+if ($installPs1Text -notmatch '旧入口' -and $installPs1Text -notmatch '推荐入口是 Start-Here\.ps1') {
+    throw "install.ps1 must contain deprecation notice ('旧入口' or '推荐入口是 Start-Here.ps1')"
+}
+
+# 2. Must reference Start-Here.ps1
+if ($installPs1Text -notmatch 'Start-Here\.ps1') {
+    throw "install.ps1 must reference Start-Here.ps1"
+}
+
+# 3. Must NOT contain old Show-Menu function
+if ($installPs1Text -match 'function Show-Menu') {
+    throw "install.ps1 must NOT contain Show-Menu function"
+}
+
+# 4. Must NOT contain Step-InstallVSCodeExtension
+if ($installPs1Text -match 'Step-InstallVSCodeExtension') {
+    throw "install.ps1 must NOT contain Step-InstallVSCodeExtension"
+}
+
+# 5. Must NOT contain code --install-extension in any form
+if ($installPs1Text -match 'code[\s\S]{0,100}--install-extension') {
+    throw "install.ps1 must NOT contain code --install-extension in any form"
+}
+
+# 6. Must NOT contain Invoke-CommandSafe calling code (old VS Code extension pattern)
+if ($installPs1Text -match 'Invoke-CommandSafe[\s\S]{0,200}"code"') {
+    throw "install.ps1 must NOT contain Invoke-CommandSafe calling code"
+}
+
+# 7. Must NOT be an independent install entry (no legacy step functions)
+$legacyStepFunctions = @(
+    'function Step-InstallClaudeCode',
+    'function Step-ConfigureDeepSeek',
+    'function Step-CheckEnvironment',
+    'function Show-FinalSummary'
+)
+foreach ($func in $legacyStepFunctions) {
+    if ($installPs1Text -match [regex]::Escape($func)) {
+        throw "install.ps1 must NOT contain legacy step function: $func"
+    }
+}
+
+# 8. Must NOT contain independent deepseek config write (Write-DeepSeekConfig called directly)
+if ($installPs1Text -match 'Write-DeepSeekConfig\s+-ApiKey') {
+    throw "install.ps1 must NOT independently write DeepSeek config"
+}
+
+# 9. Should be a lightweight shim (<= 120 lines)
+$installLineCount = ($installPs1Text -split "`n").Count
+if ($installLineCount -gt 120) {
+    throw "install.ps1 should be a lightweight shim (<= 120 lines), actually $installLineCount lines"
+}
+
+Write-Host "[check] Legacy install.ps1 entry point guardrails OK"
+
 # ============================================================
 # 安装安全与返回结构检查（全部在 CCDI_TEST_MODE=1 下运行）
 #
