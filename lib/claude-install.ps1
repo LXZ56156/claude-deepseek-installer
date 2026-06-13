@@ -860,6 +860,7 @@ function Invoke-ClaudeDoctor {
 
     $result = @{
         Success         = $false
+        Severity        = "ERROR"
         Summary         = ""
         ParsedData      = @{}
         CleanedOutput   = ""
@@ -884,12 +885,14 @@ function Invoke-ClaudeDoctor {
     $result.TimedOut = [bool]$doctor.TimedOut
 
     if ($doctor.Error -eq "skipped_test_safe") {
+        $result.Severity = "SKIP"
         $result.Summary = "[SKIP] 测试安全模式 - 已跳过 claude doctor"
         $result.Error = "skipped_test_safe"
         return $result
     }
 
     if ($doctor.Error -eq "watchdog_unavailable_skipped") {
+        $result.Severity = "SKIP"
         $result.Summary = "[SKIP] 超时保护不可用 - 已跳过 claude doctor，不影响主诊断"
         $result.Error = "watchdog_unavailable_skipped"
         $result.DoctorAvailable = $false
@@ -907,16 +910,18 @@ function Invoke-ClaudeDoctor {
     $result.ParsedData = $parsed.ParsedFields
     $result.HasCoreFields = $parsed.HasCoreFields
 
-    # 5. 分级处理
+    # 5. 分级处理（设置 Severity 让调用方直接使用，不必自行推断顺序）
     if ($doctor.Success -and $parsed.HasCoreFields) {
         # 成功且解析到核心字段
         $result.Success = $true
+        $result.Severity = "OK"
         $result.Summary = "[OK] Claude Code doctor - $($parsed.UserSummary)"
         Write-Log "INFO" "Invoke-ClaudeDoctor: 成功, $($result.Summary)"
     }
     elseif ($doctor.TimedOut -and $parsed.HasCoreFields) {
-        # 超时但已解析到核心字段 → WARN，不算失败
+        # 超时但已解析到核心字段 → WARN（注意：Success 依然 true 供向后兼容，但 Severity=WARN）
         $result.Success = $true
+        $result.Severity = "WARN"
         $result.TimedOut = $true
         $result.Error = "claude doctor 进入交互式流程，已终止；已从部分输出中解析安装状态"
         $result.Summary = "[WARN] claude doctor - 官方 doctor 进入交互式流程，已终止；已从部分输出中解析安装状态"
@@ -928,6 +933,7 @@ function Invoke-ClaudeDoctor {
     elseif ($doctor.TimedOut -and -not $parsed.HasCoreFields -and $claudeAvailable) {
         # 超时，无法解析，但 claude CLI 可用
         $result.Success = $true
+        $result.Severity = "WARN"
         $result.TimedOut = $true
         $result.Error = "claude doctor 未返回有效结果；Claude Code CLI 本身可用 ($claudeVer)"
         $result.Summary = "[WARN] claude doctor - 未返回有效结果；Claude Code CLI 本身可用 ($claudeVer)"
@@ -936,6 +942,7 @@ function Invoke-ClaudeDoctor {
     elseif (-not $doctor.Success -and $claudeAvailable) {
         # doctor 失败但 CLI 可用
         $result.Success = $true
+        $result.Severity = "WARN"
         $result.Error = "claude doctor 返回异常；但 Claude Code CLI 本身可用 ($claudeVer)"
         $result.Summary = "[WARN] claude doctor - 官方 doctor 未完整返回，但 Claude Code CLI 已可用；不影响基础使用"
         Write-Log "WARN" "Invoke-ClaudeDoctor: doctor 异常但 CLI 可用 ($claudeVer)"
@@ -943,6 +950,7 @@ function Invoke-ClaudeDoctor {
     elseif (-not $claudeAvailable) {
         # CLI 也不可用 → 真正的安装问题
         $result.Success = $false
+        $result.Severity = "ERROR"
         $result.Error = "Claude Code CLI 不可用，无法运行 doctor 诊断"
         $result.Summary = "[ERROR] Claude Code CLI - 未检测到可运行的 claude 命令"
         Write-Log "ERROR" "Invoke-ClaudeDoctor: CLI 不可用，无法运行 doctor"
@@ -950,6 +958,7 @@ function Invoke-ClaudeDoctor {
     else {
         # 兜底
         $result.Success = $parsed.HasCoreFields
+        $result.Severity = "WARN"
         $result.Summary = if ($parsed.HasCoreFields) {
             "[WARN] claude doctor - 部分字段可解析"
         }
@@ -1051,26 +1060,6 @@ function Invoke-ClaudeDoctorInteractiveSafe {
     }
     catch {
         Write-Log "WARN" "执行前清理残留进程失败（不阻塞）: $_"
-    }
-
-    # --- 准备临时输出文件和 stdin 脚本 ---
-    $tempDir = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
-    $tmpOut = Join-Path $tempDir "ccdi_doctor_stdout_${PID}_$(Get-Random).tmp"
-    $tmpErr = Join-Path $tempDir "ccdi_doctor_stderr_${PID}_$(Get-Random).tmp"
-    $stdinScript = Join-Path $tempDir "ccdi_doctor_stdin_${PID}_$(Get-Random).ps1"
-
-    # 写入 stdin 注入脚本（通过管道发送多个换行防止 Enter to continue 卡住）
-    $stdinContent = @'
-param([int]$ProcessId)
-$lines = @("") * 15
-$stdinContent = ($lines -join "`n")
-# 通过文件输入重定向到进程 stdin
-'@
-    try {
-        Set-Content -Path $stdinScript -Value $stdinContent -Encoding UTF8
-    }
-    catch {
-        Write-Log "WARN" "无法写入 stdin 脚本（不阻塞）: $_"
     }
 
     # --- 启动 Watchdog Job ---
@@ -1248,15 +1237,21 @@ $stdinContent = ($lines -join "`n")
 
         $sw.Stop()
 
-        # 保存原始输出到日志（截断）
+        # 保存原始输出（始终拼接，供后续清洗使用）
         $combinedOutput = "$stdOut`n$stdErr"
-        if ($combinedOutput.Length -gt 12000) {
-            $logOutput = $combinedOutput.Substring(0, 12000) + "`n...[doctor 输出截断]"
+
+        # DEBUG 日志：仅当 CCDI_DEBUG_RAW_DOCTOR=1 时才记录完整 raw output
+        if ($env:CCDI_DEBUG_RAW_DOCTOR -eq "1") {
+            # API Key 脱敏 + 路径脱敏后写入 DEBUG 日志
+            $safeOutput = Sanitize-SecretLikeText -Text $combinedOutput
+            $safeOutput = Sanitize-PathForReport -Text $safeOutput
+            if ($safeOutput.Length -gt 12000) {
+                $safeOutput = $safeOutput.Substring(0, 12000) + "`n...[doctor 输出截断]"
+            }
+            Write-Log "DEBUG" "Invoke-ClaudeDoctorInteractiveSafe raw output ($($combinedOutput.Length) bytes): $safeOutput"
         }
-        else {
-            $logOutput = $combinedOutput
-        }
-        Write-Log "INFO" "Invoke-ClaudeDoctorInteractiveSafe raw output ($($combinedOutput.Length) bytes). For debug: $logOutput"
+        # 始终记录简洁状态到 INFO
+        Write-Log "INFO" "Invoke-ClaudeDoctorInteractiveSafe: output $($combinedOutput.Length) bytes, exitCode=$exitCode, finished=$finished"
 
         # 清洗输出
         $rawOutput = $combinedOutput
@@ -1269,13 +1264,6 @@ $stdinContent = ($lines -join "`n")
         $result.DurationMs = $sw.ElapsedMilliseconds
         $result.Error = "claude doctor 执行异常: $_"
         Write-Log "ERROR" "Invoke-ClaudeDoctorInteractiveSafe: Start-Process 执行异常: $_"
-    }
-
-    # 清理临时文件
-    foreach ($tmpPath in @($tmpOut, $tmpErr, $stdinScript)) {
-        if ($tmpPath -and (Test-Path $tmpPath)) {
-            Remove-Item $tmpPath -Force -ErrorAction SilentlyContinue
-        }
     }
 
     # --- 检查 Watchdog 状态 ---

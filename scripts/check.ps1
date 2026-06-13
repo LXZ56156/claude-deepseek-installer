@@ -565,21 +565,21 @@ Write-Host "[check] Claude doctor interactive invocation OK"
 Write-Host "[check] Text cleaning and report safety functions"
 $claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
 
-# 35. Remove-AnsiEscape must handle common ANSI sequences
+# 35. Remove-AnsiEscape must handle common ANSI sequences (universal CSI pattern)
 if ($commonText -notmatch 'function Remove-AnsiEscape') {
     throw "Remove-AnsiEscape function not found in lib/common.ps1"
 }
-# Verify ANSI escape stripping: must contain ESC replacement and CSI pattern
-if ($commonText -notmatch "x1b" -or $commonText -notmatch '\[0-9;\]') {
-    throw "Remove-AnsiEscape must strip color/style ANSI sequences (\x1b[...m)"
+# Verify universal CSI pattern: ESC[ params... intermediate... final byte
+if ($commonText -notmatch '\[0-\?\]\*\[ -\/\]\*\[@-~\]') {
+    throw "Remove-AnsiEscape must use universal CSI pattern \x1B[[0-?]*[ -/]*[@-~]"
 }
 
-# 36. Test-Mojibake must detect known garbled characters
+# 36. Test-Mojibake must detect known garbled characters (compound, not false-positive singles)
 if ($commonText -notmatch 'function Test-Mojibake') {
     throw "Test-Mojibake function not found in lib/common.ps1"
 }
-# Check that known mojibake chars exist in the function
-$mojibakeChars = @('鈹', '鉁', '鈥', 'Hr,g', '锟', '斤')
+# 单字符乱码特征必须存在（但不包含 斤/拷）
+$mojibakeChars = @('鈹', '鉁', '鈥', '銆', '鈩')
 $foundChars = $true
 foreach ($mc in $mojibakeChars) {
     if ($commonText -notmatch [regex]::Escape($mc)) {
@@ -588,7 +588,15 @@ foreach ($mc in $mojibakeChars) {
     }
 }
 if (-not $foundChars) {
-    throw "Test-Mojibake must check for known mojibake characters (鈹/鉁/鈥/Hr,g/锟/斤)"
+    throw "Test-Mojibake must check for known mojibake characters (鈹/鉁/鈥)"
+}
+# 组合模式 "锟斤拷" 必须存在（不会误伤正常中文 "公斤" "拷贝"）
+if ($commonText -notmatch '锟斤拷') {
+    throw "Test-Mojibake must check for compound pattern 锟斤拷 (not single 斤/拷)"
+}
+# 单个 "斤" 或 "拷" 不应出现在单字符列表中
+if ($commonText -match "'斤'" -or $commonText -match "'拷'") {
+    throw "Test-Mojibake must NOT treat single 斤/拷 as mojibake (false positive on 公斤/拷贝)"
 }
 
 # 37. Normalize-ExternalCommandOutput chains cleaning functions
@@ -624,6 +632,19 @@ if ($claudeInstallText -notmatch 'GrowthBook') {
 # 40. Invoke-ClaudeDoctor must exist and handle graded timeout
 if ($claudeInstallText -notmatch 'function Invoke-ClaudeDoctor\b') {
     throw "Invoke-ClaudeDoctor function not found in lib/claude-install.ps1"
+}
+# 40b. Invoke-ClaudeDoctor must include Severity field in result
+if ($claudeInstallText -notmatch 'Severity\s*=\s*"') {
+    throw "Invoke-ClaudeDoctor must include Severity field in its result hashtable"
+}
+
+# 40c. doctor.ps1 must use Severity-based switch (not Success-first if/else chain that can mistake TimedOut for OK)
+if ($doctorText -notmatch 'claudeDoctor\.Severity') {
+    throw "doctor.ps1 must use Severity field for claude doctor status (not Success-first checking)"
+}
+# 40d. TimedOut+HasCoreFields must NOT be handled before Severity switch (prevent OK misclassification)
+if ($doctorText -notmatch 'switch\s*\(\$claudeDoctor\.Severity\)') {
+    throw "doctor.ps1 must switch on Severity to prevent TimedOut+HasCoreFields from being classified as OK"
 }
 
 # 41. Invoke-ClaudeDoctorInteractiveSafe must set NO_COLOR/CI/TERM env vars

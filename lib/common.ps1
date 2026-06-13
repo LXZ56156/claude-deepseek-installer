@@ -1356,35 +1356,18 @@ function Remove-AnsiEscape {
 
     $result = $Text
 
-    # ESC[...m 颜色/样式控制符
-    $result = $result -replace '\x1b\[[0-9;]*m', ''
+    # 通用 CSI 序列: ESC [ 参数... 中间字节... 最终字节
+    # 覆盖 颜色/SGR (m), 光标移动 (ABCDEFGH), 清屏 (J,K), 模式设置 (h,l), 等
+    $result = $result -replace '\x1B\[[0-?]*[ -/]*[@-~]', ''
 
-    # ESC[?25l / ESC[?25h 光标显示/隐藏
-    $result = $result -replace '\x1b\[\?25[hl]', ''
+    # OSC 序列（如 OSC...ST 的超链接/标题设置）
+    $result = $result -replace '\x1B\][^\x07]*(\x07|\x1B\\)', ''
 
-    # ESC[K / ESC[J / ESC[2J 清屏/清行
-    $result = $result -replace '\x1b\[[0-2]?[JK]', ''
+    # 其他非 CSI escape 序列（ESC 后跟单个可打印字符）
+    $result = $result -replace '\x1B[@-Z\\-_]', ''
 
-    # ESC[nA / ESC[nB / ESC[nC / ESC[nD 光标移动
-    $result = $result -replace '\x1b\[\d*[ABCD]', ''
-
-    # ESC[nG 列定位
-    $result = $result -replace '\x1b\[\d*G', ''
-
-    # ESC[s / ESC[u 保存/恢复光标
-    $result = $result -replace '\x1b\[[su]', ''
-
-    # ESC[6n 光标位置报告
-    $result = $result -replace '\x1b\[6n', ''
-
-    # 其他常见 escape 序列（CSI 序列以 ESC[ 开头）
-    $result = $result -replace '\x1b\[\d*[`a-z]', ''
-
-    # OSC 序列（如 OSC...ST 的超链接）
-    $result = $result -replace '\x1b\].*?(\x1b\\|\x07)', ''
-
-    # 单独出现的 ESC 字符（后面跟非打印字符）
-    $result = $result -replace '\x1b', ''
+    # 残留的单独 ESC 字符
+    $result = $result -replace '\x1B', ''
 
     return $result
 }
@@ -1452,10 +1435,16 @@ function Test-Mojibake {
     }
 
     # 已知乱码特征字符（UTF-8 通过 GBK/ANSI 错误解码时的典型产物）
+    # 注意：不包含单独 "斤" "拷"，避免误伤 "公斤" "拷贝" 等正常中文
     $mojibakeChars = @(
         '鈹', '鉁', '鈥', '鈫', '銆', '鈩', '鉂', '鈽',
-        '锟', '斤', '拷', '輟', '軻', '錐', '鏍', '鏋',
+        '輟', '軻', '錐', '鏍', '鏋',
         '鈧', '鋨', '鉃', '銐', '銓', '鋏'
+    )
+
+    # 乱码组合模式（"锟斤拷" 是 UTF-8->GBK 二次编码的典型产物）
+    $mojibakeCompounds = @(
+        '锟斤拷', '锟斤', '斤拷'
     )
 
     # 疑似乱码模式（英文+逗号连在一起无空格，如 "Hr,g"）
@@ -1471,11 +1460,21 @@ function Test-Mojibake {
     foreach ($line in $lines) {
         $isSuspicious = $false
 
-        # 检查乱码字符
+        # 检查乱码字符（单字符特征）
         foreach ($char in $mojibakeChars) {
             if ($line.Contains($char)) {
                 $isSuspicious = $true
                 break
+            }
+        }
+
+        # 检查乱码组合模式（如 "锟斤拷" 不会误伤单独的 "公斤" "拷贝"）
+        if (-not $isSuspicious) {
+            foreach ($compound in $mojibakeCompounds) {
+                if ($line.Contains($compound)) {
+                    $isSuspicious = $true
+                    break
+                }
             }
         }
 
@@ -1674,16 +1673,27 @@ function Convert-ToSafeReportText {
         $result = $result -replace $pattern, '[内部字段已过滤]'
     }
 
-    # 5. 过滤疑似乱码行
-    $lines = $result -split "`r`n"
+    # 5. 过滤疑似乱码行（兼容 CRLF/LF 换行）
+    $lines = $result -split "\r?\n"
     $safeLines = [System.Collections.ArrayList]::new()
+    # 单字符乱码特征（不包含 斤/拷）
+    $mojibakeChars = @('鈹', '鉁', '鈥', '鈫', '銆', '鈩', '鉂', '鈽', '輟', '鏍')
+    # 乱码组合（"锟斤拷" 不会误伤正常 "拷贝" "公斤"）
+    $mojibakeCompounds = @('锟斤拷', '锟斤', '斤拷')
     foreach ($line in $lines) {
         $isMojibake = $false
-        $mojibakeChars = @('鈹', '鉁', '鈥', '鈫', '銆', '鈩', '鉂', '鈽', '锟', '斤', '拷')
         foreach ($char in $mojibakeChars) {
             if ($line.Contains($char)) {
                 $isMojibake = $true
                 break
+            }
+        }
+        if (-not $isMojibake) {
+            foreach ($compound in $mojibakeCompounds) {
+                if ($line.Contains($compound)) {
+                    $isMojibake = $true
+                    break
+                }
             }
         }
         if ($isMojibake) {

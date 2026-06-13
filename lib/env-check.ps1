@@ -549,26 +549,44 @@ function Test-WslClaudeComprehensive {
         }
     }
 
-    # 构建 WSL 内综合检测脚本（简化版，避免引号转义问题）
+    # 构建 WSL 内综合检测脚本
+    # 注意: command -v claude 返回的真实路径也要输出来，覆盖非标准安装路径
     $detectionScript = @'
 CLAUDE_IN_PATH=0
 CLAUDE_VERSION=""
+CLAUDE_CMD_PATH=""
+CLAUDE_CMD_EXEC=0
 if command -v claude >/dev/null 2>&1; then
     CLAUDE_IN_PATH=1
     CLAUDE_VERSION=$(claude --version 2>/dev/null | head -1)
+    CLAUDE_CMD_PATH=$(command -v claude 2>/dev/null)
+    if test -n "$CLAUDE_CMD_PATH"; then
+        echo "CCDI_CLAUDE_FOUND=$CLAUDE_CMD_PATH"
+        if test -x "$CLAUDE_CMD_PATH"; then
+            CLAUDE_CMD_EXEC=1
+            echo "CCDI_CLAUDE_CMD_EXEC=1"
+        fi
+        echo "CCDI_CLAUDE_CMD_PATH=$CLAUDE_CMD_PATH"
+    fi
 fi
 echo "CCDI_CLAUDE_IN_PATH=$CLAUDE_IN_PATH"
 echo "CCDI_CLAUDE_VERSION=$CLAUDE_VERSION"
 for dir in $HOME/.local/bin /usr/local/bin $HOME/.npm-global/bin /usr/bin; do
-    if test -x "$dir/claude" || test -f "$dir/claude"; then
+    if test -x "$dir/claude"; then
         echo "CCDI_CLAUDE_FOUND=$dir/claude"
+        echo "CCDI_CLAUDE_EXEC=$dir/claude"
+    elif test -f "$dir/claude"; then
+        echo "CCDI_CLAUDE_FOUND=$dir/claude"
+        echo "CCDI_CLAUDE_NOT_EXEC=$dir/claude"
     fi
 done
 NPM_PREFIX=$(npm prefix -g 2>/dev/null)
 if test -n "$NPM_PREFIX"; then
     echo "CCDI_NPM_PREFIX=$NPM_PREFIX"
-    if test -x "$NPM_PREFIX/bin/claude" || test -f "$NPM_PREFIX/bin/claude"; then
+    if test -x "$NPM_PREFIX/bin/claude"; then
         echo "CCDI_NPM_CLAUDE=$NPM_PREFIX/bin/claude"
+    elif test -f "$NPM_PREFIX/bin/claude"; then
+        echo "CCDI_NPM_CLAUDE_NOT_EXEC=$NPM_PREFIX/bin/claude"
     fi
 fi
 if test -f "$HOME/.claude/settings.json"; then
@@ -585,8 +603,11 @@ echo "CCDI_DETECTION_COMPLETE=1"
 
     Write-Log "INFO" "Test-WslClaudeComprehensive: 在 WSL ($DistroName) 中运行综合检测"
 
+    # 将检测脚本通过 stdin 传给 bash（避免 bash -c 通过 cmd.exe 时的引号转义问题）
+    # 使用简单的单行包装，把脚本内容编码为 base64 传给 WSL
+    $encodedScript = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($detectionScript))
     $detectResult = Invoke-CommandSafe -Command "wsl" -Arguments @(
-        "-d", $DistroName, "bash", "-c", $detectionScript
+        "-d", $DistroName, "bash", "-c", "echo $encodedScript | base64 -d | bash"
     ) -TimeoutSec 20
 
     if (-not $detectResult.Success) {
@@ -610,54 +631,99 @@ echo "CCDI_DETECTION_COMPLETE=1"
         }
     }
 
-    # 收集 claude 文件路径
+    # 收集 claude 文件路径（含 command -v claude 返回的路径）
     $foundPaths = [regex]::Matches($output, 'CCDI_CLAUDE_FOUND=(.+)')
     foreach ($m in $foundPaths) {
-        $result.InstallPaths += $m.Groups[1].Value.Trim()
-    }
-    $npmClaudePaths = [regex]::Matches($output, 'CCDI_NPM_CLAUDE=(.+)')
-    foreach ($m in $npmClaudePaths) {
-        $result.InstallPaths += $m.Groups[1].Value.Trim()
-    }
-    $filePaths = [regex]::Matches($output, 'CCDI_CLAUDE_FILE=(.+)')
-    foreach ($m in $filePaths) {
         $fp = $m.Groups[1].Value.Trim()
         if ($fp -notin $result.InstallPaths) {
             $result.InstallPaths += $fp
         }
     }
+    $cmdPaths = [regex]::Matches($output, 'CCDI_CLAUDE_CMD_PATH=(.+)')
+    foreach ($m in $cmdPaths) {
+        $fp = $m.Groups[1].Value.Trim()
+        if ($fp -notin $result.InstallPaths) {
+            $result.InstallPaths += $fp
+        }
+    }
+    $npmClaudePaths = [regex]::Matches($output, 'CCDI_NPM_CLAUDE=(.+)')
+    foreach ($m in $npmClaudePaths) {
+        $fp = $m.Groups[1].Value.Trim()
+        if ($fp -notin $result.InstallPaths) {
+            $result.InstallPaths += $fp
+        }
+    }
+    # 收集不可执行文件路径
+    $notExecPaths = [regex]::Matches($output, 'CCDI_CLAUDE_NOT_EXEC=(.+)')
+    foreach ($m in $notExecPaths) {
+        $fp = $m.Groups[1].Value.Trim()
+        if ($fp -notin $result.InstallPaths) {
+            $result.InstallPaths += $fp
+        }
+        [void]$result.DetectionNotes.Add("文件存在但不可执行: $fp")
+    }
+    $npmNotExecPaths = [regex]::Matches($output, 'CCDI_NPM_CLAUDE_NOT_EXEC=(.+)')
+    foreach ($m in $npmNotExecPaths) {
+        $fp = $m.Groups[1].Value.Trim()
+        if ($fp -notin $result.InstallPaths) {
+            $result.InstallPaths += $fp
+        }
+        [void]$result.DetectionNotes.Add("npm 文件存在但不可执行: $fp")
+    }
 
-    $result.Installed = ($result.InstallPaths.Count -gt 0)
+    # Installed = InPath (command -v 成功) 或找到文件路径
+    $result.Installed = ($result.InPath -or $result.InstallPaths.Count -gt 0)
 
     if ($output -match 'CCDI_SETTINGS_EXISTS=1') {
         $result.SettingsExists = $true
     }
 
     # 判断状态
-    if ($result.Installed -and $result.InPath) {
+    if ($result.InPath) {
+        # command -v claude 成功 = 在 PATH 中可用，即使 InstallPaths 为空也不判 not_installed
         $result.Status = "installed_and_in_path"
         $result.Summary = "WSL 内已安装 Claude Code 且可在 PATH 中调用"
     }
     elseif ($result.Installed -and -not $result.InPath) {
-        $result.Status = "installed_but_not_in_path"
-        $result.NeedsPathFix = $true
-        # 构建 PATH 修复建议
-        $pathSuggestion = "WSL 内 Claude Code 已安装但未加入 PATH。"
-        if ($result.InstallPaths.Count -gt 0) {
-            $firstPath = $result.InstallPaths[0]
-            $binDir = Split-Path -Parent $firstPath
-            $pathSuggestion += " 修复方式: echo 'export PATH=`"$binDir`:`$PATH`"' >> ~/.bashrc && source ~/.bashrc"
+        # 有文件但不在 PATH 中 → 检查是否可执行
+        $hasExecutable = ($output -match 'CCDI_CLAUDE_EXEC=') -or ($output -match 'CCDI_CLAUDE_CMD_EXEC=1')
+        $hasNonExecutable = ($output -match 'CCDI_CLAUDE_NOT_EXEC=') -or ($output -match 'CCDI_NPM_CLAUDE_NOT_EXEC=')
+
+        if ($hasNonExecutable -and -not $hasExecutable) {
+            $result.Status = "found_but_not_executable"
+            $result.NeedsPathFix = $true
+            if ($result.InstallPaths.Count -gt 0) {
+                $result.Summary = "WSL 内找到 claude 文件但不可执行: $($result.InstallPaths[0])。修复方式: chmod +x $($result.InstallPaths[0])"
+                [void]$result.DetectionNotes.Add("文件不可执行，建议 chmod +x")
+            }
+            else {
+                $result.Summary = "WSL 内找到 claude 文件但不可执行"
+            }
         }
-        $result.Summary = $pathSuggestion
-        [void]$result.DetectionNotes.Add("已找到安装路径但不在 PATH 中: $($result.InstallPaths -join ', ')")
+        else {
+            $result.Status = "installed_but_not_in_path"
+            $result.NeedsPathFix = $true
+            if ($result.InstallPaths.Count -gt 0) {
+                $firstPath = $result.InstallPaths[0]
+                # 使用 Split-Path 取目录（修复：之前错误地把可执行文件路径当作目录）
+                $binDir = Split-Path -Parent $firstPath
+                $result.Summary = "WSL 内 Claude Code 已安装但未加入 PATH。修复方式: echo 'export PATH=`"${binDir}:`$PATH`"' >> ~/.bashrc && source ~/.bashrc"
+                [void]$result.DetectionNotes.Add("已找到安装路径但不在 PATH 中: $binDir")
+            }
+            else {
+                $result.Summary = "WSL 内 Claude Code 已安装但未加入 PATH"
+            }
+        }
     }
     else {
-        $result.Status = "not_installed"
+        # 未安装
         if ($result.SettingsExists) {
+            $result.Status = "not_installed_with_config"
             $result.Summary = "WSL 已有 Claude 配置 (settings.json)，但 WSL 内暂未检测到可运行的 claude 命令"
             [void]$result.DetectionNotes.Add("settings.json 存在但 claude 命令不可用")
         }
         else {
+            $result.Status = "not_installed"
             $result.Summary = "WSL 内未检测到 Claude Code 安装"
         }
     }

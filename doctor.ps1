@@ -277,31 +277,43 @@ function Check-Commands {
         else {
             Write-Info "正在运行 Claude Code 官方 doctor 诊断..."
             $claudeDoctor = Invoke-ClaudeDoctor -TimeoutSec 45
-            if ($claudeDoctor.Success) {
-                Write-Info "Claude Code doctor 摘要: $($claudeDoctor.Summary -replace '\[OK\]\s*|\[WARN\]\s*','')"
-                if ($claudeDoctor.ParsedData -and $claudeDoctor.ParsedData.Count -gt 0) {
+
+            # 显示 doctor 摘要
+            if ($claudeDoctor.Summary) {
+                Write-Info "Claude Code doctor 摘要: $($claudeDoctor.Summary -replace '\[(OK|WARN|ERROR|SKIP)\]\s*','')"
+            }
+
+            # 按 Severity 字段直接判断（避免 TimedOut+HasCoreFields 时 Success=true 导致误入 OK 分支）
+            switch ($claudeDoctor.Severity) {
+                "OK" {
                     $versionStr = if ($claudeDoctor.ParsedData['Version']) { $claudeDoctor.ParsedData['Version'] } else { "未知" }
                     $platformStr = if ($claudeDoctor.ParsedData['Platform']) { $claudeDoctor.ParsedData['Platform'] } else { "未知" }
                     Add-CheckResult "claude doctor" "OK" "安装状态正常，版本 $versionStr，平台 $platformStr"
+                    Write-Info "Claude Code 后台服务/Remote Control 状态不影响 DeepSeek API 终端使用"
                 }
-                else {
-                    Add-CheckResult "claude doctor" "OK" "已执行"
+                "WARN" {
+                    if ($claudeDoctor.TimedOut -and $claudeDoctor.HasCoreFields) {
+                        Add-CheckResult "claude doctor" "WARN" "官方 doctor 进入交互式流程，已终止；已从部分输出中解析安装状态"
+                    }
+                    else {
+                        Add-CheckResult "claude doctor" "WARN" "未返回有效结果；Claude Code CLI 本身可用 ($claudeVersion)"
+                    }
+                    Add-Suggestion "claude doctor 在脚本中无法完整运行，但 claude --version 正常。请单独在终端手动运行 claude doctor 获取官方诊断输出。"
                 }
-                Write-Info "Claude Code 后台服务/Remote Control 状态不影响 DeepSeek API 终端使用"
-            }
-            elseif ($claudeDoctor.TimedOut -and $claudeDoctor.HasCoreFields) {
-                Add-CheckResult "claude doctor" "WARN" "官方 doctor 进入交互式流程，已终止；已从部分输出中解析安装状态"
-                Add-Suggestion "claude doctor 在脚本中无法完整运行，但 claude --version 正常。请单独在终端手动运行 claude doctor 获取官方诊断输出。"
-            }
-            elseif ($claudeDoctor.DoctorAvailable -eq $false) {
-                Add-CheckResult "claude doctor" "SKIP" "超时保护不可用（Start-Job 被禁用），已跳过，不影响主诊断"
-            }
-            elseif (-not $claudeDoctor.Success) {
-                Add-CheckResult "claude doctor" "WARN" "未返回有效结果；Claude Code CLI 本身可用 ($claudeVersion)"
-                Add-Suggestion "claude doctor 未返回有效结果，但 claude --version 正常。请单独在终端手动运行 claude doctor 获取官方诊断输出。"
-            }
-            else {
-                Add-CheckResult "claude doctor" "WARN" "未完成"
+                "ERROR" {
+                    Add-CheckResult "claude doctor" "ERROR" "Claude Code CLI 不可用，无法完成 doctor 诊断"
+                }
+                "SKIP" {
+                    if ($claudeDoctor.DoctorAvailable -eq $false) {
+                        Add-CheckResult "claude doctor" "SKIP" "超时保护不可用（Start-Job 被禁用），已跳过，不影响主诊断"
+                    }
+                    else {
+                        Add-CheckResult "claude doctor" "SKIP" "已跳过"
+                    }
+                }
+                default {
+                    Add-CheckResult "claude doctor" "WARN" "未完成"
+                }
             }
         }
     }
@@ -606,11 +618,17 @@ function Check-WSL {
     $stateText = if ($ubuntuInfo.Running) { "Running" } else { "已停止" }
     Add-CheckResult "Ubuntu" "OK" $stateText
 
-    # 如果 Ubuntu 未运行，尝试检查是否可启动
+    # 如果 Ubuntu 未运行，尝试临时启动 WSL 执行只读检测（不直接 return）
     if (-not $ubuntuInfo.Running) {
-        Add-CheckResult "Ubuntu 可启动" "WARN" "当前未运行"
-        Add-Suggestion "请在 PowerShell 中运行 'wsl' 启动 Ubuntu。"
-        return
+        Write-Info "Ubuntu 当前未运行，诊断将临时启动 WSL 执行只读检测..."
+        # 尝试用 wsl -d 启动并检测；如果启动失败再给 WARN
+        $wslStartCheck = Invoke-CommandSafe -Command "wsl" -Arguments @("-d", "Ubuntu", "bash", "-c", "echo 'WSL_START_OK'") -TimeoutSec 15
+        if (-not $wslStartCheck.Success -or $wslStartCheck.Output -notmatch "WSL_START_OK") {
+            Add-CheckResult "Ubuntu 可启动" "WARN" "当前未运行且无法临时启动"
+            Add-Suggestion "请在 PowerShell 中运行 'wsl' 启动 Ubuntu 后重新诊断。"
+            # 无法启动则跳过 WSL 内检测
+            return
+        }
     }
 
     # 检查 WSL 内的 Claude 状态（使用综合检测）
@@ -634,12 +652,22 @@ function Check-WSL {
             Add-CheckResult "WSL: claude" "WARN" "Claude Code 已安装但未加入 PATH"
             if ($wslClaude.InstallPaths.Count -gt 0) {
                 $firstPath = $wslClaude.InstallPaths[0]
+                $binDir = Split-Path -Parent $firstPath
                 Add-CheckResult "WSL: claude 路径" "INFO" "找到: $firstPath"
-                Add-Suggestion "WSL 内 Claude Code 已安装但 PATH 未配置。修复方式: echo 'export PATH=`"$firstPath`:`$PATH`"' >> ~/.bashrc && source ~/.bashrc"
+                Add-Suggestion "WSL 内 Claude Code 已安装但 PATH 未配置。修复方式: echo 'export PATH=`"${binDir}:`$PATH`"' >> ~/.bashrc && source ~/.bashrc"
             }
             if ($winClaudeVer) {
                 Add-CheckResult "Windows 原生" "INFO" "Windows 原生 Claude Code 可用 ($winClaudeVer)"
-                Add-Suggestion "当前 Windows 原生 Claude Code 可用；WSL 内需要单独安装后才能在 WSL 终端使用"
+            }
+        }
+        "found_but_not_executable" {
+            Add-CheckResult "WSL: claude" "WARN" "找到 claude 文件但不可执行"
+            if ($wslClaude.InstallPaths.Count -gt 0) {
+                Add-CheckResult "WSL: claude 路径" "INFO" "找到: $($wslClaude.InstallPaths[0])（不可执行）"
+                Add-Suggestion "文件权限不足。修复方式: chmod +x $($wslClaude.InstallPaths[0])"
+            }
+            if ($winClaudeVer) {
+                Add-CheckResult "Windows 原生" "INFO" "Windows 原生 Claude Code 可用 ($winClaudeVer)"
             }
         }
         "not_installed" {
@@ -656,6 +684,13 @@ function Check-WSL {
                     Add-CheckResult "WSL: claude" "WARN" "WSL 内未安装 Claude Code"
                     Add-Suggestion "在 WSL Ubuntu 中运行 install_wsl.sh 安装 Claude Code。"
                 }
+            }
+        }
+        "not_installed_with_config" {
+            Add-CheckResult "WSL: claude" "WARN" "WSL 已有 Claude 配置 (settings.json)，但 WSL 内暂未检测到可运行的 claude 命令"
+            Add-Suggestion "WSL 中 settings.json 存在但 claude 不可用。如需在 WSL 中使用，请运行 install_wsl.sh。"
+            if ($winClaudeVer) {
+                Add-CheckResult "Windows 原生" "INFO" "Windows 原生 Claude Code 可用 ($winClaudeVer)"
             }
         }
         default {
