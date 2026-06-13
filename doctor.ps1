@@ -1031,7 +1031,7 @@ function Write-ReportFooter {
     }
     Add-ReportLine "  完整 API Key 和真实用户路径未记录在本报告中。"
     Add-ReportLine "  报告中不包含 Claude 官方 doctor 原始 TUI 输出。"
-    Add-ReportLine "  报告中不包含 OAuth/GrowthBook 等内部字段。"
+    Add-ReportLine "  报告中不包含内部认证字段、完整路径或敏感标识。"
     Add-ReportLine ""
     Add-ReportLine ("=" * 73)
     Add-ReportLine "  报告结束"

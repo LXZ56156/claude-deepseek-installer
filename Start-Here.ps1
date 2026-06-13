@@ -407,6 +407,19 @@ function Step-CheckEnvironment {
     Write-Host ""
     Write-Info "环境检查完成。以上 WARN/SKIP 项不会阻止安装流程。"
 
+    # 缓存环境快照，供 Step-GenerateReport 复用，避免重复检测
+    $script:EnvSnapshot = @{
+        DeepSeekNetwork = $netDeepSeek
+        ClaudeVersion   = $claudeVersion
+        NodeInfo        = $nodeInfo
+        NpmInfo         = $npmInfo
+        WslInfo         = $wslInfo
+        CodeVersion     = $codeVersion
+        GitVersion      = $gitVersion
+        ConfigInfo      = $configInfo
+        MinReq          = $minReq
+    }
+
     # 返回网络检测结果供后续使用
     return @{
         DeepSeekReachable = $netDeepSeek.Reachable
@@ -542,7 +555,7 @@ function Step-GetApiKey {
                 # 格式检查
                 if (-not (Is-ApiKeyFormatValid -Key $apiKey)) {
                     Write-Warning "API Key 格式看起来不典型（DeepSeek Key 通常以 sk- 开头，长度 >= 32 字符）"
-                    if (-not (Confirm-UserChoice -Message "是否仍然使用此 Key？")) {
+                    if (-not (Confirm-UserChoice -Message "是否仍然使用此 Key？" -Default "No")) {
                         Write-Info "已取消。您可以稍后重新运行配置。"
                         return $null
                     }
@@ -789,6 +802,8 @@ function Step-GenerateReport {
         Write-Step "Step 7/7：生成安装完成报告"
     }
 
+    Write-Info "正在生成安装报告（通常 1-3 秒）..."
+
     # 确保 reports 目录存在
     $reportsDir = Join-Path $ScriptDir "reports"
     if (-not (Test-Path $reportsDir)) {
@@ -799,14 +814,28 @@ function Step-GenerateReport {
     $reportPath = Join-Path $reportsDir "install-report-$timestamp.txt"
     $script:ReportPath = $reportPath
 
-    # 收集信息
+    # 收集信息：优先使用 EnvSnapshot 缓存，缺失字段 fallback 到实时检测
+    $snap = $script:EnvSnapshot
     $winInfo = Get-WindowsVersionInfo
     $psInfo = Get-PowerShellVersionInfo
+
+    # Claude Code 版本：允许重新检测一次（安装步骤可能已改变状态）
     $claudeVer = Test-ClaudeInstalled
-    $codeVer = Test-CodeInstalled
-    $wslInfo = Test-WslInstalled
-    $nodeInfo = Test-NodeJsInstalled
-    $npmInfo = Test-NpmInstalled
+
+    # 以下字段优先使用缓存（环境检测结果不会因安装而改变）
+    if ($snap) {
+        $codeVer = if ($snap.CodeVersion) { $snap.CodeVersion } else { Test-CodeInstalled }
+        $wslInfo = if ($snap.WslInfo) { $snap.WslInfo } else { Test-WslInstalled }
+        $nodeInfo = if ($snap.NodeInfo) { $snap.NodeInfo } else { Test-NodeJsInstalled }
+        $npmInfo = if ($snap.NpmInfo) { $snap.NpmInfo } else { Test-NpmInstalled }
+    }
+    else {
+        # fallback: EnvSnapshot 不存在时（如旧版调用路径），回退到实时检测
+        $codeVer = Test-CodeInstalled
+        $wslInfo = Test-WslInstalled
+        $nodeInfo = Test-NodeJsInstalled
+        $npmInfo = Test-NpmInstalled
+    }
     $maskedKey = Mask-ApiKey -Key $ApiKey
 
     $apiTestStatus = if ($script:ApiTestPassed) { "通过" }
@@ -1097,6 +1126,108 @@ function Show-CompletionPage {
     Write-Host ""
     Write-Info "日志文件: $(Get-LogFilePath)"
     Write-Host ""
+
+    # 完成页快捷操作菜单（仅交互模式）
+    if (-not $NonInteractive) {
+        Show-CompletionMenu
+    }
+}
+
+function Show-CompletionMenu {
+    <#
+    .SYNOPSIS
+        完成页快捷操作菜单。循环显示直到用户选择退出。
+    #>
+    while ($true) {
+        Write-Host ""
+        Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
+        Write-Host "  请选择下一步：" -ForegroundColor Cyan
+        Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
+
+        # 选项 1: 打开测试项目文件夹
+        $testProjectAvailable = ($script:TestProjectPath -and (Test-Path $script:TestProjectPath))
+        if ($testProjectAvailable) {
+            Write-Host "  [1] 打开测试项目文件夹" -ForegroundColor White
+        }
+        else {
+            Write-Host "  [1] 打开测试项目文件夹（不可用）" -ForegroundColor DarkGray
+        }
+
+        # 选项 2: 打开安装报告
+        $reportAvailable = ($script:ReportPath -and (Test-Path $script:ReportPath))
+        if ($reportAvailable) {
+            Write-Host "  [2] 打开安装报告" -ForegroundColor White
+        }
+        else {
+            Write-Host "  [2] 打开安装报告（不可用）" -ForegroundColor DarkGray
+        }
+
+        # 选项 3: 运行一键诊断
+        Write-Host "  [3] 运行一键诊断" -ForegroundColor White
+
+        # 选项 4: 退出
+        Write-Host "  [4] 退出" -ForegroundColor White
+
+        Write-Host ""
+
+        $choice = Read-Host "请输入选项编号 (1-4)"
+
+        switch ($choice) {
+            "1" {
+                if (-not $testProjectAvailable) {
+                    Write-Info "测试项目未创建。"
+                    continue
+                }
+                Write-Info "正在打开测试项目文件夹..."
+                try {
+                    explorer.exe $script:TestProjectPath
+                    Write-Info "已打开: $($script:TestProjectPath)"
+                }
+                catch {
+                    Write-Warning "无法自动打开文件夹，请手动打开: $($script:TestProjectPath)"
+                }
+            }
+            "2" {
+                if (-not $reportAvailable) {
+                    Write-Info "报告未生成。"
+                    continue
+                }
+                Write-Info "正在打开安装报告..."
+                try {
+                    & notepad.exe $script:ReportPath 2>$null
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "notepad 返回非零退出码"
+                    }
+                }
+                catch {
+                    Write-Warning "无法自动打开报告，请手动打开: $($script:ReportPath)"
+                }
+            }
+            "3" {
+                Write-Info "正在运行一键诊断..."
+                $doctorScript = Join-Path $ScriptDir "doctor.ps1"
+                if (Test-Path $doctorScript) {
+                    $doctorArgs = @("-File", $doctorScript, "-ShareSafe")
+                    if ($script:EffectiveSkipApiTest) {
+                        $doctorArgs += "-SkipApiTest"
+                    }
+                    & powershell.exe -NoProfile -ExecutionPolicy Bypass @doctorArgs
+                }
+                else {
+                    Write-Error-Msg "找不到 doctor.ps1，请确认文件完整。"
+                }
+                Write-Host ""
+                Read-Host "按回车键返回..."
+            }
+            "4" {
+                Write-Info "感谢使用！"
+                return
+            }
+            default {
+                Write-Warning "无效选项，请输入 1-4。"
+            }
+        }
+    }
 }
 
 # ============================================================
@@ -1260,11 +1391,11 @@ function Start-WslSetup {
     Write-Host "  方式 B（实验性，不推荐新手使用）: Windows 端调用 WSL" -ForegroundColor DarkGray
     Write-Host "    （将自动转换路径并执行，但可能因路径/权限问题失败）" -ForegroundColor White
 
-    if (-not (Confirm-UserChoice -Message "是否使用方式 A（推荐）在 WSL 终端中手动运行？")) {
+    if (-not (Confirm-UserChoice -Message "是否使用方式 A（推荐）在 WSL 终端中手动运行？" -Default "Yes")) {
         # 方式 B：二次确认
         Write-Warning "您选择了方式 B（实验性，不推荐新手使用）。"
         Write-Warning "此方式可能因路径含特殊字符、WSL 配置差异等原因失败。"
-        if (-not (Confirm-UserChoice -Message "确认使用方式 B（实验性）？建议选择 N 改用方式 A")) {
+        if (-not (Confirm-UserChoice -Message "确认使用方式 B（实验性）？建议选择 N 改用方式 A" -Default "No")) {
             Write-Info "请在 WSL 终端中手动运行 install_wsl.sh。"
             return
         }

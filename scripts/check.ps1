@@ -1151,6 +1151,99 @@ if ($configureText -notmatch 'if\s*\(\$NonInteractive\)\s*\{[\s\S]{0,200}Write-E
 Write-Host "[check] UX text checks OK"
 
 # ============================================================
+# UX 增强检查（v1.3.2 第三批：Confirm-UserChoice/EnvSnapshot/CompletionMenu/Privacy）
+# ============================================================
+Write-Host "[check] UX enhancements: Confirm-UserChoice, EnvSnapshot, CompletionMenu, Privacy"
+
+# 1. Confirm-UserChoice must support Default parameter
+if ($commonText -notmatch '\[ValidateSet\("Yes",\s*"No",\s*"None"\)\]') {
+    throw "Confirm-UserChoice must support Default parameter with ValidateSet Yes/No/None"
+}
+if ($commonText -notmatch '\[string\]\$Default\s*=\s*"None"') {
+    throw "Confirm-UserChoice must have -Default parameter"
+}
+
+# 2. Confirm-UserChoice must recognize yes/no/确认/取消/继续 keywords
+$requiredYesKeywords = @("是", "确认", "继续", "好", "ok", "OK")
+foreach ($kw in $requiredYesKeywords) {
+    if ($commonText -notmatch [regex]::Escape($kw)) {
+        throw "Confirm-UserChoice must recognize keyword: $kw"
+    }
+}
+$requiredNoKeywords = @("否", "取消", "不", "不继续")
+foreach ($kw in $requiredNoKeywords) {
+    if ($commonText -notmatch [regex]::Escape($kw)) {
+        throw "Confirm-UserChoice must recognize keyword: $kw"
+    }
+}
+
+# 3. Confirm-UserChoice must re-prompt on invalid input (not treat as No)
+if ($commonText -notmatch '未识别输入，请输入 Y 或 N。') {
+    throw "Confirm-UserChoice must show '未识别输入，请输入 Y 或 N。' on invalid input"
+}
+if ($commonText -notmatch 'while\s*\(\$true\)') {
+    throw "Confirm-UserChoice must use while(true) loop for re-prompt"
+}
+
+# 4. Step-CheckEnvironment must write EnvSnapshot
+if ($startHereText -notmatch '\$script:EnvSnapshot\s*=\s*@\{') {
+    throw "Step-CheckEnvironment must write `$script:EnvSnapshot"
+}
+$requiredSnapshotFields = @("DeepSeekNetwork", "ClaudeVersion", "NodeInfo", "NpmInfo", "WslInfo", "CodeVersion", "GitVersion", "ConfigInfo", "MinReq")
+foreach ($field in $requiredSnapshotFields) {
+    if ($startHereText -notmatch [regex]::Escape($field) + '\s*=\s*\$') {
+        throw "EnvSnapshot must cache field: $field"
+    }
+}
+
+# 5. Step-GenerateReport must prioritize EnvSnapshot
+if ($startHereText -notmatch '\$snap\s*=\s*\$script:EnvSnapshot') {
+    throw "Step-GenerateReport must read `$script:EnvSnapshot"
+}
+if ($startHereText -notmatch 'if\s*\(\$snap\)') {
+    throw "Step-GenerateReport must check `$snap before using cache"
+}
+
+# 6. Step-GenerateReport must NOT unconditionally re-run full env checks
+# The old pattern of calling all 5 tests unconditionally should be replaced by cache-first logic
+if ($startHereText -notmatch 'EnvSnapshot 不存在时') {
+    throw "Step-GenerateReport must have fallback for missing EnvSnapshot"
+}
+
+# 7. Show-CompletionPage must include the 4 completion menu items
+$requiredMenuItems = @(
+    "打开测试项目文件夹",
+    "打开安装报告",
+    "运行一键诊断",
+    "退出"
+)
+foreach ($item in $requiredMenuItems) {
+    if ($startHereText -notmatch [regex]::Escape($item)) {
+        throw "Show-CompletionPage/Show-CompletionMenu must contain menu item: $item"
+    }
+}
+# Show-CompletionMenu function must exist
+if ($startHereText -notmatch 'function Show-CompletionMenu') {
+    throw "Start-Here.ps1 must define Show-CompletionMenu function"
+}
+
+# 8. report/share-safe 报告正文不应出现 OAuth 作为隐私声明列举项
+# doctor.ps1 report privacy notice must use the new wording
+$doctorText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+if ($doctorText -match '报告中不包含 OAuth') {
+    throw "doctor.ps1 privacy notice must NOT enumerate OAuth as listed item; use generic wording"
+}
+if ($doctorText -notmatch '内部认证字段、完整路径或敏感标识') {
+    throw "doctor.ps1 privacy notice must use new generic wording about internal auth fields"
+}
+# Allow sanitization logic (Convert-ToSafeReportText, Parse-ClaudeDoctorOutput) to still scan OAuth internally
+if ($commonText -notmatch 'OAuth') {
+    throw "Convert-ToSafeReportText must still filter OAuth in sanitization logic (internal, not user-visible notice)"
+}
+
+Write-Host "[check] UX enhancements OK"
+
+# ============================================================
 # 安装安全与返回结构检查（全部在 CCDI_TEST_MODE=1 下运行）
 #
 # 覆盖内容:

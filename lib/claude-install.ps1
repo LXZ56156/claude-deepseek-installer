@@ -1841,7 +1841,7 @@ function Install-ClaudeCodeAuto {
         }
         if ($wingetOk -and -not $NonInteractive) {
             Write-Info "检测到 winget，可以自动安装 Node.js LTS。"
-            if ($isMockDecision -or (Confirm-UserChoice -Message "是否使用 winget 安装 Node.js LTS？（将修改系统环境）")) {
+            if ($isMockDecision -or (Confirm-UserChoice -Message "是否使用 winget 安装 Node.js LTS？这会修改系统环境。" -Default "No")) {
                 if ($isMockDecision) {
                     Write-Log "DEBUG" "MOCK: auto-confirming winget Node.js install prompt"
                 }

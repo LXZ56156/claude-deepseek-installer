@@ -119,7 +119,7 @@ function Write-DeepSeekConfig {
             Write-Warning "将创建新的配置文件来替换。"
             Write-Warning "注意：由于旧 JSON 无法解析，permissions 等非 env 字段可能无法自动保留。"
 
-            if (-not $NonInteractive -and -not (Confirm-UserChoice -Message "是否继续创建新配置？旧文件已备份")) {
+            if (-not $NonInteractive -and -not (Confirm-UserChoice -Message "是否继续创建新配置？旧文件已备份" -Default "Yes")) {
                 Write-Info "用户取消。旧文件已备份，未做任何修改。"
                 $result.Error = "用户取消操作"
                 return $result

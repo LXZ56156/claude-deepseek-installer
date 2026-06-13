@@ -35,7 +35,7 @@ $claudeVersion = Test-ClaudeInstalled
 if (-not $claudeVersion) {
     Write-Warning "未检测到 Claude Code CLI。"
     Write-Info "您可以先配置 API Key，但 Claude Code 需要安装后才能使用。"
-    if (-not $NonInteractive -and -not (Confirm-UserChoice -Message "是否继续配置？")) {
+    if (-not $NonInteractive -and -not (Confirm-UserChoice -Message "是否继续配置？" -Default "Yes")) {
         Write-Info "已取消。请先运行 install.ps1 安装 Claude Code。"
         exit 0
     }
@@ -55,7 +55,7 @@ if ($currentConfig.IsConfigured) {
     Write-Info "  API Key:  $($currentConfig.MaskedKey)"
     Write-Host ""
 
-    if (-not $NonInteractive -and -not (Confirm-UserChoice -Message "是否更新现有配置？")) {
+    if (-not $NonInteractive -and -not (Confirm-UserChoice -Message "是否更新现有配置？" -Default "No")) {
         Write-Info "保持现有配置不变。"
         exit 0
     }
@@ -107,7 +107,7 @@ if (-not $validFormat) {
         Write-Error-Msg "非交互模式下拒绝使用格式异常的 API Key。"
         exit 1
     }
-    if (-not (Confirm-UserChoice -Message "是否继续使用此 Key？")) {
+    if (-not (Confirm-UserChoice -Message "是否继续使用此 Key？" -Default "No")) {
         Write-Info "已取消配置。"
         exit 0
     }

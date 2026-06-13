@@ -113,7 +113,7 @@ function Invoke-ClaudeRepair {
         Write-Host ""
         Write-Warning "检测到 Claude Code 未安装。"
         Write-Info "是否现在安装 Claude Code？这将下载并安装 Anthropic 官方 Claude Code 工具。"
-        $canInstall = Confirm-UserChoice -Message "是否现在安装 Claude Code？"
+        $canInstall = Confirm-UserChoice -Message "是否现在安装 Claude Code？" -Default "No"
     }
 
     if (-not $canInstall) {
@@ -311,7 +311,7 @@ function Start-RepairDeps {
                     Write-Info "非交互模式 -AllowInstall：将自动安装 Node.js LTS。"
                 }
                 else {
-                    if (-not (Confirm-UserChoice -Message "是否使用 winget 安装 Node.js LTS？（将修改系统环境）")) {
+                    if (-not (Confirm-UserChoice -Message "是否使用 winget 安装 Node.js LTS？这会修改系统环境。" -Default "No")) {
                         Write-Info "已取消。请手动安装 Node.js 后重新运行。"
                         Write-Info "下载地址: https://nodejs.org (选择 LTS 版本)"
                         Write-Host ""

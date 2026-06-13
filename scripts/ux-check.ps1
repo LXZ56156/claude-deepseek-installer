@@ -650,6 +650,79 @@ x-api-key: $TestApiKey
     Write-Host ""
 
     # ============================================================
+    # 18. UX 增强检查（v1.3.2 第三批）
+    # ============================================================
+    Write-CheckHeader "18. UX 增强检查（Confirm-UserChoice/EnvSnapshot/CompletionMenu/Privacy）"
+
+    $commonPath = Join-Path $ScriptRoot "lib\common.ps1"
+    $commonText = Get-Content $commonPath -Raw -Encoding UTF8
+    $startHerePath = Join-Path $ScriptRoot "Start-Here.ps1"
+    $startHereText = Get-Content $startHerePath -Raw -Encoding UTF8
+    $doctorPath = Join-Path $ScriptRoot "doctor.ps1"
+    $doctorText = Get-Content $doctorPath -Raw -Encoding UTF8
+
+    # Confirm-UserChoice Default 参数
+    Assert "Confirm-UserChoice 支持 Default 参数" {
+        $commonText -match '\[ValidateSet\("Yes",\s*"No",\s*"None"\)\]'
+    } "Confirm-UserChoice 必须支持 Default 参数"
+
+    Assert "Confirm-UserChoice 识别 yes/no/确认/取消/继续" {
+        ($commonText -match '"是"' -and $commonText -match '"确认"' -and
+         $commonText -match '"否"' -and $commonText -match '"取消"')
+    } "Confirm-UserChoice 必须识别中文 yes/no 关键词"
+
+    Assert "Confirm-UserChoice 无效输入重新提示" {
+        $commonText -match '未识别输入，请输入 Y 或 N。'
+    } "Confirm-UserChoice 必须对无效输入重新提示"
+
+    # Step-CheckEnvironment 写入 EnvSnapshot
+    Assert "Step-CheckEnvironment 写入 EnvSnapshot" {
+        $startHereText -match '\$script:EnvSnapshot\s*=\s*@\{'
+    } "Step-CheckEnvironment 必须写入 EnvSnapshot"
+
+    # Step-GenerateReport 优先使用 EnvSnapshot
+    Assert "Step-GenerateReport 优先使用 EnvSnapshot" {
+        $startHereText -match '\$snap\s*=\s*\$script:EnvSnapshot'
+    } "Step-GenerateReport 必须优先使用 EnvSnapshot"
+
+    Assert "Step-GenerateReport 不得无条件重复完整环境检测" {
+        $startHereText -match 'if\s*\(\$snap\)' -and
+        $startHereText -match 'EnvSnapshot 不存在时'
+    } "Step-GenerateReport 必须有 EnvSnapshot fallback 逻辑"
+
+    # Show-CompletionPage 快捷菜单
+    $requiredMenuItems = @(
+        "打开测试项目文件夹",
+        "打开安装报告",
+        "运行一键诊断",
+        "退出"
+    )
+    foreach ($item in $requiredMenuItems) {
+        Assert "Show-CompletionPage 包含快捷菜单: $item" {
+            $startHereText -match [regex]::Escape($item)
+        } "缺失快捷菜单项: $item"
+    }
+    Assert "Show-CompletionMenu 函数存在" {
+        $startHereText -match 'function Show-CompletionMenu'
+    } "Start-Here.ps1 必须定义 Show-CompletionMenu 函数"
+
+    # Privacy: report 正文不出现 OAuth 列举
+    Assert "doctor.ps1 隐私声明不列举 OAuth" {
+        $doctorText -notmatch '报告中不包含 OAuth'
+    } "隐私声明正文不应列举 OAuth 作为隐私声明项"
+
+    Assert "doctor.ps1 隐私声明使用新通用措辞" {
+        $doctorText -match '内部认证字段、完整路径或敏感标识'
+    } "隐私声明应使用新通用措辞"
+
+    # 允许脱敏逻辑内部扫描 OAuth
+    Assert "脱敏逻辑仍可内部扫描 OAuth" {
+        $commonText -match 'OAuth'
+    } "Convert-ToSafeReportText 脱敏逻辑仍应内部过滤 OAuth"
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""

@@ -95,7 +95,7 @@ function Remove-DeepSeekEnvConfig {
     if (-not $AssumeYes) {
         Write-Warning "即将移除 DeepSeek 相关 env 字段，但保留其他配置。"
         Write-Info "将移除字段: $($managedFields -join ', ')"
-        if (-not (Confirm-UserChoice -Message "确认移除？")) {
+        if (-not (Confirm-UserChoice -Message "确认移除？" -Default "No")) {
             Write-Info "已取消。"
             return $false
         }
@@ -162,7 +162,7 @@ function Restore-LatestConfigBackup {
 
     if (-not $AssumeYes) {
         Write-Warning "即将恢复最新备份: $($latest.FullName)"
-        if (-not (Confirm-UserChoice -Message "确认恢复？")) {
+        if (-not (Confirm-UserChoice -Message "确认恢复？" -Default "No")) {
             Write-Info "已取消。"
             return $false
         }
@@ -199,7 +199,7 @@ function Remove-SettingsFile {
     if (-not $AssumeYes) {
         Write-Warning "即将删除整个配置文件: $configPath"
         Write-Warning "这将移除所有 Claude Code 配置（不仅是 DeepSeek 相关）。"
-        if (-not (Confirm-UserChoice -Message "确认删除整个配置文件？此操作不可恢复！")) {
+        if (-not (Confirm-UserChoice -Message "确认删除整个配置文件？此操作不可恢复！" -Default "No")) {
             Write-Info "已取消。"
             return $false
         }

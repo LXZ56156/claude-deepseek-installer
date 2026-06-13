@@ -546,19 +546,82 @@ function Merge-SettingsJson {
 function Confirm-UserChoice {
     <#
     .SYNOPSIS
-        弹出确认提示，要求用户输入 Y/N
+        弹出确认提示，要求用户输入 Y/N。
+        支持中英文多关键词、空输入默认值、无效输入重新提示。
     .PARAMETER Message
         提示消息
+    .PARAMETER Default
+        默认值: Yes（空输入返回 $true）、No（空输入返回 $false）、None（空输入重新提示）
+    .PARAMETER AllowQuit
+        允许 Q / quit / 退出 输入返回 $null
     .RETURNS
-        用户选择 Yes 返回 $true
+        $true（Yes）、$false（No）、$null（Quit）
     #>
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Message
+        [string]$Message,
+
+        [ValidateSet("Yes", "No", "None")]
+        [string]$Default = "None",
+
+        [switch]$AllowQuit
     )
 
-    $response = Read-Host "$Message (Y/N)"
-    return ($response -eq "Y" -or $response -eq "y" -or $response -eq "是")
+    $yesKeywords = @("Y", "y", "yes", "YES", "是", "确认", "继续", "好", "ok", "OK")
+    $noKeywords = @("N", "n", "no", "NO", "否", "取消", "不", "不继续")
+    $quitKeywords = @("Q", "q", "quit", "退出")
+
+    $hint = switch ($Default) {
+        "Yes"  { "(Y/n，直接回车=是)" }
+        "No"   { "(y/N，直接回车=否)" }
+        "None" { "(Y/N)" }
+    }
+
+    if ($AllowQuit) {
+        $hint = $hint -replace '\)$', '，Q=退出)'
+    }
+
+    while ($true) {
+        $response = Read-Host "$Message $hint"
+
+        # 处理退出关键词（仅 AllowQuit 开关启用时）
+        if ($AllowQuit) {
+            $trimmed = if ($null -eq $response) { "" } else { $response.Trim() }
+            if ($trimmed -in $quitKeywords) {
+                return $null
+            }
+        }
+
+        # 空输入：按默认值处理
+        if ([string]::IsNullOrWhiteSpace($response)) {
+            if ($Default -eq "Yes") {
+                return $true
+            }
+            elseif ($Default -eq "No") {
+                return $false
+            }
+            # Default = None：重新提示
+            Write-Warning "未识别输入，请输入 Y 或 N。"
+            continue
+        }
+
+        $trimmed = $response.Trim()
+
+        if ($trimmed -in $yesKeywords) {
+            return $true
+        }
+
+        if ($trimmed -in $noKeywords) {
+            return $false
+        }
+
+        if ($AllowQuit -and $trimmed -in $quitKeywords) {
+            return $null
+        }
+
+        Write-Warning "未识别输入，请输入 Y 或 N。"
+        # 重新提示
+    }
 }
 
 function Read-SecretInput {
