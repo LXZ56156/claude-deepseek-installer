@@ -137,6 +137,18 @@ function Pause-ForNextStep {
     Read-Host "按回车键继续..."
 }
 
+function Write-ApiKeySkipGuidance {
+    <#
+    .SYNOPSIS
+        输出统一的 "已跳过 API Key 配置" 友好提示。
+        用于菜单 [3] 暂时跳过 和 输入取消 两条路径。
+    #>
+    Write-Host ""
+    Write-Info "已跳过 API Key 配置。"
+    Write-Info "可稍后运行：开始安装.cmd → 高级选项 → 仅配置 DeepSeek API。"
+    Write-Info "也可以运行 configure-deepseek.ps1 单独配置。"
+}
+
 # ============================================================
 # 免责声明
 # ============================================================
@@ -522,8 +534,8 @@ function Step-GetApiKey {
                 $apiKey = Read-ApiKeyWithMaskedConfirmation -Prompt "请粘贴您的 DeepSeek API Key"
 
                 if ([string]::IsNullOrWhiteSpace($apiKey)) {
-                    Write-Error-Msg "API Key 不能为空！"
-                    Write-Info "您可以稍后运行 configure-deepseek.ps1 单独配置。"
+                    Write-Info "已取消 API Key 输入。"
+                    Write-ApiKeySkipGuidance
                     return $null
                 }
 
@@ -549,10 +561,7 @@ function Step-GetApiKey {
                 continue menu
             }
             "3" {
-                Write-Host ""
-                Write-Info "已跳过 API Key 配置。"
-                Write-Info "可稍后运行：开始安装.cmd -> 高级选项 -> 仅配置 DeepSeek API。"
-                Write-Info "也可以运行 configure-deepseek.ps1 单独配置。"
+                Write-ApiKeySkipGuidance
                 return $null
             }
             "4" {
@@ -1144,8 +1153,8 @@ function Start-LazyInstall {
     # Step 3: 获取 API Key
     $apiKey = Step-GetApiKey
     if ($null -eq $apiKey) {
-        Write-Warning "未提供 API Key，跳过配置步骤。"
-        Write-Info "您可以稍后运行 configure-deepseek.ps1 单独配置。"
+        Write-Info "未配置 API Key，已跳过 DeepSeek 配置步骤。"
+        Write-Info "Claude Code 安装状态不受影响。"
         Show-CompletionPage
         return
     }

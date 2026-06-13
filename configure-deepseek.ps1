@@ -90,8 +90,13 @@ else {
 }
 
 if ([string]::IsNullOrWhiteSpace($apiKey)) {
-    Write-Error-Msg "API Key 不能为空，已取消配置。"
-    exit 1
+    if ($NonInteractive) {
+        Write-Error-Msg "非交互模式下未提供有效的 API Key。"
+        exit 1
+    }
+    Write-Info "已取消 API Key 输入。"
+    Write-Info "配置未更改。"
+    exit 0
 }
 
 # 检查格式

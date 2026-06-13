@@ -607,6 +607,46 @@ x-api-key: $TestApiKey
         $startHereText -match '\$script:EffectiveSkipApiTest'
     } "EffectiveSkipApiTest 缺失"
 
+    # 取消输入不再显示错误文案
+    Assert "Step-GetApiKey 不包含 API Key 不能为空错误" {
+        $startHereText -notmatch [regex]::Escape('Write-Error-Msg "API Key 不能为空！"')
+    } "取消路径仍显示错误文案"
+    Assert "Step-GetApiKey 包含『已取消 API Key 输入』" {
+        $startHereText -match "已取消 API Key 输入。"
+    } "缺失取消输入提示"
+
+    # 统一使用中文箭头 →
+    Assert "Start-Here.ps1 使用中文箭头 →" {
+        $startHereText -match [regex]::Escape('开始安装.cmd → 高级选项 → 仅配置 DeepSeek API')
+    } "缺失中文箭头路径"
+    Assert "Start-Here.ps1 不使用 ASCII ->" {
+        $startHereText -notmatch '开始安装\.cmd\s*->\s*高级选项'
+    } "仍使用 ASCII 箭头 ->"
+
+    # Write-ApiKeySkipGuidance 函数
+    Assert "Write-ApiKeySkipGuidance 函数存在" {
+        $startHereText -match 'function Write-ApiKeySkipGuidance'
+    } "缺失 Write-ApiKeySkipGuidance 函数"
+
+    # Start-LazyInstall 跳过文案柔和化
+    Assert "Start-LazyInstall 包含柔和跳过文案" {
+        $startHereText -match "未配置 API Key，已跳过 DeepSeek 配置步骤"
+    } "缺失柔和跳过文案"
+    Assert "Start-LazyInstall 包含安装不受影响安抚" {
+        $startHereText -match "Claude Code 安装状态不受影响"
+    } "缺失安装不受影响安抚"
+
+    # configure-deepseek.ps1 交互式取消
+    Assert "configure-deepseek.ps1 包含已取消 API Key 输入" {
+        $configureText -match "已取消 API Key 输入。"
+    } "缺失取消提示"
+    Assert "configure-deepseek.ps1 包含配置未更改" {
+        $configureText -match "配置未更改。"
+    } "缺失配置未更改"
+    Assert "configure-deepseek.ps1 交互式取消 exit 0" {
+        $configureText -match 'if\s*\(\$NonInteractive\)\s*\{[\s\S]{0,200}Write-Error-Msg[\s\S]{0,200}exit 1[\s\S]{0,300}exit 0'
+    } "交互式取消未 exit 0 或 NonInteractive 未 exit 1"
+
     Write-Host ""
 
     # ============================================================

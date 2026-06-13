@@ -1107,6 +1107,47 @@ if ($startHereText -notmatch '\$script:EffectiveSkipApiTest') {
     throw "Step-TestApi must still check EffectiveSkipApiTest"
 }
 
+# 7. 取消输入不再显示错误文案
+# Step-GetApiKey 交互式取消不得使用 Write-Error-Msg "API Key 不能为空！"
+if ($startHereText -match [regex]::Escape('Write-Error-Msg "API Key 不能为空！"')) {
+    throw "Step-GetApiKey must NOT show 'API Key 不能为空' error on cancellation"
+}
+if ($startHereText -notmatch "已取消 API Key 输入。") {
+    throw "Step-GetApiKey must show '已取消 API Key 输入。' on cancellation"
+}
+
+# 8. 统一使用中文箭头 →
+if ($startHereText -match '开始安装\.cmd\s*->\s*高级选项') {
+    throw "Start-Here.ps1 must use Chinese arrow '→' not ASCII '->' for skip guidance"
+}
+if ($startHereText -notmatch [regex]::Escape('开始安装.cmd → 高级选项 → 仅配置 DeepSeek API')) {
+    throw "Start-Here.ps1 must use '→' arrow in skip guidance path"
+}
+
+# 9. Write-ApiKeySkipGuidance 函数存在
+if ($startHereText -notmatch 'function Write-ApiKeySkipGuidance') {
+    throw "Start-Here.ps1 must define Write-ApiKeySkipGuidance function"
+}
+
+# 10. Start-LazyInstall 跳过文案柔和化
+if ($startHereText -notmatch "未配置 API Key，已跳过 DeepSeek 配置步骤") {
+    throw "Start-LazyInstall must show soft skip message when no API key"
+}
+if ($startHereText -notmatch "Claude Code 安装状态不受影响") {
+    throw "Start-LazyInstall must reassure that Claude Code install is unaffected"
+}
+
+# 11. configure-deepseek.ps1 交互式取消 exit 0
+if ($configureText -notmatch "已取消 API Key 输入。") {
+    throw "configure-deepseek.ps1 must show '已取消 API Key 输入。' on cancel"
+}
+if ($configureText -notmatch "配置未更改。") {
+    throw "configure-deepseek.ps1 must show '配置未更改。' on cancel"
+}
+if ($configureText -notmatch 'if\s*\(\$NonInteractive\)\s*\{[\s\S]{0,200}Write-Error-Msg[\s\S]{0,200}exit 1[\s\S]{0,300}exit 0') {
+    throw "configure-deepseek.ps1 must exit 1 for NonInteractive empty key, exit 0 for interactive cancel"
+}
+
 Write-Host "[check] UX text checks OK"
 
 # ============================================================
