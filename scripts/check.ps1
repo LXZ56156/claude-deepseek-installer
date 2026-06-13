@@ -738,6 +738,18 @@ if ($envCheckText -match 'CCDI_BASE64_MISSING.*\|.*bash') {
 if ($envCheckText -notmatch "printf.*%s.*encodedScript") {
     throw "Test-WslClaudeComprehensive must use printf (not echo) for base64 piping"
 }
+# decoded must be double-quoted when piped to bash (prevent word splitting)
+# The safe form in raw file content is: `"`$decoded`" | bash
+# This check ensures the printf-to-bash line wraps $decoded in backtick-quote pairs
+$envCheckText = Get-Content -Path (Join-Path $RootDir "lib\env-check.ps1") -Raw -Encoding UTF8
+if ($envCheckText -notmatch 'printf.*decoded.*\|.*bash') {
+    throw "decoded must be piped to bash via printf"
+}
+# Raw file must contain backtick-quote around decoded before pipe: `"`$decoded`" |
+# Regex: ` matches literal backtick, " matches literal quote, \$ matches literal $
+if ($envCheckText -notmatch '`"\`\$decoded`"\s*\|\s*bash') {
+    throw "decoded variable must be double-quoted when piped to bash: use printf '%s' `"`$decoded`" | bash"
+}
 
 # 51. Check-WSL must pass distro name to Test-WslClaudeComprehensive
 if ($doctorText -notmatch 'Test-WslClaudeComprehensive\s+-DistroName') {

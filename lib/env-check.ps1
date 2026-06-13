@@ -610,12 +610,12 @@ echo "CCDI_DETECTION_COMPLETE=1"
     # 使用 test -z 而非 [ -z ]，避免内层双引号与外层 bash -c 的引号冲突
     $encodedScript = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($detectionScript))
     # 单行 bash 命令：用分号连接，避免多行通过 cmd.exe 时的换行/引号问题
-    # 使用 ${#var} 检查长度，零双引号，彻底避免与外层 bash -c """ 的冲突
+    # 使用 ${#var} 检查长度；pipe 到 bash 时 "$decoded" 必须加引号防止 word splitting
     $bashCmd = "if ! command -v base64 >/dev/null 2>&1; then echo CCDI_BASE64_MISSING; exit 0; fi; " +
         "decoded=`$(printf '%s' '$encodedScript' | base64 -d 2>/dev/null); " +
         "if test `${#decoded} -eq 0; then decoded=`$(printf '%s' '$encodedScript' | base64 --decode 2>/dev/null); fi; " +
         "if test `${#decoded} -eq 0; then echo CCDI_BASE64_DECODE_FAILED; exit 0; fi; " +
-        "printf '%s' `$decoded | bash"
+        "printf '%s' `"`$decoded`" | bash"
     $detectResult = Invoke-CommandSafe -Command "wsl" -Arguments @(
         "-d", $DistroName, "bash", "-c", $bashCmd
     ) -TimeoutSec 20
