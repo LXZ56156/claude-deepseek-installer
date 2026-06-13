@@ -606,11 +606,16 @@ echo "CCDI_DETECTION_COMPLETE=1"
     Write-Log "INFO" "Test-WslClaudeComprehensive: 在 WSL ($DistroName) 中运行综合检测"
 
     # 将检测脚本 base64 编码后通过 WSL 执行
-    # 使用 printf 替代 echo（避免 echo 对特殊字符的处理差异）
-    # 兼容 base64 -d (GNU coreutils) 和 base64 --decode (BusyBox/Alpine)
+    # 先检查 base64 命令是否存在，再解码，避免错误信息被 pipe 给 bash
+    # 使用 test -z 而非 [ -z ]，避免内层双引号与外层 bash -c 的引号冲突
     $encodedScript = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($detectionScript))
-    $decodeCmd = "{ base64 -d 2>/dev/null || base64 --decode 2>/dev/null || echo 'CCDI_BASE64_MISSING'; }"
-    $bashCmd = "printf '%s' '$encodedScript' | $decodeCmd | bash"
+    # 单行 bash 命令：用分号连接，避免多行通过 cmd.exe 时的换行/引号问题
+    # 使用 ${#var} 检查长度，零双引号，彻底避免与外层 bash -c """ 的冲突
+    $bashCmd = "if ! command -v base64 >/dev/null 2>&1; then echo CCDI_BASE64_MISSING; exit 0; fi; " +
+        "decoded=`$(printf '%s' '$encodedScript' | base64 -d 2>/dev/null); " +
+        "if test `${#decoded} -eq 0; then decoded=`$(printf '%s' '$encodedScript' | base64 --decode 2>/dev/null); fi; " +
+        "if test `${#decoded} -eq 0; then echo CCDI_BASE64_DECODE_FAILED; exit 0; fi; " +
+        "printf '%s' `$decoded | bash"
     $detectResult = Invoke-CommandSafe -Command "wsl" -Arguments @(
         "-d", $DistroName, "bash", "-c", $bashCmd
     ) -TimeoutSec 20
@@ -624,11 +629,19 @@ echo "CCDI_DETECTION_COMPLETE=1"
 
     $output = $detectResult.Output
 
-    # 检查 base64 命令是否可用
+    # 检查 base64 命令是否可用（先于 pipe 到 bash，不会被当作命令执行）
     if ($output -match 'CCDI_BASE64_MISSING') {
         $result.Summary = "WSL 内 base64 命令不可用，无法执行综合检测"
         Write-Log "WARN" "Test-WslClaudeComprehensive: WSL 内 base64 命令不可用"
         [void]$result.DetectionNotes.Add("base64 命令不可用")
+        return $result
+    }
+
+    # 检查 base64 解码是否失败
+    if ($output -match 'CCDI_BASE64_DECODE_FAILED') {
+        $result.Summary = "WSL 内 base64 解码失败，无法执行综合检测"
+        Write-Log "WARN" "Test-WslClaudeComprehensive: WSL 内 base64 解码失败"
+        [void]$result.DetectionNotes.Add("base64 解码失败")
         return $result
     }
 

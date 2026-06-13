@@ -717,12 +717,22 @@ if ($doctorText -notmatch 'settings\.json.*EXISTS.*NOT_FOUND') {
     throw "WSL settings.json detection must still check for settings.json"
 }
 
-# 50. Test-WslClaudeComprehensive base64 must support both -d and --decode
+# 50. Test-WslClaudeComprehensive base64 must check availability BEFORE piping to bash
+if ($envCheckText -notmatch 'command\s+-v\s+base64') {
+    throw "Test-WslClaudeComprehensive must check 'command -v base64' before piping to bash"
+}
 if ($envCheckText -notmatch 'base64\s+-d' -or $envCheckText -notmatch 'base64\s+--decode') {
     throw "Test-WslClaudeComprehensive base64 must support both 'base64 -d' and 'base64 --decode'"
 }
 if ($envCheckText -notmatch 'CCDI_BASE64_MISSING') {
     throw "Test-WslClaudeComprehensive must handle missing base64 command (CCDI_BASE64_MISSING)"
+}
+if ($envCheckText -notmatch 'CCDI_BASE64_DECODE_FAILED') {
+    throw "Test-WslClaudeComprehensive must handle base64 decode failure (CCDI_BASE64_DECODE_FAILED)"
+}
+# CCDI_BASE64_MISSING must NOT be piped to bash (must exit before pipe)
+if ($envCheckText -match 'CCDI_BASE64_MISSING.*\|.*bash') {
+    throw "CCDI_BASE64_MISSING must NOT be piped to bash; exit before decode"
 }
 # Must use printf instead of echo for base64 piping
 if ($envCheckText -notmatch "printf.*%s.*encodedScript") {
