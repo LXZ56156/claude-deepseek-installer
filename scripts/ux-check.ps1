@@ -10,6 +10,18 @@
 # ============================================================
 
 $ErrorActionPreference = "Stop"
+
+# --- 编码初始化（防止 Windows PowerShell 5.1 控制台乱码）---
+try {
+    [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $null = & chcp 65001 2>$null
+}
+catch {
+    # 编码设置失败不阻塞脚本执行
+}
+
 Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue
 $ScriptRoot = Split-Path -Parent $PSScriptRoot
 $SandboxDir = Join-Path $ScriptRoot ".sandbox"

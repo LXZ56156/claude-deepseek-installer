@@ -88,7 +88,17 @@ $requiredCommands = @(
     "Install-ClaudeCodeAuto",
     "Invoke-ClaudeDoctorSafe",
     "Invoke-ClaudeDoctorInteractiveSafe",
-    "Clear-StaleClaudeDoctorProcesses"
+    "Invoke-ClaudeDoctor",
+    "Parse-ClaudeDoctorOutput",
+    "Clear-StaleClaudeDoctorProcesses",
+    "Remove-AnsiEscape",
+    "Remove-ControlChars",
+    "Test-Mojibake",
+    "Repair-OrSuppressMojibake",
+    "Normalize-ExternalCommandOutput",
+    "Convert-ToSafeReportText",
+    "Test-WslClaudeComprehensive",
+    "Get-WslVersionClean"
 )
 
 foreach ($cmd in $requiredCommands) {
@@ -422,21 +432,24 @@ if ($claudeInstallText -notmatch 'TimedOut\s*=\s*\$false') {
 if ($claudeInstallText -notmatch 'DurationMs') {
     throw "Invoke-ClaudeDoctorInteractiveSafe must include DurationMs field in result"
 }
+if ($claudeInstallText -notmatch 'CleanedOutput\s*=\s*""') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must include CleanedOutput field in result"
+}
 
-# 2. doctor.ps1 calls Invoke-ClaudeDoctorInteractiveSafe, not Invoke-CommandSafe for claude doctor
-if ($doctorText -notmatch 'Invoke-ClaudeDoctorInteractiveSafe') {
-    throw "doctor.ps1 must use Invoke-ClaudeDoctorInteractiveSafe for claude doctor"
+# 2. doctor.ps1 calls Invoke-ClaudeDoctor (new entry point), not Invoke-CommandSafe for claude doctor
+if ($doctorText -notmatch 'Invoke-ClaudeDoctor\b') {
+    throw "doctor.ps1 must use Invoke-ClaudeDoctor for claude doctor diagnostics"
 }
 if ($doctorText -match 'Invoke-CommandSafe\s+-Command\s+"claude"\s+-Arguments\s+@\("doctor"\)') {
     throw "doctor.ps1 must NOT use Invoke-CommandSafe to run claude doctor"
 }
 
-# 3. doctor.ps1 handles TimedOut separately
+# 3. doctor.ps1 handles TimedOut separately via Invoke-ClaudeDoctor result
 if ($doctorText -notmatch 'claudeDoctor\.TimedOut') {
     throw "doctor.ps1 must check claudeDoctor.TimedOut for timeout-specific messaging"
 }
-if ($doctorText -notmatch '超时，已终止；这不代表 Claude Code 安装失败') {
-    throw "doctor.ps1 must clearly state that claude doctor timeout does not mean install failure"
+if ($doctorText -notmatch '官方 doctor 进入交互式流程') {
+    throw "doctor.ps1 must handle interactive prompt timeout specifically"
 }
 
 # 4. Invoke-CommandSafe uses taskkill /T /F for process tree termination
@@ -539,15 +552,120 @@ if ($claudeInstallText -notmatch 'skipped_watchdog_unavailable') {
     throw "Invoke-ClaudeDoctorSafe must map watchdog_unavailable_skipped to skipped_watchdog_unavailable status"
 }
 
-# 19. doctor.ps1 must handle watchdog_unavailable_skipped as SKIP
-if ($doctorText -notmatch 'watchdog_unavailable_skipped') {
-    throw "doctor.ps1 must handle watchdog_unavailable_skipped error from Invoke-ClaudeDoctorInteractiveSafe"
+# 19. doctor.ps1 must handle watchdog_unavailable_skipped from Invoke-ClaudeDoctor result
+if ($doctorText -notmatch 'DoctorAvailable' -and $doctorText -notmatch 'watchdog_unavailable_skipped') {
+    throw "doctor.ps1 must handle watchdog_skipped state via DoctorAvailable or watchdog_unavailable_skipped"
 }
 if ($doctorText -notmatch '超时保护不可用.*Start-Job 被禁用') {
     throw "doctor.ps1 must clearly explain that Start-Job disabled caused the skip"
 }
 
 Write-Host "[check] Claude doctor interactive invocation OK"
+
+Write-Host "[check] Text cleaning and report safety functions"
+$claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+
+# 35. Remove-AnsiEscape must handle common ANSI sequences
+if ($commonText -notmatch 'function Remove-AnsiEscape') {
+    throw "Remove-AnsiEscape function not found in lib/common.ps1"
+}
+# Verify ANSI escape stripping: must contain ESC replacement and CSI pattern
+if ($commonText -notmatch "x1b" -or $commonText -notmatch '\[0-9;\]') {
+    throw "Remove-AnsiEscape must strip color/style ANSI sequences (\x1b[...m)"
+}
+
+# 36. Test-Mojibake must detect known garbled characters
+if ($commonText -notmatch 'function Test-Mojibake') {
+    throw "Test-Mojibake function not found in lib/common.ps1"
+}
+# Check that known mojibake chars exist in the function
+$mojibakeChars = @('鈹', '鉁', '鈥', 'Hr,g', '锟', '斤')
+$foundChars = $true
+foreach ($mc in $mojibakeChars) {
+    if ($commonText -notmatch [regex]::Escape($mc)) {
+        $foundChars = $false
+        break
+    }
+}
+if (-not $foundChars) {
+    throw "Test-Mojibake must check for known mojibake characters (鈹/鉁/鈥/Hr,g/锟/斤)"
+}
+
+# 37. Normalize-ExternalCommandOutput chains cleaning functions
+if ($commonText -notmatch 'function Normalize-ExternalCommandOutput') {
+    throw "Normalize-ExternalCommandOutput function not found in lib/common.ps1"
+}
+
+# 38. Convert-ToSafeReportText must exist and filter internal fields
+if ($commonText -notmatch 'function Convert-ToSafeReportText') {
+    throw "Convert-ToSafeReportText function not found in lib/common.ps1"
+}
+# Check for filtering of critical internal fields
+$filterChecks = @('GrowthBook', 'OAuth', 'tengu_ccr_bridge', 'organization')
+$allFiltered = $true
+foreach ($fc in $filterChecks) {
+    if ($commonText -notmatch [regex]::Escape($fc)) {
+        $allFiltered = $false
+        break
+    }
+}
+if (-not $allFiltered) {
+    throw "Convert-ToSafeReportText must filter internal fields (GrowthBook/OAuth/feature flags)"
+}
+
+# 39. Parse-ClaudeDoctorOutput must exist in claude-install.ps1
+if ($claudeInstallText -notmatch 'function Parse-ClaudeDoctorOutput') {
+    throw "Parse-ClaudeDoctorOutput function not found in lib/claude-install.ps1"
+}
+if ($claudeInstallText -notmatch 'GrowthBook') {
+    throw "Parse-ClaudeDoctorOutput must filter GrowthBook internal fields"
+}
+
+# 40. Invoke-ClaudeDoctor must exist and handle graded timeout
+if ($claudeInstallText -notmatch 'function Invoke-ClaudeDoctor\b') {
+    throw "Invoke-ClaudeDoctor function not found in lib/claude-install.ps1"
+}
+
+# 41. Invoke-ClaudeDoctorInteractiveSafe must set NO_COLOR/CI/TERM env vars
+if ($claudeInstallText -notmatch 'NO_COLOR.*=.*"1"') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must set NO_COLOR=1"
+}
+if ($claudeInstallText -notmatch 'TERM.*=.*"dumb"') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must set TERM=dumb"
+}
+
+# 42. Test-WslClaudeComprehensive must exist
+$envCheckText = Get-Content -Path (Join-Path $RootDir "lib\env-check.ps1") -Raw -Encoding UTF8
+if ($envCheckText -notmatch 'function Test-WslClaudeComprehensive') {
+    throw "Test-WslClaudeComprehensive function not found in lib/env-check.ps1"
+}
+
+# 43. Get-WslVersionClean must use regex extraction
+if ($envCheckText -notmatch 'function Get-WslVersionClean') {
+    throw "Get-WslVersionClean function not found in lib/env-check.ps1"
+}
+if ($envCheckText -notmatch '\\d\+\\\.\\d\+\\\.\\d\+') {
+    throw "Get-WslVersionClean must use regex \d+\.\d+\.\d+ to extract version"
+}
+
+# 44. doctor.ps1 report must use Convert-ToSafeReportText
+$doctorText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+if ($doctorText -notmatch 'Convert-ToSafeReportText') {
+    throw "doctor.ps1 must use Convert-ToSafeReportText for report sanitization"
+}
+
+# 45. doctor.ps1 must have encoding initialization
+if ($doctorText -notmatch 'Console\]::InputEncoding.*UTF8Encoding' -or
+    $doctorText -notmatch 'Console\]::OutputEncoding.*UTF8Encoding') {
+    throw "doctor.ps1 must initialize console encoding to UTF-8"
+}
+
+# 46. Invoke-ClaudeDoctorInteractiveSafe must send newlines to stdin
+if ($claudeInstallText -notmatch 'StandardInput' -or $claudeInstallText -notmatch 'WriteLine') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must write newlines to stdin to prevent pagination"
+}
+
+Write-Host "[check] Text cleaning and report safety functions OK"
 
 Write-Host "[check] Visible install command UX"
 $claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
@@ -649,9 +767,15 @@ if ($claudeInstallText -notmatch 'Write-Log\s+"ERROR"\s+"Native Install 失败�
     throw "Native Install failure details must go to Write-Log, not user display"
 }
 
-# 30. Invoke-ClaudeDoctorInteractiveSafe must NOT pollute return stream with claude doctor stdout
-if ($claudeInstallText -match '&\s+\$claudePath\s+doctor\s*$' -and $claudeInstallText -notmatch 'Out-Host') {
-    throw "Invoke-ClaudeDoctorInteractiveSafe must pipe claude doctor output to Out-Host to prevent return stream pollution"
+# 30. Invoke-ClaudeDoctorInteractiveSafe uses Start-Process with ProcessStartInfo (not direct invocation)
+if ($claudeInstallText -notmatch 'System\.Diagnostics\.ProcessStartInfo') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must use ProcessStartInfo for isolated doctor execution"
+}
+if ($claudeInstallText -notmatch 'RedirectStandardOutput\s*=\s*\$true') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must redirect stdout"
+}
+if ($claudeInstallText -notmatch 'RedirectStandardInput\s*=\s*\$true') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must redirect stdin (for Enter prevention)"
 }
 
 # 31. Invoke-VisibleFileDownload must exist

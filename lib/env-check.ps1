@@ -414,7 +414,8 @@ function Test-WslInstalled {
     $result = Invoke-CommandSafe -Command "wsl" -Arguments @("--version") -TimeoutSec 8
     if ($result.Success) {
         $info.Installed = $true
-        $info.Version = ($result.Output -replace "`0", "").Trim()
+        $rawVersion = ($result.Output -replace "`0", "").Trim()
+        $info.Version = Get-WslVersionClean -RawVersion $rawVersion
     }
 
     # 获取发行版列表
@@ -501,6 +502,210 @@ function Test-ClaudeInstalled {
         return $result.Output.Trim()
     }
     return $null
+}
+
+function Test-WslClaudeComprehensive {
+    <#
+    .SYNOPSIS
+        在 WSL 内综合检测 Claude Code 安装状态（多路径 + PATH 诊断）。
+    .PARAMETER DistroName
+        WSL 发行版名称，默认使用 Ubuntu 发行版（自动检测）。
+    .RETURNS
+        包含 Installed, InPath, InstallPaths, Version, SettingsExists, NeedsPathFix, Summary 的哈希表
+        Status: installed_and_in_path | installed_but_not_in_path | not_installed
+    #>
+    param(
+        [string]$DistroName = $null
+    )
+
+    $result = @{
+        Installed       = $false
+        InPath          = $false
+        InstallPaths    = @()
+        Version         = $null
+        SettingsExists  = $false
+        NeedsPathFix    = $false
+        Status          = "not_installed"
+        Summary         = ""
+        DetectionNotes  = [System.Collections.ArrayList]::new()
+    }
+
+    # 确定 Ubuntu 发行版名称
+    if (-not $DistroName) {
+        $wslInfo = Test-WslInstalled
+        if (-not $wslInfo.Installed) {
+            $result.Summary = "WSL 未启用"
+            return $result
+        }
+        foreach ($distro in $wslInfo.Distributions) {
+            if ($distro.Name -match "Ubuntu") {
+                $DistroName = $distro.Name
+                break
+            }
+        }
+        if (-not $DistroName) {
+            # 尝试使用默认发行版
+            $DistroName = "Ubuntu"
+        }
+    }
+
+    # 构建 WSL 内综合检测脚本（简化版，避免引号转义问题）
+    $detectionScript = @'
+CLAUDE_IN_PATH=0
+CLAUDE_VERSION=""
+if command -v claude >/dev/null 2>&1; then
+    CLAUDE_IN_PATH=1
+    CLAUDE_VERSION=$(claude --version 2>/dev/null | head -1)
+fi
+echo "CCDI_CLAUDE_IN_PATH=$CLAUDE_IN_PATH"
+echo "CCDI_CLAUDE_VERSION=$CLAUDE_VERSION"
+for dir in $HOME/.local/bin /usr/local/bin $HOME/.npm-global/bin /usr/bin; do
+    if test -x "$dir/claude" || test -f "$dir/claude"; then
+        echo "CCDI_CLAUDE_FOUND=$dir/claude"
+    fi
+done
+NPM_PREFIX=$(npm prefix -g 2>/dev/null)
+if test -n "$NPM_PREFIX"; then
+    echo "CCDI_NPM_PREFIX=$NPM_PREFIX"
+    if test -x "$NPM_PREFIX/bin/claude" || test -f "$NPM_PREFIX/bin/claude"; then
+        echo "CCDI_NPM_CLAUDE=$NPM_PREFIX/bin/claude"
+    fi
+fi
+if test -f "$HOME/.claude/settings.json"; then
+    echo "CCDI_SETTINGS_EXISTS=1"
+else
+    echo "CCDI_SETTINGS_EXISTS=0"
+fi
+KERNEL=$(uname -r 2>/dev/null)
+if test -n "$KERNEL"; then
+    echo "CCDI_WSL_KERNEL=$KERNEL"
+fi
+echo "CCDI_DETECTION_COMPLETE=1"
+'@
+
+    Write-Log "INFO" "Test-WslClaudeComprehensive: 在 WSL ($DistroName) 中运行综合检测"
+
+    $detectResult = Invoke-CommandSafe -Command "wsl" -Arguments @(
+        "-d", $DistroName, "bash", "-c", $detectionScript
+    ) -TimeoutSec 20
+
+    if (-not $detectResult.Success) {
+        $result.Summary = "无法在 WSL 内执行综合检测: $($detectResult.Error)"
+        Write-Log "WARN" "Test-WslClaudeComprehensive: $($result.Summary)"
+        [void]$result.DetectionNotes.Add("执行检测脚本失败")
+        return $result
+    }
+
+    $output = $detectResult.Output
+
+    # 解析检测结果
+    if ($output -match 'CCDI_CLAUDE_IN_PATH=1') {
+        $result.InPath = $true
+    }
+
+    if ($output -match 'CCDI_CLAUDE_VERSION=(.+)') {
+        $verLine = $matches[1].Trim()
+        if ($verLine -and $verLine -ne '') {
+            $result.Version = $verLine
+        }
+    }
+
+    # 收集 claude 文件路径
+    $foundPaths = [regex]::Matches($output, 'CCDI_CLAUDE_FOUND=(.+)')
+    foreach ($m in $foundPaths) {
+        $result.InstallPaths += $m.Groups[1].Value.Trim()
+    }
+    $npmClaudePaths = [regex]::Matches($output, 'CCDI_NPM_CLAUDE=(.+)')
+    foreach ($m in $npmClaudePaths) {
+        $result.InstallPaths += $m.Groups[1].Value.Trim()
+    }
+    $filePaths = [regex]::Matches($output, 'CCDI_CLAUDE_FILE=(.+)')
+    foreach ($m in $filePaths) {
+        $fp = $m.Groups[1].Value.Trim()
+        if ($fp -notin $result.InstallPaths) {
+            $result.InstallPaths += $fp
+        }
+    }
+
+    $result.Installed = ($result.InstallPaths.Count -gt 0)
+
+    if ($output -match 'CCDI_SETTINGS_EXISTS=1') {
+        $result.SettingsExists = $true
+    }
+
+    # 判断状态
+    if ($result.Installed -and $result.InPath) {
+        $result.Status = "installed_and_in_path"
+        $result.Summary = "WSL 内已安装 Claude Code 且可在 PATH 中调用"
+    }
+    elseif ($result.Installed -and -not $result.InPath) {
+        $result.Status = "installed_but_not_in_path"
+        $result.NeedsPathFix = $true
+        # 构建 PATH 修复建议
+        $pathSuggestion = "WSL 内 Claude Code 已安装但未加入 PATH。"
+        if ($result.InstallPaths.Count -gt 0) {
+            $firstPath = $result.InstallPaths[0]
+            $binDir = Split-Path -Parent $firstPath
+            $pathSuggestion += " 修复方式: echo 'export PATH=`"$binDir`:`$PATH`"' >> ~/.bashrc && source ~/.bashrc"
+        }
+        $result.Summary = $pathSuggestion
+        [void]$result.DetectionNotes.Add("已找到安装路径但不在 PATH 中: $($result.InstallPaths -join ', ')")
+    }
+    else {
+        $result.Status = "not_installed"
+        if ($result.SettingsExists) {
+            $result.Summary = "WSL 已有 Claude 配置 (settings.json)，但 WSL 内暂未检测到可运行的 claude 命令"
+            [void]$result.DetectionNotes.Add("settings.json 存在但 claude 命令不可用")
+        }
+        else {
+            $result.Summary = "WSL 内未检测到 Claude Code 安装"
+        }
+    }
+
+    Write-Log "INFO" "Test-WslClaudeComprehensive: Status=$($result.Status), Installed=$($result.Installed), InPath=$($result.InPath), Paths=$($result.InstallPaths.Count)"
+
+    return $result
+}
+
+function Get-WslVersionClean {
+    <#
+    .SYNOPSIS
+        从 WSL 版本输出中提取纯版本号（修复 "Hr,g: 2.7.8.0" 乱码）。
+    .PARAMETER RawVersion
+        wsl --version 的原始输出文本
+    .RETURNS
+        纯版本号字符串（如 "2.7.8.0"），提取失败返回原始文本
+    #>
+    param([string]$RawVersion)
+
+    if ([string]::IsNullOrWhiteSpace($RawVersion)) {
+        return $RawVersion
+    }
+
+    # 先用正则提取版本号（格式: X.Y.Z.W 或 X.Y.Z）
+    if ($RawVersion -match '(\d+\.\d+\.\d+(?:\.\d+)?)') {
+        $ver = $matches[1]
+        Write-Log "DEBUG" "Get-WslVersionClean: 从 '$RawVersion' 提取版本号 '$ver'"
+        return $ver
+    }
+
+    # 尝试从多行输出中提取版本号
+    $lines = $RawVersion -split "`n"
+    foreach ($line in $lines) {
+        if ($line -match '(\d+\.\d+\.\d+(?:\.\d+)?)') {
+            $ver = $matches[1]
+            Write-Log "DEBUG" "Get-WslVersionClean: 从行 '$line' 提取版本号 '$ver'"
+            return $ver
+        }
+    }
+
+    # 完全无法提取 → 清洗后返回
+    $cleaned = $RawVersion -replace '[^\x20-\x7E\r\n]', ''
+    $cleaned = $cleaned.Trim()
+    if ([string]::IsNullOrWhiteSpace($cleaned)) {
+        return "无法解析版本号"
+    }
+    return $cleaned
 }
 
 # ============================================================

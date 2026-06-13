@@ -641,7 +641,7 @@ function Invoke-ClaudeDoctorSafe {
     <#
     .SYNOPSIS
         安全运行 claude doctor，失败不阻断主流程，只写日志。
-        委托 Invoke-ClaudeDoctorInteractiveSafe 内联执行，继承 TTY。
+        委托 Invoke-ClaudeDoctorInteractiveSafe 执行（Start-Process + 输出捕获）。
     .PARAMETER TestSafe
         测试安全模式：跳过真实 claude doctor 执行。
     .RETURNS
@@ -657,7 +657,7 @@ function Invoke-ClaudeDoctorSafe {
         Status  = ""
     }
 
-    $doctor = Invoke-ClaudeDoctorInteractiveSafe -TimeoutSec 30 -TestSafe:$TestSafe
+    $doctor = Invoke-ClaudeDoctorInteractiveSafe -TimeoutSec 45 -TestSafe:$TestSafe
 
     $result.Success = [bool]$doctor.Success
     $result.Output = if ($doctor.Error) { $doctor.Error } else { "ExitCode=$($doctor.ExitCode); DurationMs=$($doctor.DurationMs)" }
@@ -689,31 +689,307 @@ function Invoke-ClaudeDoctorSafe {
     return $result
 }
 
-function Invoke-ClaudeDoctorInteractiveSafe {
+function Parse-ClaudeDoctorOutput {
     <#
     .SYNOPSIS
-        在当前 PowerShell 终端内联执行 claude doctor，继承真实 TTY 环境。
-        不使用 Invoke-CommandSafe / Start-Process / cmd.exe / stdout 重定向。
-        通过独立 watchdog job 实现超时保护，超时后递归杀进程树。
+        解析清洗后的 claude doctor 输出，提取结构化信息。
+        过滤 GrowthBook、OAuth、feature flag 等不应公开的内部字段。
+    .PARAMETER CleanedOutput
+        经过 Remove-AnsiEscape + Remove-ControlChars 清洗后的 doctor 输出
+    .RETURNS
+        包含 ParsedFields, UserSummary, HasCoreFields 的哈希表
+    #>
+    param(
+        [string]$CleanedOutput
+    )
+
+    $result = @{
+        ParsedFields  = @{}
+        UserSummary   = ""
+        HasCoreFields = $false
+        RawCleaned    = $CleanedOutput
+    }
+
+    if ([string]::IsNullOrWhiteSpace($CleanedOutput)) {
+        $result.UserSummary = "未获取到 doctor 输出"
+        return $result
+    }
+
+    $fields = @{}
+
+    # --- 提取当前运行版本 (Currently running) ---
+    if ($CleanedOutput -match 'Currently running[:\s]*(\S+)') {
+        $fields['RunningVersion'] = $matches[1].Trim()
+    }
+
+    # --- 提取 Version ---
+    if ($CleanedOutput -match '(?:^|\n)\s*Version[:\s]*([^\r\n]+)') {
+        $fields['Version'] = $matches[1].Trim()
+    }
+    elseif ($CleanedOutput -match '(\d+\.\d+\.\d+[^\s,]*)') {
+        if (-not $fields['Version']) {
+            $fields['Version'] = $matches[1].Trim()
+        }
+    }
+
+    # --- 提取 Commit ---
+    if ($CleanedOutput -match 'Commit[:\s]*([a-f0-9]+)') {
+        $fields['Commit'] = $matches[1].Trim()
+    }
+
+    # --- 提取 Platform ---
+    if ($CleanedOutput -match 'Platform[:\s]*([^\r\n]+)') {
+        $fields['Platform'] = $matches[1].Trim()
+    }
+
+    # --- 提取 Path ---
+    if ($CleanedOutput -match '(?:^|\n)\s*(?:Install )?Path[:\s]*([^\r\n]+)') {
+        $fields['Path'] = $matches[1].Trim()
+    }
+
+    # --- 提取 Config install method ---
+    if ($CleanedOutput -match '(?:Config )?[Ii]nstall method[:\s]*([^\r\n]+)') {
+        $fields['InstallMethod'] = $matches[1].Trim()
+    }
+
+    # --- 提取 Search 状态 ---
+    if ($CleanedOutput -match 'Search[:\s]*(OK|ok|PASS|pass|FAIL|fail|WARN|warn)') {
+        $fields['Search'] = $matches[1].Trim().ToUpper()
+    }
+
+    # --- 提取 Auto-updates ---
+    if ($CleanedOutput -match 'Auto[-_\s]?updates?[:\s]*([^\r\n]+)') {
+        $fields['AutoUpdates'] = $matches[1].Trim()
+    }
+
+    # --- 提取 Background server ---
+    if ($CleanedOutput -match 'Background server[:\s]*([^\r\n]+)') {
+        $fields['BackgroundServer'] = $matches[1].Trim()
+    }
+
+    # --- 提取 Remote Control ---
+    if ($CleanedOutput -match 'Remote [Cc]ontrol[:\s]*([^\r\n]+)') {
+        $fields['RemoteControl'] = $matches[1].Trim()
+    }
+
+    # --- 过滤内部字段（从原始文本中移除）---
+    $filteredText = $CleanedOutput
+    $internalPatterns = @(
+        'GrowthBook[:\s][^\r\n]*',
+        'feature[_ ]?flag[:\s][^\r\n]*',
+        'OAuth[_\s]?token[:\s][^\r\n]*',
+        'subscriber[_\s]?auth[:\s][^\r\n]*',
+        'tengu_ccr_bridge[:\s][^\r\n]*',
+        'organization[_\s]?UUID[:\s][^\r\n]*',
+        'telemetryDisabledBy[:\s][^\r\n]*',
+        'DISABLE_GROWTHBOOK[:\s][^\r\n]*',
+        'authToken[:\s][^\r\n]*',
+        'subscriberId[:\s][^\r\n]*',
+        'orgId[:\s][^\r\n]*',
+        'clientId[:\s][^\r\n]*'
+    )
+    foreach ($pattern in $internalPatterns) {
+        $filteredText = $filteredText -replace $pattern, ''
+    }
+    $result.RawCleaned = $filteredText
+
+    $result.ParsedFields = $fields
+
+    # 判断是否有核心字段
+    $hasVersion = -not [string]::IsNullOrWhiteSpace($fields['Version'])
+    $hasPlatform = -not [string]::IsNullOrWhiteSpace($fields['Platform'])
+    $hasPath = -not [string]::IsNullOrWhiteSpace($fields['Path'])
+    $result.HasCoreFields = ($hasVersion -or $hasPlatform -or $hasPath)
+
+    # --- 构建用户可读摘要 ---
+    $summaryParts = [System.Collections.ArrayList]::new()
+
+    if ($fields['Version']) {
+        $platformStr = if ($fields['Platform']) { ", $($fields['Platform'])" } else { "" }
+        [void]$summaryParts.Add("Claude Code 版本 $($fields['Version'])$platformStr - 安装状态正常")
+    }
+    elseif ($fields['RunningVersion']) {
+        [void]$summaryParts.Add("Claude Code 运行版本 $($fields['RunningVersion'])")
+    }
+
+    if ($fields['Path']) {
+        [void]$summaryParts.Add("安装路径: $($fields['Path'])")
+    }
+
+    if ($fields['Search']) {
+        $searchStatus = if ($fields['Search'] -eq 'OK') { "正常" } else { $fields['Search'] }
+        [void]$summaryParts.Add("Search: $searchStatus")
+    }
+
+    if ($fields['InstallMethod']) {
+        [void]$summaryParts.Add("安装方式: $($fields['InstallMethod'])")
+    }
+
+    if ($fields['BackgroundServer'] -or $fields['RemoteControl']) {
+        [void]$summaryParts.Add("后台服务/Remote Control 状态不影响 DeepSeek API 终端使用")
+    }
+
+    if ($summaryParts.Count -eq 0) {
+        $result.UserSummary = "doctor 未返回可解析的结构化信息"
+    }
+    else {
+        $result.UserSummary = ($summaryParts -join "; ")
+    }
+
+    return $result
+}
+
+function Invoke-ClaudeDoctor {
+    <#
+    .SYNOPSIS
+        Claude Code 诊断新入口。运行 claude doctor，清洗输出，解析为结构化摘要。
+        用户主界面只显示摘要，不暴露原始 TUI。
+        分级处理超时和异常状态。
     .PARAMETER TimeoutSec
-        超时秒数，默认 30。
+        超时秒数，默认 45。
     .PARAMETER TestSafe
         测试安全模式：跳过真实 claude doctor 执行。
     .RETURNS
-        包含 Success, TimedOut, ExitCode, Error, Command, DurationMs 的哈希表
+        包含 Success, Summary, ParsedData, CleanedOutput, HasCoreFields,
+        TimedOut, Error, ExitCode, DurationMs, RawOutputForLog 的哈希表
     #>
     param(
-        [int]$TimeoutSec = 30,
+        [int]$TimeoutSec = 45,
         [switch]$TestSafe
     )
 
     $result = @{
-        Success    = $false
-        TimedOut   = $false
-        ExitCode   = $null
-        Error      = ""
-        Command    = ""
-        DurationMs = 0
+        Success         = $false
+        Summary         = ""
+        ParsedData      = @{}
+        CleanedOutput   = ""
+        HasCoreFields   = $false
+        TimedOut        = $false
+        Error           = ""
+        ExitCode        = $null
+        DurationMs      = 0
+        RawOutputForLog = ""
+        DoctorAvailable = $true
+    }
+
+    # 1. 先确认 claude --version 是否可用
+    $claudeVer = Test-ClaudeInstalled
+    $claudeAvailable = ($null -ne $claudeVer)
+
+    # 2. 调用 InteractiveSafe 执行 doctor
+    $doctor = Invoke-ClaudeDoctorInteractiveSafe -TimeoutSec $TimeoutSec -TestSafe:$TestSafe
+
+    $result.ExitCode = $doctor.ExitCode
+    $result.DurationMs = $doctor.DurationMs
+    $result.TimedOut = [bool]$doctor.TimedOut
+
+    if ($doctor.Error -eq "skipped_test_safe") {
+        $result.Summary = "[SKIP] 测试安全模式 - 已跳过 claude doctor"
+        $result.Error = "skipped_test_safe"
+        return $result
+    }
+
+    if ($doctor.Error -eq "watchdog_unavailable_skipped") {
+        $result.Summary = "[SKIP] 超时保护不可用 - 已跳过 claude doctor，不影响主诊断"
+        $result.Error = "watchdog_unavailable_skipped"
+        $result.DoctorAvailable = $false
+        return $result
+    }
+
+    # 3. 清洗输出
+    $rawOutput = if ($doctor.CleanedOutput) { $doctor.CleanedOutput } else { "" }
+    $cleanedOutput = Normalize-ExternalCommandOutput -Text $rawOutput -MaxLength 8000
+    $result.CleanedOutput = $cleanedOutput
+    $result.RawOutputForLog = $rawOutput
+
+    # 4. 解析
+    $parsed = Parse-ClaudeDoctorOutput -CleanedOutput $cleanedOutput
+    $result.ParsedData = $parsed.ParsedFields
+    $result.HasCoreFields = $parsed.HasCoreFields
+
+    # 5. 分级处理
+    if ($doctor.Success -and $parsed.HasCoreFields) {
+        # 成功且解析到核心字段
+        $result.Success = $true
+        $result.Summary = "[OK] Claude Code doctor - $($parsed.UserSummary)"
+        Write-Log "INFO" "Invoke-ClaudeDoctor: 成功, $($result.Summary)"
+    }
+    elseif ($doctor.TimedOut -and $parsed.HasCoreFields) {
+        # 超时但已解析到核心字段 → WARN，不算失败
+        $result.Success = $true
+        $result.TimedOut = $true
+        $result.Error = "claude doctor 进入交互式流程，已终止；已从部分输出中解析安装状态"
+        $result.Summary = "[WARN] claude doctor - 官方 doctor 进入交互式流程，已终止；已从部分输出中解析安装状态"
+        if ($parsed.UserSummary -and $parsed.UserSummary -ne 'doctor 未返回可解析的结构化信息') {
+            $result.Summary += "`n  解析结果: $($parsed.UserSummary)"
+        }
+        Write-Log "WARN" "Invoke-ClaudeDoctor: 超时但核心字段可解析"
+    }
+    elseif ($doctor.TimedOut -and -not $parsed.HasCoreFields -and $claudeAvailable) {
+        # 超时，无法解析，但 claude CLI 可用
+        $result.Success = $true
+        $result.TimedOut = $true
+        $result.Error = "claude doctor 未返回有效结果；Claude Code CLI 本身可用 ($claudeVer)"
+        $result.Summary = "[WARN] claude doctor - 未返回有效结果；Claude Code CLI 本身可用 ($claudeVer)"
+        Write-Log "WARN" "Invoke-ClaudeDoctor: 超时无输出，但 CLI 可用 ($claudeVer)"
+    }
+    elseif (-not $doctor.Success -and $claudeAvailable) {
+        # doctor 失败但 CLI 可用
+        $result.Success = $true
+        $result.Error = "claude doctor 返回异常；但 Claude Code CLI 本身可用 ($claudeVer)"
+        $result.Summary = "[WARN] claude doctor - 官方 doctor 未完整返回，但 Claude Code CLI 已可用；不影响基础使用"
+        Write-Log "WARN" "Invoke-ClaudeDoctor: doctor 异常但 CLI 可用 ($claudeVer)"
+    }
+    elseif (-not $claudeAvailable) {
+        # CLI 也不可用 → 真正的安装问题
+        $result.Success = $false
+        $result.Error = "Claude Code CLI 不可用，无法运行 doctor 诊断"
+        $result.Summary = "[ERROR] Claude Code CLI - 未检测到可运行的 claude 命令"
+        Write-Log "ERROR" "Invoke-ClaudeDoctor: CLI 不可用，无法运行 doctor"
+    }
+    else {
+        # 兜底
+        $result.Success = $parsed.HasCoreFields
+        $result.Summary = if ($parsed.HasCoreFields) {
+            "[WARN] claude doctor - 部分字段可解析"
+        }
+        else {
+            "[WARN] claude doctor - 未完成"
+        }
+        Write-Log "WARN" "Invoke-ClaudeDoctor: 兜底分支"
+    }
+
+    return $result
+}
+
+function Invoke-ClaudeDoctorInteractiveSafe {
+    <#
+    .SYNOPSIS
+        使用 Start-Process 重定向执行 claude doctor，不继承终端 TTY。
+        设置 NO_COLOR=1, CI=1, TERM=dumb 环境变量防止 TUI 输出。
+        向 stdin 自动发送换行防止交互式分页卡住。
+        通过独立 watchdog job 实现超时保护，超时后递归杀进程树。
+    .PARAMETER TimeoutSec
+        超时秒数，默认 45。
+    .PARAMETER TestSafe
+        测试安全模式：跳过真实 claude doctor 执行。
+    .RETURNS
+        包含 Success, TimedOut, ExitCode, Error, Command, DurationMs,
+        CleanedOutput, ParsedData, HasCoreFields 的哈希表
+    #>
+    param(
+        [int]$TimeoutSec = 45,
+        [switch]$TestSafe
+    )
+
+    $result = @{
+        Success       = $false
+        TimedOut      = $false
+        ExitCode      = $null
+        Error         = ""
+        Command       = ""
+        DurationMs    = 0
+        CleanedOutput = ""
     }
 
     # TestSafe 模式：跳过真实执行
@@ -777,6 +1053,26 @@ function Invoke-ClaudeDoctorInteractiveSafe {
         Write-Log "WARN" "执行前清理残留进程失败（不阻塞）: $_"
     }
 
+    # --- 准备临时输出文件和 stdin 脚本 ---
+    $tempDir = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
+    $tmpOut = Join-Path $tempDir "ccdi_doctor_stdout_${PID}_$(Get-Random).tmp"
+    $tmpErr = Join-Path $tempDir "ccdi_doctor_stderr_${PID}_$(Get-Random).tmp"
+    $stdinScript = Join-Path $tempDir "ccdi_doctor_stdin_${PID}_$(Get-Random).ps1"
+
+    # 写入 stdin 注入脚本（通过管道发送多个换行防止 Enter to continue 卡住）
+    $stdinContent = @'
+param([int]$ProcessId)
+$lines = @("") * 15
+$stdinContent = ($lines -join "`n")
+# 通过文件输入重定向到进程 stdin
+'@
+    try {
+        Set-Content -Path $stdinScript -Value $stdinContent -Encoding UTF8
+    }
+    catch {
+        Write-Log "WARN" "无法写入 stdin 脚本（不阻塞）: $_"
+    }
+
     # --- 启动 Watchdog Job ---
     $parentPid = $PID
     $killLogPath = Join-Path ([System.IO.Path]::GetTempPath()) "ccdi_watchdog_${parentPid}_$(Get-Random).log"
@@ -789,7 +1085,6 @@ function Invoke-ClaudeDoctorInteractiveSafe {
 
             Start-Sleep -Seconds $WaitSec
 
-            # 查找属于当前 PowerShell 的 claude doctor 子进程
             $targets = @()
             try {
                 $allClaude = Get-CimInstance Win32_Process -Filter "Name='claude.exe'" -ErrorAction SilentlyContinue
@@ -818,7 +1113,6 @@ function Invoke-ClaudeDoctorInteractiveSafe {
                 $cmdLine = if ($t.CommandLine) { $t.CommandLine } else { "(unknown)" }
                 "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: 超时，正在终止 PID=$pidToKill, CommandLine=$cmdLine" | Out-File $LogPath -Append -Encoding UTF8
 
-                # taskkill /T /F 杀进程树
                 try {
                     $killOutput = & taskkill.exe /PID $pidToKill /T /F 2>&1
                     "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: taskkill 结果: $killOutput" | Out-File $LogPath -Append -Encoding UTF8
@@ -847,7 +1141,6 @@ function Invoke-ClaudeDoctorInteractiveSafe {
         $watchdogAvailable = $false
     }
 
-    # --- 内联执行 claude doctor（继承当前终端 TTY 环境）---
     if (-not $watchdogAvailable) {
         $result.Error = "watchdog_unavailable_skipped"
         $result.ExitCode = $null
@@ -855,23 +1148,135 @@ function Invoke-ClaudeDoctorInteractiveSafe {
         return $result
     }
 
+    # --- 执行 claude doctor（使用 Start-Process 重定向输出）---
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $exitCode = -1
 
     try {
-        # 管道到 Out-Host 确保 stdout 直显终端且不污染函数返回值
-        & $claudePath doctor *>&1 | Out-Host
-        $exitCode = $LASTEXITCODE
+        # 使用 Start-Process 重定向 stdout/stderr，不继承 TTY
+        $procInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $procInfo.FileName = $claudePath
+        $procInfo.Arguments = "doctor"
+        $procInfo.UseShellExecute = $false
+        $procInfo.RedirectStandardOutput = $true
+        $procInfo.RedirectStandardError = $true
+        $procInfo.RedirectStandardInput = $true
+        $procInfo.CreateNoWindow = $true
+        $procInfo.WorkingDirectory = $cwd
+
+        # 设置环境变量防止 TUI/分页
+        $procInfo.EnvironmentVariables["NO_COLOR"] = "1"
+        $procInfo.EnvironmentVariables["CI"] = "1"
+        $procInfo.EnvironmentVariables["TERM"] = "dumb"
+        $procInfo.EnvironmentVariables["FORCE_COLOR"] = "0"
+        $procInfo.EnvironmentVariables["CLAUDE_CODE_TTY"] = "0"
+        $procInfo.EnvironmentVariables["NODE_OPTIONS"] = "--no-warnings"
+
+        $proc = New-Object System.Diagnostics.Process
+        $proc.StartInfo = $procInfo
+
+        Write-Log "INFO" "Invoke-ClaudeDoctorInteractiveSafe: 启动 claude doctor (Start-Process, stdout/stderr 重定向)"
+        $proc.Start() | Out-Null
+
+        # 向 stdin 写入足够的换行防止分页卡住
+        $stdinWriter = $proc.StandardInput
+        try {
+            for ($i = 0; $i -lt 10; $i++) {
+                $stdinWriter.WriteLine()
+            }
+            $stdinWriter.Flush()
+            $stdinWriter.Close()
+        }
+        catch {
+            Write-Log "DEBUG" "stdin 写入异常（可能 doctor 已退出）: $_"
+        }
+
+        # 异步读取 stdout 和 stderr
+        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+        $stderrTask = $proc.StandardError.ReadToEndAsync()
+
+        # 等待进程完成或超时
+        $finished = $proc.WaitForExit($TimeoutSec * 1000)
+
+        $stdOut = ""
+        $stdErr = ""
+        try {
+            if ($stdoutTask.Wait($TimeoutSec * 1000)) {
+                $stdOut = $stdoutTask.Result
+            }
+        }
+        catch {
+            Write-Log "DEBUG" "stdout 读取任务异常: $_"
+        }
+        try {
+            if ($stderrTask.Wait(5000)) {
+                $stdErr = $stderrTask.Result
+            }
+        }
+        catch {
+            Write-Log "DEBUG" "stderr 读取任务异常: $_"
+        }
+
+        if ($finished) {
+            $exitCode = $proc.ExitCode
+            Write-Log "INFO" "claude doctor 完成: ExitCode=$exitCode, DurationMs=$($sw.ElapsedMilliseconds), stdout=$($stdOut.Length) bytes, stderr=$($stdErr.Length) bytes"
+        }
+        else {
+            # 超时：杀进程树
+            Write-Log "WARN" "claude doctor 超时 (${TimeoutSec}s)，正在终止进程树 PID=$($proc.Id)"
+            try {
+                if (-not $proc.HasExited) {
+                    & taskkill.exe /PID $proc.Id /T /F 2>&1 | Out-Null
+                    $proc.WaitForExit(5000) | Out-Null
+                }
+            }
+            catch {
+                try {
+                    if (-not $proc.HasExited) {
+                        $proc.Kill()
+                        $proc.WaitForExit(3000) | Out-Null
+                    }
+                }
+                catch {
+                    Write-Log "ERROR" "无法终止 claude doctor 进程: $_"
+                }
+            }
+            # 读取已捕获的部分输出
+            $stdOut = if ($stdOut) { $stdOut } else { "" }
+            $stdErr = if ($stdErr) { $stdErr } else { "" }
+        }
+
+        $sw.Stop()
+
+        # 保存原始输出到日志（截断）
+        $combinedOutput = "$stdOut`n$stdErr"
+        if ($combinedOutput.Length -gt 12000) {
+            $logOutput = $combinedOutput.Substring(0, 12000) + "`n...[doctor 输出截断]"
+        }
+        else {
+            $logOutput = $combinedOutput
+        }
+        Write-Log "INFO" "Invoke-ClaudeDoctorInteractiveSafe raw output ($($combinedOutput.Length) bytes). For debug: $logOutput"
+
+        # 清洗输出
+        $rawOutput = $combinedOutput
+        $result.CleanedOutput = Normalize-ExternalCommandOutput -Text $rawOutput -MaxLength 8000
+        $result.ExitCode = if ($finished) { $exitCode } else { -1 }
+        $result.DurationMs = $sw.ElapsedMilliseconds
     }
     catch {
+        $sw.Stop()
+        $result.DurationMs = $sw.ElapsedMilliseconds
         $result.Error = "claude doctor 执行异常: $_"
-        Write-Log "ERROR" "Invoke-ClaudeDoctorInteractiveSafe: 内联执行异常: $_"
-        $exitCode = -1
+        Write-Log "ERROR" "Invoke-ClaudeDoctorInteractiveSafe: Start-Process 执行异常: $_"
     }
 
-    $sw.Stop()
-    $result.DurationMs = $sw.ElapsedMilliseconds
-    $result.ExitCode = $exitCode
+    # 清理临时文件
+    foreach ($tmpPath in @($tmpOut, $tmpErr, $stdinScript)) {
+        if ($tmpPath -and (Test-Path $tmpPath)) {
+            Remove-Item $tmpPath -Force -ErrorAction SilentlyContinue
+        }
+    }
 
     # --- 检查 Watchdog 状态 ---
     $watchdogFired = $false
@@ -880,13 +1285,10 @@ function Invoke-ClaudeDoctorInteractiveSafe {
         Write-Log "DEBUG" "Watchdog job 状态: State=$jobState"
 
         if ($jobState -eq 'Running') {
-            # 正常完成，watchdog 没触发
             Stop-Job $watchdogJob -ErrorAction SilentlyContinue
-            $watchdogFired = $false
             Write-Log "DEBUG" "Watchdog 未触发，claude doctor 在超时前完成"
         }
         else {
-            # Watchdog 已结束 → 它触发了
             $watchdogFired = $true
             $watchdogLog = Receive-Job $watchdogJob -ErrorAction SilentlyContinue
             Write-Log "INFO" "Watchdog 已触发：$watchdogLog"
@@ -897,20 +1299,19 @@ function Invoke-ClaudeDoctorInteractiveSafe {
     }
     finally {
         Remove-Job $watchdogJob -Force -ErrorAction SilentlyContinue
-            # 清理 watchdog 日志
-            if (Test-Path $killLogPath) {
-                try {
-                    $watchdogContent = Get-Content $killLogPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-                    if ($watchdogContent) {
-                        Write-Log "DEBUG" "Watchdog 日志: $watchdogContent"
-                    }
-                    Remove-Item $killLogPath -Force -ErrorAction SilentlyContinue
+        if (Test-Path $killLogPath) {
+            try {
+                $watchdogContent = Get-Content $killLogPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                if ($watchdogContent) {
+                    Write-Log "DEBUG" "Watchdog 日志: $watchdogContent"
                 }
-                catch {
-                    Write-Log "DEBUG" "清理 watchdog 日志失败: $_"
-                }
+                Remove-Item $killLogPath -Force -ErrorAction SilentlyContinue
+            }
+            catch {
+                Write-Log "DEBUG" "清理 watchdog 日志失败: $_"
             }
         }
+    }
 
     # --- 处理结果 ---
     if ($watchdogFired) {
@@ -919,7 +1320,6 @@ function Invoke-ClaudeDoctorInteractiveSafe {
         $result.Error = "claude doctor 超时（${TimeoutSec}秒），watchdog 已终止进程树"
         Write-Log "WARN" "Invoke-ClaudeDoctorInteractiveSafe: $($result.Error)"
 
-        # 超时后再次清理残留：仅清理属于本次父进程的子进程
         try {
             $postClean = Clear-StaleClaudeDoctorProcesses -ParentPid $parentPid
             Write-Log "INFO" "超时后清理本进程 doctor 子进程: 清理了 $($postClean.KilledCount) 个"
@@ -928,18 +1328,33 @@ function Invoke-ClaudeDoctorInteractiveSafe {
             Write-Log "WARN" "超时后清理残留失败: $_"
         }
     }
-    elseif ($exitCode -eq 0) {
+    elseif ($finished -and $exitCode -eq 0) {
         $result.Success = $true
         Write-Log "INFO" "claude doctor 成功完成 (ExitCode=0, DurationMs=$($result.DurationMs))"
     }
-    else {
+    elseif ($finished) {
+        # doctor 执行完成但退出码非零
         $result.Success = $false
         $result.Error = "claude doctor 返回非零退出码: $exitCode"
         Write-Log "WARN" "Invoke-ClaudeDoctorInteractiveSafe: $($result.Error), DurationMs=$($result.DurationMs)"
+        # 即使退出码非零，如果捕获到输出也算部分成功
+        if (-not [string]::IsNullOrWhiteSpace($result.CleanedOutput)) {
+            Write-Log "INFO" "虽然退出码非零，但已捕获 $($result.CleanedOutput.Length) bytes 输出用于解析"
+        }
+    }
+    else {
+        # 超时
+        $result.TimedOut = $true
+        $result.Success = $false
+        $result.Error = "claude doctor 超时（${TimeoutSec}秒）"
+        if (-not [string]::IsNullOrWhiteSpace($result.CleanedOutput)) {
+            Write-Log "INFO" "超时但已捕获 $($result.CleanedOutput.Length) bytes 部分输出"
+        }
     }
 
     return $result
 }
+
 
 function Invoke-VisibleInstallCommand {
     <#

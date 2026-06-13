@@ -1334,3 +1334,364 @@ function Test-WslPathSafe {
 
     return $true
 }
+
+# ============================================================
+# 文本清洗函数
+# ============================================================
+
+function Remove-AnsiEscape {
+    <#
+    .SYNOPSIS
+        清除文本中的 ANSI escape 序列（颜色、光标、spinner 等控制符）。
+    .PARAMETER Text
+        原始文本
+    .RETURNS
+        清除 ANSI 序列后的文本
+    #>
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $Text
+    }
+
+    $result = $Text
+
+    # ESC[...m 颜色/样式控制符
+    $result = $result -replace '\x1b\[[0-9;]*m', ''
+
+    # ESC[?25l / ESC[?25h 光标显示/隐藏
+    $result = $result -replace '\x1b\[\?25[hl]', ''
+
+    # ESC[K / ESC[J / ESC[2J 清屏/清行
+    $result = $result -replace '\x1b\[[0-2]?[JK]', ''
+
+    # ESC[nA / ESC[nB / ESC[nC / ESC[nD 光标移动
+    $result = $result -replace '\x1b\[\d*[ABCD]', ''
+
+    # ESC[nG 列定位
+    $result = $result -replace '\x1b\[\d*G', ''
+
+    # ESC[s / ESC[u 保存/恢复光标
+    $result = $result -replace '\x1b\[[su]', ''
+
+    # ESC[6n 光标位置报告
+    $result = $result -replace '\x1b\[6n', ''
+
+    # 其他常见 escape 序列（CSI 序列以 ESC[ 开头）
+    $result = $result -replace '\x1b\[\d*[`a-z]', ''
+
+    # OSC 序列（如 OSC...ST 的超链接）
+    $result = $result -replace '\x1b\].*?(\x1b\\|\x07)', ''
+
+    # 单独出现的 ESC 字符（后面跟非打印字符）
+    $result = $result -replace '\x1b', ''
+
+    return $result
+}
+
+function Remove-ControlChars {
+    <#
+    .SYNOPSIS
+        清除不可打印控制字符，保留换行、回车、制表符。
+    .PARAMETER Text
+        原始文本
+    .RETURNS
+        清洗后的文本
+    #>
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $Text
+    }
+
+    $result = $Text
+
+    # 清除 \x00-\x08, \x0B-\x0C, \x0E-\x1F 范围的控制字符
+    # 保留 \x09 (Tab), \x0A (LF), \x0D (CR)
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($ch in $result.ToCharArray()) {
+        $code = [int]$ch
+        if ($code -eq 9 -or $code -eq 10 -or $code -eq 13) {
+            [void]$sb.Append($ch)
+        }
+        elseif ($code -lt 32) {
+            # 跳过其他控制字符
+            continue
+        }
+        elseif ($code -eq 0x7F) {
+            # DEL 字符
+            continue
+        }
+        else {
+            [void]$sb.Append($ch)
+        }
+    }
+
+    return $sb.ToString()
+}
+
+function Test-Mojibake {
+    <#
+    .SYNOPSIS
+        检测文本中是否包含疑似乱码字符（如 鈹/鉁/鈥/鈫/Hr,g 等）。
+    .PARAMETER Text
+        要检测的文本
+    .RETURNS
+        包含 HasMojibake, MojibakeLines 的哈希表
+    #>
+    param([string]$Text)
+
+    $result = @{
+        HasMojibake    = $false
+        MojibakeLines  = @()
+        Confidence     = 0
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $result
+    }
+
+    # 已知乱码特征字符（UTF-8 通过 GBK/ANSI 错误解码时的典型产物）
+    $mojibakeChars = @(
+        '鈹', '鉁', '鈥', '鈫', '銆', '鈩', '鉂', '鈽',
+        '锟', '斤', '拷', '輟', '軻', '錐', '鏍', '鏋',
+        '鈧', '鋨', '鉃', '銐', '銓', '鋏'
+    )
+
+    # 疑似乱码模式（英文+逗号连在一起无空格，如 "Hr,g"）
+    $mojibakePatterns = @(
+        '[A-Z][a-z],[a-z]',   # 如 Hr,g
+        '[A-Z][a-z],[A-Z]',   # 如 Wg,t
+        '\?[A-Za-z]{2,}\?'    # 如 ?OK?
+    )
+
+    $lines = $Text -split "`n"
+    $suspectLines = [System.Collections.ArrayList]::new()
+
+    foreach ($line in $lines) {
+        $isSuspicious = $false
+
+        # 检查乱码字符
+        foreach ($char in $mojibakeChars) {
+            if ($line.Contains($char)) {
+                $isSuspicious = $true
+                break
+            }
+        }
+
+        # 检查乱码模式
+        if (-not $isSuspicious) {
+            foreach ($pattern in $mojibakePatterns) {
+                if ($line -match $pattern) {
+                    $isSuspicious = $true
+                    break
+                }
+            }
+        }
+
+        # 检查高比例非 ASCII 但也不是合法中文/日文的行
+        if (-not $isSuspicious) {
+            $nonAscii = 0
+            $total = $line.Length
+            if ($total -gt 0) {
+                foreach ($ch in $line.ToCharArray()) {
+                    if ([int]$ch -gt 127) { $nonAscii++ }
+                }
+                # 超过 60% 非 ASCII 且不匹配常见中文字符范围
+                if ($nonAscii -gt ($total * 0.6)) {
+                    $hasValidCJK = $line -match '[\p{IsCJKUnifiedIdeographs}\p{IsCJKSymbolsAndPunctuation}\p{IsHiragana}\p{IsKatakana}]'
+                    if (-not $hasValidCJK) {
+                        $isSuspicious = $true
+                    }
+                }
+            }
+        }
+
+        if ($isSuspicious) {
+            [void]$suspectLines.Add($line)
+        }
+    }
+
+    $result.MojibakeLines = $suspectLines
+    $result.HasMojibake = ($suspectLines.Count -gt 0)
+    $result.Confidence = if ($suspectLines.Count -gt 3) { 2 } elseif ($suspectLines.Count -gt 0) { 1 } else { 0 }
+
+    return $result
+}
+
+function Repair-OrSuppressMojibake {
+    <#
+    .SYNOPSIS
+        对疑似乱码文本尝试提取有效信息，提取不到则返回占位说明。
+    .PARAMETER Text
+        原始文本
+    .PARAMETER FallbackMessage
+        提取不到有效信息时的占位消息
+    .RETURNS
+        清洗后的文本或占位消息
+    #>
+    param(
+        [string]$Text,
+        [string]$FallbackMessage = "[WARN] 外部命令输出存在编码异常，已隐藏原始内容；请查看日志或重新运行诊断。"
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return ""
+    }
+
+    $mojibakeCheck = Test-Mojibake -Text $Text
+
+    if (-not $mojibakeCheck.HasMojibake) {
+        return $Text
+    }
+
+    # 尝试从乱码中提取有效信息（版本号、路径、英文单词等）
+    $extracted = [System.Collections.ArrayList]::new()
+
+    # 提取版本号（如 1.2.3, v2.1.177）
+    $versionMatches = [regex]::Matches($Text, '\b(v?\d+\.\d+\.\d+[^\s,]*)')
+    foreach ($m in $versionMatches) {
+        [void]$extracted.Add("Version: $($m.Value)")
+    }
+
+    # 提取平台信息
+    if ($Text -match '(win32|linux|darwin)[-_]\w+') {
+        [void]$extracted.Add("Platform: $($matches[0])")
+    }
+
+    # 提取路径（Windows 和 Unix 路径）
+    $pathMatches = [regex]::Matches($Text, '([A-Za-z]:[\\/][^\s,;]+|/[^\s,;]+/[^\s,;]+)')
+    $pathCount = 0
+    foreach ($m in $pathMatches) {
+        if ($pathCount -ge 3) { break }
+        [void]$extracted.Add("Path: $($m.Value)")
+        $pathCount++
+    }
+
+    # 提取 Search 状态
+    if ($Text -match 'Search[:\s]*(OK|FAIL|WARN|ERROR)') {
+        [void]$extracted.Add("Search: $($matches[1])")
+    }
+
+    # 提取 "OK" / "FAIL" 状态指示
+    if ($Text -match '(?:^|\n)\s*(OK|FAIL|PASS|ERROR)\s*[:|-]') {
+        [void]$extracted.Add("Status: $($matches[1])")
+    }
+
+    if ($extracted.Count -gt 0) {
+        $cleaned = "--- 从输出中提取的关键信息 ---`n"
+        $cleaned += ($extracted -join "`n")
+        $cleaned += "`n--- 原始输出包含编码异常，以上为可解析部分 ---"
+        return $cleaned
+    }
+
+    # 完全无法解析时返回安全的占位信息
+    return $FallbackMessage
+}
+
+function Normalize-ExternalCommandOutput {
+    <#
+    .SYNOPSIS
+        对外部命令输出进行标准化清洗：去 ANSI → 去控制字符 → 修复乱码。
+    .PARAMETER Text
+        原始命令输出
+    .PARAMETER MaxLength
+        清洗后最大长度，默认 8000 字符。超出部分截断并标记。
+    .RETURNS
+        标准化后的文本
+    #>
+    param(
+        [string]$Text,
+        [int]$MaxLength = 8000
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return ""
+    }
+
+    $cleaned = $Text
+    $cleaned = Remove-AnsiEscape -Text $cleaned
+    $cleaned = Remove-ControlChars -Text $cleaned
+    $cleaned = Repair-OrSuppressMojibake -Text $cleaned
+
+    # 合并连续空行（超过 3 个连续空行 → 合并为 2 个）
+    $cleaned = $cleaned -replace "(\r?\n){4,}", "`n`n`n"
+
+    # 长度限制
+    if ($cleaned.Length -gt $MaxLength) {
+        $cleaned = $cleaned.Substring(0, $MaxLength) + "`n...[输出已截断，完整内容见日志]"
+    }
+
+    return $cleaned
+}
+
+function Convert-ToSafeReportText {
+    <#
+    .SYNOPSIS
+        综合报告安全转换：脱敏 + 清洗 + 过滤内部字段。
+        用于生成可安全分享的报告内容。
+    .PARAMETER Text
+        原始报告文本
+    .RETURNS
+        完全安全化的报告文本
+    #>
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $Text
+    }
+
+    $result = $Text
+
+    # 1. 路径和 API Key 脱敏（复用已有函数）
+    $result = Sanitize-ReportText -Text $result
+
+    # 2. 清除 ANSI escape 序列（防止报告中出现控制符）
+    $result = Remove-AnsiEscape -Text $result
+
+    # 3. 清除不可打印控制字符
+    $result = Remove-ControlChars -Text $result
+
+    # 4. 过滤内部字段（GrowthBook, OAuth, feature flag 等）
+    $internalFieldPatterns = @(
+        '(?i)GrowthBook[:\s]+\S+',
+        '(?i)feature[_\s]flag[:\s]+\S+',
+        '(?i)OAuth[_\s]token[:\s]+\S+',
+        '(?i)subscriber[_\s]auth[:\s]+\S+',
+        '(?i)tengu_ccr_bridge[:\s]+\S+',
+        '(?i)organization[_\s]UUID[:\s]+[a-f0-9-]+',
+        '(?i)telemetryDisabledBy[:\s]+\S+',
+        '(?i)DISABLE_GROWTHBOOK[:\s]+\S+',
+        '(?i)growthbook[_\s]',
+        '(?i)ccr_bridge[:\s]+\S+',
+        '(?i)authToken[:\s]+\S+',
+        '(?i)subscriberId[:\s]+\S+',
+        '(?i)orgId[:\s]+\S+',
+        '(?i)clientId[:\s]+\S+'
+    )
+
+    foreach ($pattern in $internalFieldPatterns) {
+        $result = $result -replace $pattern, '[内部字段已过滤]'
+    }
+
+    # 5. 过滤疑似乱码行
+    $lines = $result -split "`r`n"
+    $safeLines = [System.Collections.ArrayList]::new()
+    foreach ($line in $lines) {
+        $isMojibake = $false
+        $mojibakeChars = @('鈹', '鉁', '鈥', '鈫', '銆', '鈩', '鉂', '鈽', '锟', '斤', '拷')
+        foreach ($char in $mojibakeChars) {
+            if ($line.Contains($char)) {
+                $isMojibake = $true
+                break
+            }
+        }
+        if ($isMojibake) {
+            # 跳过乱码行，不写入报告
+            continue
+        }
+        [void]$safeLines.Add($line)
+    }
+
+    return ($safeLines -join "`r`n")
+}

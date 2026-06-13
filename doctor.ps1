@@ -22,6 +22,17 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
+# --- 编码初始化（防止 Windows PowerShell 5.1 控制台乱码）---
+try {
+    [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $null = & chcp 65001 2>$null
+}
+catch {
+    # 编码设置失败不阻塞脚本执行
+}
+
 $EntryScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 if (-not $EntryScriptDir) { $EntryScriptDir = (Get-Location).Path }
 . (Join-Path $EntryScriptDir "lib\bootstrap.ps1")
@@ -74,6 +85,10 @@ function Add-CheckResult {
             [void]$script:DoctorState.Errors.Add("${Name}: $Detail")
         }
         "SKIP" { Write-Result $Name "SKIP" $Detail }
+        "INFO" {
+            Write-Result $Name "INFO" $Detail
+            # INFO 不计入警告/错误，仅做信息提示
+        }
     }
 }
 
@@ -253,27 +268,40 @@ function Check-Commands {
     if ($claudeVersion) {
         Add-CheckResult "Claude Code CLI" "OK" $claudeVersion
 
-        # 运行 claude doctor。该命令在首次启动或网络异常时可能等待较久，
-        # 诊断工具只做快速采样，不能阻断后续检查。
+        # 运行 claude doctor。使用新的 Invoke-ClaudeDoctor 入口，
+        # 不展示原始 TUI 输出，只显示解析后的摘要。
         if ($env:CCDI_TEST_MODE -eq "1") {
             Write-Info "测试安全模式：跳过 claude doctor 诊断。"
             Add-CheckResult "claude doctor" "SKIP" "测试安全模式已跳过"
         }
         else {
-            Write-Info "正在运行 Claude Code 官方 doctor 诊断，会继承当前终端..."
-            $claudeDoctor = Invoke-ClaudeDoctorInteractiveSafe -TimeoutSec 30
+            Write-Info "正在运行 Claude Code 官方 doctor 诊断..."
+            $claudeDoctor = Invoke-ClaudeDoctor -TimeoutSec 45
             if ($claudeDoctor.Success) {
-                Add-CheckResult "claude doctor" "OK" "已执行"
+                Write-Info "Claude Code doctor 摘要: $($claudeDoctor.Summary -replace '\[OK\]\s*|\[WARN\]\s*','')"
+                if ($claudeDoctor.ParsedData -and $claudeDoctor.ParsedData.Count -gt 0) {
+                    $versionStr = if ($claudeDoctor.ParsedData['Version']) { $claudeDoctor.ParsedData['Version'] } else { "未知" }
+                    $platformStr = if ($claudeDoctor.ParsedData['Platform']) { $claudeDoctor.ParsedData['Platform'] } else { "未知" }
+                    Add-CheckResult "claude doctor" "OK" "安装状态正常，版本 $versionStr，平台 $platformStr"
+                }
+                else {
+                    Add-CheckResult "claude doctor" "OK" "已执行"
+                }
+                Write-Info "Claude Code 后台服务/Remote Control 状态不影响 DeepSeek API 终端使用"
             }
-            elseif ($claudeDoctor.TimedOut) {
-                Add-CheckResult "claude doctor" "WARN" "超时，已终止；这不代表 Claude Code 安装失败"
-                Add-Suggestion "claude doctor 在脚本中超时，但 claude --version 正常。请单独在终端手动运行 claude doctor 获取官方诊断输出。"
+            elseif ($claudeDoctor.TimedOut -and $claudeDoctor.HasCoreFields) {
+                Add-CheckResult "claude doctor" "WARN" "官方 doctor 进入交互式流程，已终止；已从部分输出中解析安装状态"
+                Add-Suggestion "claude doctor 在脚本中无法完整运行，但 claude --version 正常。请单独在终端手动运行 claude doctor 获取官方诊断输出。"
             }
-            elseif ($claudeDoctor.Error -eq "watchdog_unavailable_skipped") {
+            elseif ($claudeDoctor.DoctorAvailable -eq $false) {
                 Add-CheckResult "claude doctor" "SKIP" "超时保护不可用（Start-Job 被禁用），已跳过，不影响主诊断"
             }
+            elseif (-not $claudeDoctor.Success) {
+                Add-CheckResult "claude doctor" "WARN" "未返回有效结果；Claude Code CLI 本身可用 ($claudeVersion)"
+                Add-Suggestion "claude doctor 未返回有效结果，但 claude --version 正常。请单独在终端手动运行 claude doctor 获取官方诊断输出。"
+            }
             else {
-                Add-CheckResult "claude doctor" "WARN" "未完成: $($claudeDoctor.Error)"
+                Add-CheckResult "claude doctor" "WARN" "未完成"
             }
         }
     }
@@ -360,7 +388,7 @@ function Check-Files {
                         Add-CheckResult "ANTHROPIC_SMALL_FAST_MODEL" "OK" $env.ANTHROPIC_SMALL_FAST_MODEL
                     }
                     else {
-                        Add-CheckResult "ANTHROPIC_SMALL_FAST_MODEL" "WARN" "未设置（将使用默认快速模型）"
+                        Add-CheckResult "ANTHROPIC_SMALL_FAST_MODEL" "INFO" "未设置时将使用默认逻辑；如需稳定体验，可设置 ANTHROPIC_SMALL_FAST_MODEL"
                     }
                 }
                 else {
@@ -539,11 +567,12 @@ function Check-VSCode {
 
         $extInstalled = Test-VSCodeExtensionInstalled
         if ($extInstalled) {
-            Add-CheckResult "Claude Code 扩展" "OK" "已安装"
+            Add-CheckResult "Claude Code VS Code 扩展" "OK" "已安装"
         }
         else {
-            Add-CheckResult "Claude Code 扩展" "WARN" "未安装"
-            Add-Suggestion "在 VS Code 中按 Ctrl+Shift+X，搜索 'Claude Code' 并安装。"
+            Add-CheckResult "Claude Code VS Code 扩展" "INFO" "未安装；仅影响 VS Code 内联体验，不影响终端使用"
+            # 不计入核心警告，使用 INFO 级别
+            Add-Suggestion "需要 VS Code 内联体验时可安装扩展（Ctrl+Shift+X → 搜索 'Claude Code'）；只用终端则无需处理。"
         }
     }
     else {
@@ -584,20 +613,54 @@ function Check-WSL {
         return
     }
 
-    # 检查 WSL 内的 Claude 状态
-    Write-Info "正在检查 WSL 内 Claude Code 状态..."
-    $wslClaude = Invoke-CommandSafe -Command "wsl" -Arguments @("bash", "-c", "command -v claude >/dev/null 2>&1 && claude --version 2>/dev/null || echo 'NOT_FOUND'")
-    if ($wslClaude.Success) {
-        if ($wslClaude.Output -match "NOT_FOUND") {
-            Add-CheckResult "WSL: claude" "WARN" "WSL 内未安装 Claude Code"
-            Add-Suggestion "在 WSL Ubuntu 中运行 install_wsl.sh 安装 Claude Code。"
+    # 检查 WSL 内的 Claude 状态（使用综合检测）
+    Write-Info "正在检查 WSL 内 Claude Code 状态（多路径综合检测）..."
+    $wslClaude = Test-WslClaudeComprehensive
+
+    # 获取 Windows 原生 Claude 安装信息
+    $winClaudeVer = Test-ClaudeInstalled
+
+    switch ($wslClaude.Status) {
+        "installed_and_in_path" {
+            Add-CheckResult "WSL: claude" "OK" "WSL 内已安装且可在 PATH 中调用"
+            if ($wslClaude.Version) {
+                Add-CheckResult "WSL: claude 版本" "OK" $wslClaude.Version
+            }
+            if ($winClaudeVer) {
+                Add-CheckResult "WSL vs Windows" "INFO" "Windows 原生 Claude Code 也已安装 ($winClaudeVer)；WSL 和 Windows 是不同运行环境"
+            }
         }
-        else {
-            Add-CheckResult "WSL: claude" "OK" ($wslClaude.Output.Trim() -replace "`n", " ")
+        "installed_but_not_in_path" {
+            Add-CheckResult "WSL: claude" "WARN" "Claude Code 已安装但未加入 PATH"
+            if ($wslClaude.InstallPaths.Count -gt 0) {
+                $firstPath = $wslClaude.InstallPaths[0]
+                Add-CheckResult "WSL: claude 路径" "INFO" "找到: $firstPath"
+                Add-Suggestion "WSL 内 Claude Code 已安装但 PATH 未配置。修复方式: echo 'export PATH=`"$firstPath`:`$PATH`"' >> ~/.bashrc && source ~/.bashrc"
+            }
+            if ($winClaudeVer) {
+                Add-CheckResult "Windows 原生" "INFO" "Windows 原生 Claude Code 可用 ($winClaudeVer)"
+                Add-Suggestion "当前 Windows 原生 Claude Code 可用；WSL 内需要单独安装后才能在 WSL 终端使用"
+            }
         }
-    }
-    else {
-        Add-CheckResult "WSL: claude" "SKIP" "无法检查"
+        "not_installed" {
+            if ($wslClaude.SettingsExists) {
+                Add-CheckResult "WSL: claude" "WARN" "WSL 已有 Claude 配置，但 WSL 内暂未检测到可运行的 claude 命令"
+                Add-Suggestion "WSL 中 settings.json 存在但 claude 不可用。如需在 WSL 中使用，请运行 install_wsl.sh。"
+            }
+            else {
+                if ($winClaudeVer) {
+                    Add-CheckResult "WSL: claude" "INFO" "WSL 内未安装 Claude Code；Windows 原生 Claude Code 可用 ($winClaudeVer)"
+                    Add-Suggestion "当前 Windows 原生 Claude Code 可用；WSL 内需要单独安装后才能在 WSL 终端使用"
+                }
+                else {
+                    Add-CheckResult "WSL: claude" "WARN" "WSL 内未安装 Claude Code"
+                    Add-Suggestion "在 WSL Ubuntu 中运行 install_wsl.sh 安装 Claude Code。"
+                }
+            }
+        }
+        default {
+            Add-CheckResult "WSL: claude" "SKIP" $wslClaude.Summary
+        }
     }
 
     # 检查 WSL 配置
@@ -620,194 +683,268 @@ function Check-WSL {
 function Write-QuickSummary {
     <#
     .SYNOPSIS
-        生成「一眼结论」区，让售后第一屏就能看懂问题。
+        生成「总体结论」区，面向普通用户的清晰诊断结论。
     #>
     Add-ReportLine ""
-    Add-ReportLine "【一眼结论】（快速判断问题，发给技术支持时最有用）"
+    Add-ReportLine "【总体结论】"
     Add-ReportLine ""
 
-    # 运行环境判断
-    Add-ReportLine "  运行环境: Windows"
-    $wslCheck = Test-WslInstalled
-    if ($wslCheck.Installed) {
-        Add-ReportLine "  WSL 状态: 已启用（但当前在 Windows 中运行）"
-        Add-ReportLine "  注意: Windows 和 WSL 是两套环境，配置不共享"
-    }
-
-    # Claude Code 状态
     $claudeVer = Test-ClaudeInstalled
-    if ($claudeVer) {
-        Add-ReportLine "  Claude Code: 已安装 ($claudeVer)"
-    }
-    else {
-        $claudeCmdExists = Test-CommandAvailable -CommandName "claude"
-        if ($claudeCmdExists) {
-            Add-ReportLine "  Claude Code: 已安装但可能不可用（PATH 未刷新或安装不完整）"
-        }
-        else {
-            Add-ReportLine "  Claude Code: 未安装"
-        }
-    }
-
-    # Node.js 状态
     $nodeInfo = Test-NodeJsInstalled
-    if ($nodeInfo.IsSupported) {
-        Add-ReportLine "  Node.js: 正常 ($($nodeInfo.Version))"
-    }
-    elseif ($nodeInfo.Installed) {
-        Add-ReportLine "  Node.js: 版本过低 ($($nodeInfo.Version)) — 需要 >= 18"
-    }
-    else {
-        Add-ReportLine "  Node.js: 未安装"
-    }
-
-    # npm 状态
-    $npmInfo = Test-NpmInstalled
-    if ($npmInfo.Installed) {
-        Add-ReportLine "  npm: 正常 ($($npmInfo.Version))"
-    }
-    else {
-        $npmDetail = switch ($npmInfo.Status) {
-            "failed_missing_node" { "Node.js 未安装" }
-            "failed_node_too_old" { "Node.js 版本过低" }
-            "failed_missing_npm" { "npm 不可用（Node.js 存在但 npm 缺失，需重装 Node.js）" }
-            "failed_npm_broken" { "npm 命令存在但无法执行" }
-            default { $npmInfo.ErrorMessage }
-        }
-        Add-ReportLine "  npm: 不可用 — $npmDetail"
-    }
-
-    # DeepSeek 配置状态
     $configInfo = Test-ClaudeConfigExists
-    if ($configInfo.Exists) {
-        if ($configInfo.IsValid) {
-            $config = Read-JsonFileSafe -FilePath $configInfo.Path
-            $hasKey = $null
-            if ($config -and $config.env) {
-                $envProps = @(Get-JsonPropertyNamesSafe -Object $config.env)
-                if ($envProps -contains "ANTHROPIC_AUTH_TOKEN") {
-                    $hasKey = $config.env.ANTHROPIC_AUTH_TOKEN
-                }
-            }
-            if (-not [string]::IsNullOrWhiteSpace($hasKey)) {
-                Add-ReportLine "  DeepSeek 配置: 已配置"
-            }
-            else {
-                Add-ReportLine "  DeepSeek 配置: JSON 存在但 API Key 为空"
-            }
+    $hasApiErrors = ($script:DoctorState.Errors.Count -gt 0)
+    $coreErrorCount = @($script:DoctorState.Errors | Where-Object { $_ -notmatch "VS Code" }).Count
+
+    # --- Windows 原生是否可用 ---
+    if ($claudeVer -and $nodeInfo.IsSupported) {
+        $configCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -match "ANTHROPIC_AUTH_TOKEN" }
+        if ($configCheck -and $configCheck.Status -eq "OK") {
+            Add-ReportLine "  Windows 原生 Claude Code: 可用 ($claudeVer)"
         }
         else {
-            Add-ReportLine "  DeepSeek 配置: JSON 损坏（已备份，需重建）"
+            Add-ReportLine "  Windows 原生 Claude Code: CLI 可用 ($claudeVer)，待配置 API Key"
         }
     }
-    else {
-        Add-ReportLine "  DeepSeek 配置: 未配置"
+    elseif ($claudeVer -and -not $nodeInfo.IsSupported) {
+        Add-ReportLine "  Windows 原生 Claude Code: CLI 可用 ($claudeVer)，Node.js 需升级"
+    }
+    elseif (-not $claudeVer) {
+        Add-ReportLine "  Windows 原生 Claude Code: 未安装"
     }
 
-    # API 测试状态（从检测结果中提取）
+    # --- DeepSeek API 是否可用 ---
     $apiCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -match "Anthropic Format smoke test" }
     if ($apiCheck) {
         if ($apiCheck.Status -eq "OK") {
-            Add-ReportLine "  API 测试: 通过"
+            Add-ReportLine "  DeepSeek API: 可用"
         }
         elseif ($apiCheck.Status -eq "SKIP") {
-            Add-ReportLine "  API 测试: 跳过 — 未验证 API 是否可用"
+            Add-ReportLine "  DeepSeek API: 未测试（已跳过）"
         }
         else {
-            Add-ReportLine "  API 测试: 失败 — $($apiCheck.Detail)"
+            Add-ReportLine "  DeepSeek API: 不可用 — $($apiCheck.Detail)"
+        }
+    }
+
+    # --- WSL 是否可用 ---
+    $wslCheck = Test-WslInstalled
+    if ($wslCheck.Installed) {
+        $wslClaudeCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -match "WSL: claude" }
+        if ($wslClaudeCheck -and $wslClaudeCheck.Status -eq "OK") {
+            Add-ReportLine "  WSL: 已启用，Claude Code 已安装"
+        }
+        elseif ($wslClaudeCheck -and $wslClaudeCheck.Status -eq "WARN") {
+            Add-ReportLine "  WSL: 已启用，Claude Code 需要配置"
+        }
+        else {
+            Add-ReportLine "  WSL: 已启用，Claude Code 未安装"
         }
     }
     else {
-        Add-ReportLine "  API 测试: 未执行"
+        Add-ReportLine "  WSL: 未启用"
     }
 
-    # 路径风险
-    $pathRisk = Test-UserPathRisk
-    if ($pathRisk.IsBlocked) {
-        Add-ReportLine "  路径风险: ZIP 临时目录 — 请解压到普通文件夹"
+    # --- 是否存在影响使用的问题 ---
+    if ($coreErrorCount -gt 0) {
+        Add-ReportLine ""
+        Add-ReportLine "  存在影响使用的问题（$coreErrorCount 项错误），请查看下方详细信息。"
     }
-    elseif ($pathRisk.RiskLevel -eq "WARN") {
-        Add-ReportLine "  路径风险: 建议移动项目文件夹"
+    elseif ($script:DoctorState.Warnings.Count -gt 0) {
+        Add-ReportLine ""
+        Add-ReportLine "  存在提示项（$($script:DoctorState.Warnings.Count) 项警告），不影响基础使用。"
     }
     else {
-        Add-ReportLine "  路径风险: 正常"
+        Add-ReportLine ""
+        Add-ReportLine "  未发现影响使用的问题，环境配置正常。"
     }
 
     # 建议动作
     Add-ReportLine ""
     Add-ReportLine "  建议动作:"
-    $hasErrors = ($script:DoctorState.Errors.Count -gt 0)
-    $claudeMissing = (-not $claudeVer)
-    $nodeMissing = (-not $nodeInfo.IsSupported)
-    $configMissing = (-not $configInfo.Exists -or -not $configInfo.IsValid)
-
+    $pathRisk = Test-UserPathRisk
     if ($pathRisk.IsBlocked) {
-        Add-ReportLine "    1. 先完整解压 ZIP 到 D:\ClaudeDeepSeek"
+        Add-ReportLine "    1. 先完整解压 ZIP 到普通文件夹（如 D:\\ClaudeDeepSeek）"
     }
-    if ($nodeMissing) {
+    if (-not $nodeInfo.IsSupported) {
         Add-ReportLine "    - 运行「一键修复依赖.cmd」安装 Node.js"
     }
-    if ($claudeMissing -and -not $nodeMissing) {
+    if (-not $claudeVer) {
         Add-ReportLine "    - 运行「开始安装.cmd」安装 Claude Code"
     }
-    if ($configMissing) {
+    if (-not $configInfo.Exists -or -not $configInfo.IsValid) {
         Add-ReportLine "    - 运行「开始安装.cmd」配置 DeepSeek API Key"
     }
-    if ($hasErrors) {
+    if ($coreErrorCount -gt 0) {
         Add-ReportLine "    - 检查下方 [ERROR] 项目并逐项解决"
     }
-    if (-not $hasErrors -and -not $nodeMissing -and -not $claudeMissing -and -not $configMissing) {
-        Add-ReportLine "    - 所有检测正常，无需额外操作"
+    if ($claudeVer -and $nodeInfo.IsSupported -and $configInfo.Exists -and $coreErrorCount -eq 0) {
+        Add-ReportLine "    - 所有核心检测正常，无需额外操作"
     }
-    Add-ReportLine "    - 请只发送 report.txt，不要发送 backup/、logs/、reports/full-report-*"
     Add-ReportLine ""
 }
 
 function Write-ReportSummary {
     Add-ReportLine ""
-    Add-ReportLine "【环境摘要】"
+    Add-ReportLine "【核心环境】"
     Add-ReportLine ""
 
     $winInfo = Get-WindowsVersionInfo
-    Add-ReportLine "  操作系统:     $($winInfo.Version) (Build $($winInfo.Build))"
-    Add-ReportLine "  PowerShell:   $($PSVersionTable.PSVersion)"
-    Add-ReportLine "  用户目录:     $(Get-UserProfilePath)"
-    Add-ReportLine "  当前用户:     $env:USERNAME ($(if (Test-IsAdministrator) { '管理员' } else { '普通用户' }))"
-    Add-ReportLine "  执行策略:     $(Get-ExecutionPolicyInfo)"
+    Add-ReportLine "  Windows 版本:  $($winInfo.Version) (Build $($winInfo.Build))"
+    Add-ReportLine "  PowerShell:    $($PSVersionTable.PSVersion)"
+    Add-ReportLine "  用户目录:      $(Sanitize-PathForReport -Text (Get-UserProfilePath))"
+    Add-ReportLine ""
+
+    # Node/npm/Git/Claude
+    $nodeInfo = Test-NodeJsInstalled
+    Add-ReportLine "  Node.js:       $(if ($nodeInfo.IsSupported) { $nodeInfo.Version } else { '未安装或版本过低' })"
+    $npmInfo = Test-NpmInstalled
+    Add-ReportLine "  npm:           $(if ($npmInfo.Installed) { $npmInfo.Version } else { '不可用' })"
+    $gitVer = Test-GitInstalled
+    Add-ReportLine "  Git:           $(if ($gitVer) { $gitVer } else { '未安装' })"
+
+    $claudeVer = Test-ClaudeInstalled
+    if ($claudeVer) {
+        Add-ReportLine "  Claude Code:   $claudeVer"
+    }
+    else {
+        Add-ReportLine "  Claude Code:   未安装"
+    }
+
+    # Claude Code 安装路径（脱敏）
+    if ($claudeVer) {
+        try {
+            $claudePath = (Get-Command claude -ErrorAction SilentlyContinue).Source
+            if ($claudePath) {
+                Add-ReportLine "  安装路径:      $(Sanitize-PathForReport -Text $claudePath)"
+            }
+        }
+        catch { }
+    }
+
     Add-ReportLine ""
 }
 
 function Write-ReportChecks {
     Add-ReportLine ""
-    Add-ReportLine "【检测结果】"
+    Add-ReportLine "【检测详情】"
     Add-ReportLine ""
 
-    foreach ($check in $script:DoctorState.CheckResults) {
-        $icon = switch ($check.Status) {
-            "OK"    { "[OK]" }
-            "WARN"  { "[WARN]" }
-            "ERROR" { "[ERROR]" }
-            "SKIP"  { "[SKIP]" }
+    # 分组：核心环境 / DeepSeek 配置 / Claude doctor / WSL / 可选增强
+    $allChecks = $script:DoctorState.CheckResults
+
+    # --- 1. 核心环境 ---
+    $coreNames = @("Windows 版本", "系统架构", "物理内存", "PowerShell", "最低要求",
+        "用户目录", "执行策略", "管理员权限", "Node.js", "npm", "Git", "VS Code (code)",
+        "Claude Code CLI", "Claude 配置目录", "settings.json")
+    $coreChecks = $allChecks | Where-Object { $_.Name -in $coreNames }
+    if ($coreChecks) {
+        Add-ReportLine "  --- 核心环境 ---"
+        foreach ($check in $coreChecks) {
+            $icon = Get-StatusIcon -Status $check.Status
+            $line = "  $icon $($check.Name)"
+            if ($check.Detail) { $line += " - $($check.Detail)" }
+            Add-ReportLine $line
         }
-        $line = "  $icon $($check.Name)"
-        if ($check.Detail) {
-            $line += " - $($check.Detail)"
+        Add-ReportLine ""
+    }
+
+    # --- 2. DeepSeek 配置 ---
+    $dsNames = @("env 字段", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "API Key",
+        "Anthropic Format smoke test", "DeepSeek API 测试",
+        "DNS: api.deepseek.com", "HTTPS: api.deepseek.com", "Windows/WSL 一致性")
+    $dsChecks = $allChecks | Where-Object { $_.Name -in $dsNames }
+    if ($dsChecks) {
+        Add-ReportLine "  --- DeepSeek 配置 ---"
+        foreach ($check in $dsChecks) {
+            $icon = Get-StatusIcon -Status $check.Status
+            $line = "  $icon $($check.Name)"
+            if ($check.Detail) { $line += " - $($check.Detail)" }
+            Add-ReportLine $line
         }
-        Add-ReportLine $line
+        Add-ReportLine ""
+    }
+
+    # --- 3. Claude doctor 摘要 ---
+    $doctorChecks = $allChecks | Where-Object { $_.Name -match "claude doctor" }
+    if ($doctorChecks) {
+        Add-ReportLine "  --- Claude Doctor 摘要 ---"
+        foreach ($check in $doctorChecks) {
+            $icon = Get-StatusIcon -Status $check.Status
+            $line = "  $icon $($check.Name)"
+            if ($check.Detail) { $line += " - $($check.Detail)" }
+            Add-ReportLine $line
+        }
+        Add-ReportLine "  注意: 报告中不包含 Claude 官方 doctor 原始 TUI 输出。"
+        Add-ReportLine ""
+    }
+
+    # --- 4. WSL 状态 ---
+    $wslNames = @("WSL", "WSL 发行版", "WSL 状态", "Ubuntu", "Ubuntu 可启动",
+        "WSL: claude", "WSL: claude 版本", "WSL: claude 路径",
+        "WSL: settings.json", "WSL vs Windows", "Windows 原生")
+    $wslChecks = $allChecks | Where-Object { $_.Name -in $wslNames }
+    if ($wslChecks) {
+        Add-ReportLine "  --- WSL 状态 ---"
+        foreach ($check in $wslChecks) {
+            $icon = Get-StatusIcon -Status $check.Status
+            $line = "  $icon $($check.Name)"
+            if ($check.Detail) { $line += " - $($check.Detail)" }
+            Add-ReportLine $line
+        }
+        Add-ReportLine ""
+    }
+
+    # --- 5. 可选增强 ---
+    $optionalNames = @("code 命令", "Claude Code VS Code 扩展", "Claude Code 扩展",
+        "WSL settings.json")
+    $optChecks = $allChecks | Where-Object { $_.Name -in $optionalNames }
+    if ($optChecks) {
+        Add-ReportLine "  --- 可选增强 ---"
+        foreach ($check in $optChecks) {
+            $icon = Get-StatusIcon -Status $check.Status
+            $line = "  $icon $($check.Name)"
+            if ($check.Detail) { $line += " - $($check.Detail)" }
+            Add-ReportLine $line
+        }
+        Add-ReportLine ""
+    }
+
+    # --- 剩余未分组的检测项 ---
+    $groupedNames = $coreNames + $dsNames + $wslNames + $optionalNames + @("claude doctor")
+    $remaining = $allChecks | Where-Object { $_.Name -notin $groupedNames }
+    if ($remaining) {
+        Add-ReportLine "  --- 其他检测 ---"
+        foreach ($check in $remaining) {
+            $icon = Get-StatusIcon -Status $check.Status
+            $line = "  $icon $($check.Name)"
+            if ($check.Detail) { $line += " - $($check.Detail)" }
+            Add-ReportLine $line
+        }
+        Add-ReportLine ""
+    }
+}
+
+function Get-StatusIcon {
+    param([string]$Status)
+    switch ($Status) {
+        "OK"    { return "[OK]" }
+        "WARN"  { return "[WARN]" }
+        "ERROR" { return "[ERROR]" }
+        "SKIP"  { return "[SKIP]" }
+        "INFO"  { return "[INFO]" }
+        default { return "[?]" }
     }
 }
 
 function Write-ReportErrors {
     if ($script:DoctorState.Errors.Count -eq 0 -and $script:DoctorState.Warnings.Count -eq 0) {
-        Add-ReportLine ""
-        Add-ReportLine "【结论】"
-        Add-ReportLine "  所有检测项目通过，环境配置正常。"
         return
     }
 
     if ($script:DoctorState.Errors.Count -gt 0) {
         Add-ReportLine ""
-        Add-ReportLine "【错误 ([ERROR])】"
+        Add-ReportLine "【需处理的问题】"
         Add-ReportLine ""
         foreach ($err in $script:DoctorState.Errors) {
             Add-ReportLine "  [ERROR] $err"
@@ -816,7 +953,7 @@ function Write-ReportErrors {
 
     if ($script:DoctorState.Warnings.Count -gt 0) {
         Add-ReportLine ""
-        Add-ReportLine "【警告 ([WARN])】"
+        Add-ReportLine "【提醒事项】"
         Add-ReportLine ""
         foreach ($warn in $script:DoctorState.Warnings) {
             Add-ReportLine "  [WARN] $warn"
@@ -837,16 +974,18 @@ function Write-ReportErrors {
 
 function Write-ReportFooter {
     Add-ReportLine ""
-    Add-ReportLine "【API Key 说明】"
+    Add-ReportLine "【隐私说明】"
     $apiKey = Get-ApiKeyFromConfig
     if ($apiKey) {
         $masked = Mask-ApiKey -Key $apiKey
-        Add-ReportLine "  API Key 已设置: $masked"
+        Add-ReportLine "  API Key: $masked"
     }
     else {
-        Add-ReportLine "  API Key 未设置"
+        Add-ReportLine "  API Key: 未设置"
     }
-    Add-ReportLine "  完整 Key 未记录在本报告中，以保护您的隐私。"
+    Add-ReportLine "  完整 API Key 和真实用户路径未记录在本报告中。"
+    Add-ReportLine "  报告中不包含 Claude 官方 doctor 原始 TUI 输出。"
+    Add-ReportLine "  报告中不包含 OAuth/GrowthBook 等内部字段。"
     Add-ReportLine ""
     Add-ReportLine ("=" * 73)
     Add-ReportLine "  报告结束"
@@ -892,16 +1031,24 @@ function Main {
     Write-ReportErrors
     Write-ReportFooter
 
+    # 对报告内容进行综合安全处理（脱敏 + 清洗 + 过滤内部字段）
+    $rawReport = $script:DoctorState.ReportLines -join "`r`n"
+    $safeReport = Convert-ToSafeReportText -Text $rawReport
+
     # 输出到控制台摘要
     Write-Host ""
     Write-Host ("=" * 60) -ForegroundColor Cyan
     $okCount = @($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "OK" }).Count
     $warnCount = @($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "WARN" }).Count
     $errCount = @($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "ERROR" }).Count
+    $infoCount = @($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "INFO" }).Count
     $totalCount = $script:DoctorState.CheckResults.Count
 
     Write-Host "  检测总结: 共 $totalCount 项" -ForegroundColor White
     Write-Host "   正常: $okCount 项" -ForegroundColor Green
+    if ($infoCount -gt 0) {
+        Write-Host "  [INFO] 信息: $infoCount 项" -ForegroundColor Cyan
+    }
     if ($warnCount -gt 0) {
         Write-Host "  [WARN] 警告: $warnCount 项" -ForegroundColor Yellow
     }
@@ -923,15 +1070,13 @@ function Main {
 
     if ($OutputPath) {
         # 指定输出路径：写入分享版报告
-        $reportContent = $script:DoctorState.ReportLines -join "`r`n"
-        $shareContent = Sanitize-ReportText -Text $reportContent
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
         $outputDir = Split-Path -Parent $OutputPath
         if ($outputDir -and -not (Test-Path $outputDir)) {
             New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
         }
-        [System.IO.File]::WriteAllText($OutputPath, $shareContent, $utf8NoBom)
+        [System.IO.File]::WriteAllText($OutputPath, $safeReport, $utf8NoBom)
 
         $fullOutputPath = (Resolve-Path $OutputPath -ErrorAction SilentlyContinue).Path
         if (-not $fullOutputPath) { $fullOutputPath = $OutputPath }
@@ -940,27 +1085,44 @@ function Main {
     else {
         # 使用双报告机制
         $isShareSafeMode = ($ShareSafe -or $Anonymize)
-        $reportResult = Write-DiagnosticReports -ReportLines $script:DoctorState.ReportLines -ScriptDir $ScriptDir -Timestamp $timestamp -IncludeFullReport:(-not $isShareSafeMode)
+        $reportsDir = Join-Path $ScriptDir "reports"
+        if (-not (Test-Path $reportsDir)) {
+            New-Item -ItemType Directory -Path $reportsDir -Force | Out-Null
+        }
 
-        $fullSharePath = (Resolve-Path $reportResult.SharePath -ErrorAction SilentlyContinue).Path
-        if (-not $fullSharePath) { $fullSharePath = $reportResult.SharePath }
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        $reportTimestamp = $timestamp
+
+        # 1. 分享版报告（已通过 Convert-ToSafeReportText 完全脱敏清洗）
+        $shareRootPath = Join-Path $ScriptDir "report.txt"
+        [System.IO.File]::WriteAllText($shareRootPath, $safeReport, $utf8NoBom)
+
+        # 2. 分享版历史
+        $historyPath = Join-Path $reportsDir "report-$reportTimestamp.txt"
+        [System.IO.File]::WriteAllText($historyPath, $safeReport, $utf8NoBom)
+
+        $fullSharePath = (Resolve-Path $shareRootPath -ErrorAction SilentlyContinue).Path
+        if (-not $fullSharePath) { $fullSharePath = $shareRootPath }
 
         Write-Host ""
         Write-Success "已生成诊断报告:"
 
         if ($isShareSafeMode) {
-            # 分享安全模式：仅输出脱敏版，不生成完整版路径提示
             Write-Info "  分享版报告（可发送）: $fullSharePath"
             Write-Host ""
             Write-Info "已启用分享安全模式（-ShareSafe），仅生成脱敏报告。"
-            Write-Info "报告中已隐藏用户名和项目路径，可安全分享。"
+            Write-Info "报告中已隐藏用户名、路径、API Key 和内部字段，可安全分享。"
         }
         else {
-            $fullHistoryPath = (Resolve-Path $reportResult.HistoryPath -ErrorAction SilentlyContinue).Path
-            if (-not $fullHistoryPath) { $fullHistoryPath = $reportResult.HistoryPath }
+            # 3. 完整版报告（仅脱敏 API Key，保留路径用于本地排错）
+            $fullContent = Sanitize-SecretLikeText -Text $rawReport
+            $fullReportPath = Join-Path $reportsDir "full-report-$reportTimestamp.txt"
+            [System.IO.File]::WriteAllText($fullReportPath, $fullContent, $utf8NoBom)
 
-            $fullLocalPath = (Resolve-Path $reportResult.FullPath -ErrorAction SilentlyContinue).Path
-            if (-not $fullLocalPath) { $fullLocalPath = $reportResult.FullPath }
+            $fullHistoryPath = (Resolve-Path $historyPath -ErrorAction SilentlyContinue).Path
+            if (-not $fullHistoryPath) { $fullHistoryPath = $historyPath }
+            $fullLocalPath = (Resolve-Path $fullReportPath -ErrorAction SilentlyContinue).Path
+            if (-not $fullLocalPath) { $fullLocalPath = $fullReportPath }
 
             Write-Info "  分享版报告（可发送）: $fullSharePath"
             Write-Info "  分享版历史: $fullHistoryPath"
@@ -979,7 +1141,7 @@ function Main {
         $supportPathForClipboard = $OutputPath
     }
     else {
-        $supportPathForClipboard = $reportResult.SharePath
+        $supportPathForClipboard = $shareRootPath
     }
 
     if ($env:CCDI_TEST_MODE -ne "1") {

@@ -3,6 +3,17 @@
 # 提供统一的日志记录和彩色控制台输出功能
 # ============================================================
 
+# --- 编码初始化（防止 Windows PowerShell 5.1 控制台乱码）---
+try {
+    [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $null = & chcp 65001 2>$null
+}
+catch {
+    # 编码设置失败不阻塞模块加载
+}
+
 # 全局日志目录和文件路径
 $script:LogDir = $null
 $script:LogFile = $null
@@ -163,7 +174,7 @@ function Write-Result {
     #>
     param(
         [string]$Name,
-        [ValidateSet("OK", "WARN", "ERROR", "SKIP")]
+        [ValidateSet("OK", "WARN", "ERROR", "SKIP", "INFO")]
         [string]$Status,
         [string]$Detail = ""
     )
@@ -173,6 +184,7 @@ function Write-Result {
         "WARN"  { "Yellow" }
         "ERROR" { "Red" }
         "SKIP"  { "DarkGray" }
+        "INFO"  { "Cyan" }
     }
 
     $output = "[$Status] $Name"
