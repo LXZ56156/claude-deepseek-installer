@@ -615,25 +615,26 @@ function Check-WSL {
         return
     }
 
+    $ubuntuDistroName = if ($ubuntuInfo.Name) { $ubuntuInfo.Name } else { "Ubuntu" }
     $stateText = if ($ubuntuInfo.Running) { "Running" } else { "已停止" }
-    Add-CheckResult "Ubuntu" "OK" $stateText
+    Add-CheckResult "Ubuntu ($ubuntuDistroName)" "OK" $stateText
 
-    # 如果 Ubuntu 未运行，尝试临时启动 WSL 执行只读检测（不直接 return）
+    # 如果 Ubuntu 未运行，尝试临时启动 WSL 执行只读检测
     if (-not $ubuntuInfo.Running) {
-        Write-Info "Ubuntu 当前未运行，诊断将临时启动 WSL 执行只读检测..."
-        # 尝试用 wsl -d 启动并检测；如果启动失败再给 WARN
-        $wslStartCheck = Invoke-CommandSafe -Command "wsl" -Arguments @("-d", "Ubuntu", "bash", "-c", "echo 'WSL_START_OK'") -TimeoutSec 15
+        Write-Info "Ubuntu ($ubuntuDistroName) 当前未运行，诊断将临时启动 WSL 执行只读检测..."
+        $wslStartCheck = Invoke-CommandSafe -Command "wsl" -Arguments @(
+            "-d", $ubuntuDistroName, "bash", "-c", "echo 'WSL_START_OK'"
+        ) -TimeoutSec 15
         if (-not $wslStartCheck.Success -or $wslStartCheck.Output -notmatch "WSL_START_OK") {
-            Add-CheckResult "Ubuntu 可启动" "WARN" "当前未运行且无法临时启动"
-            Add-Suggestion "请在 PowerShell 中运行 'wsl' 启动 Ubuntu 后重新诊断。"
-            # 无法启动则跳过 WSL 内检测
+            Add-CheckResult "Ubuntu 可启动" "WARN" "发行版 $ubuntuDistroName 当前未运行且无法临时启动"
+            Add-Suggestion "请手动运行 'wsl -d $ubuntuDistroName' 启动后重新诊断。"
             return
         }
     }
 
-    # 检查 WSL 内的 Claude 状态（使用综合检测）
+    # 检查 WSL 内的 Claude 状态（使用综合检测，传入发行版名称）
     Write-Info "正在检查 WSL 内 Claude Code 状态（多路径综合检测）..."
-    $wslClaude = Test-WslClaudeComprehensive
+    $wslClaude = Test-WslClaudeComprehensive -DistroName $ubuntuDistroName
 
     # 获取 Windows 原生 Claude 安装信息
     $winClaudeVer = Test-ClaudeInstalled
@@ -698,14 +699,24 @@ function Check-WSL {
         }
     }
 
-    # 检查 WSL 配置
-    $wslConfig = Invoke-CommandSafe -Command "wsl" -Arguments @("bash", "-c", "test -f ~/.claude/settings.json && echo 'EXISTS' || echo 'NOT_FOUND'")
+    # 检查 WSL 配置（使用同一个 $ubuntuDistroName，不依靠默认发行版）
+    if ($ubuntuDistroName) {
+        $wslConfig = Invoke-CommandSafe -Command "wsl" -Arguments @(
+            "-d", $ubuntuDistroName, "bash", "-c",
+            "test -f ~/.claude/settings.json && echo 'EXISTS' || echo 'NOT_FOUND'"
+        )
+    }
+    else {
+        Write-Info "未能确定 Ubuntu 发行版名称，settings.json 检测使用默认 WSL 发行版。"
+        $wslConfig = Invoke-CommandSafe -Command "wsl" -Arguments @(
+            "bash", "-c", "test -f ~/.claude/settings.json && echo 'EXISTS' || echo 'NOT_FOUND'"
+        )
+    }
     if ($wslConfig.Success) {
         if ($wslConfig.Output -match "NOT_FOUND") {
             Add-CheckResult "WSL: settings.json" "WARN" "WSL 内无配置"
         }
         else {
-            # 安全显示配置（不输出完整内容到控制台）
             Add-CheckResult "WSL: settings.json" "OK" "已配置"
         }
     }

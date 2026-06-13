@@ -686,7 +686,56 @@ if ($claudeInstallText -notmatch 'StandardInput' -or $claudeInstallText -notmatc
     throw "Invoke-ClaudeDoctorInteractiveSafe must write newlines to stdin to prevent pagination"
 }
 
+# 47. Test-UbuntuInWsl must return Name field
+if ($envCheckText -notmatch 'Name\s*=\s*\$distro\.Name' -and $envCheckText -notmatch 'Name\s*=\s*\$distro\.Name') {
+    # Fallback: check that Name field exists in result hashtable
+    if ($envCheckText -notmatch 'Name\s*=\s*\$null' -and $envCheckText -notmatch '"Name"') {
+        Write-Host "  WARN: Test-UbuntuInWsl may not return Name field"
+    }
+}
+if ($envCheckText -notmatch 'Name\s*=\s*\$') {
+    throw "Test-UbuntuInWsl must include Name field in its return hashtable"
+}
+
+# 48. Check-WSL must NOT hardcode -d "Ubuntu" in startup check
+if ($doctorText -match '-d",\s*"Ubuntu",\s*"bash"' -or $doctorText -match '-d", "Ubuntu", "bash"') {
+    throw "Check-WSL must not hardcode 'Ubuntu' in wsl -d argument; use ubuntuDistroName variable"
+}
+# Must use ubuntuDistroName variable for -d argument
+if ($doctorText -notmatch 'ubuntuDistroName') {
+    throw "Check-WSL must use ubuntuDistroName variable for WSL distro detection"
+}
+
+# 49. WSL settings.json check must use -d with distro name
+# doctor.ps1 must contain both -d $ubuntuDistroName and settings.json near the WSL config check
+$doctorText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+if ($doctorText -notmatch '\-d.*\$ubuntuDistroName' -and $doctorText -notmatch '\$ubuntuDistroName.*\-d') {
+    throw "WSL settings.json detection must use -d `$ubuntuDistroName somewhere in Check-WSL"
+}
+# The wsl settings check area must reference settings.json
+if ($doctorText -notmatch 'settings\.json.*EXISTS.*NOT_FOUND') {
+    throw "WSL settings.json detection must still check for settings.json"
+}
+
+# 50. Test-WslClaudeComprehensive base64 must support both -d and --decode
+if ($envCheckText -notmatch 'base64\s+-d' -or $envCheckText -notmatch 'base64\s+--decode') {
+    throw "Test-WslClaudeComprehensive base64 must support both 'base64 -d' and 'base64 --decode'"
+}
+if ($envCheckText -notmatch 'CCDI_BASE64_MISSING') {
+    throw "Test-WslClaudeComprehensive must handle missing base64 command (CCDI_BASE64_MISSING)"
+}
+# Must use printf instead of echo for base64 piping
+if ($envCheckText -notmatch "printf.*%s.*encodedScript") {
+    throw "Test-WslClaudeComprehensive must use printf (not echo) for base64 piping"
+}
+
+# 51. Check-WSL must pass distro name to Test-WslClaudeComprehensive
+if ($doctorText -notmatch 'Test-WslClaudeComprehensive\s+-DistroName') {
+    throw "Check-WSL must pass -DistroName to Test-WslClaudeComprehensive"
+}
+
 Write-Host "[check] Text cleaning and report safety functions OK"
+Write-Host "[check] WSL distro name and base64 compatibility OK"
 
 Write-Host "[check] Visible install command UX"
 $claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8

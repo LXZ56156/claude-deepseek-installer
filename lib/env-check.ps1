@@ -465,13 +465,14 @@ function Test-UbuntuInWsl {
     .SYNOPSIS
         检测 WSL 中是否存在 Ubuntu 发行版
     .RETURNS
-        包含 Exists, Running, Default 的哈希表
+        包含 Exists, Running, Default, Name 的哈希表
     #>
     $wslInfo = Test-WslInstalled
     $result = @{
         Exists  = $false
         Running = $false
         Default = $false
+        Name    = $null
     }
 
     if (-not $wslInfo.Installed) {
@@ -483,6 +484,7 @@ function Test-UbuntuInWsl {
             $result.Exists = $true
             $result.Running = $distro.Running
             $result.Default = $distro.Default
+            $result.Name = $distro.Name
             break
         }
     }
@@ -603,11 +605,14 @@ echo "CCDI_DETECTION_COMPLETE=1"
 
     Write-Log "INFO" "Test-WslClaudeComprehensive: 在 WSL ($DistroName) 中运行综合检测"
 
-    # 将检测脚本通过 stdin 传给 bash（避免 bash -c 通过 cmd.exe 时的引号转义问题）
-    # 使用简单的单行包装，把脚本内容编码为 base64 传给 WSL
+    # 将检测脚本 base64 编码后通过 WSL 执行
+    # 使用 printf 替代 echo（避免 echo 对特殊字符的处理差异）
+    # 兼容 base64 -d (GNU coreutils) 和 base64 --decode (BusyBox/Alpine)
     $encodedScript = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($detectionScript))
+    $decodeCmd = "{ base64 -d 2>/dev/null || base64 --decode 2>/dev/null || echo 'CCDI_BASE64_MISSING'; }"
+    $bashCmd = "printf '%s' '$encodedScript' | $decodeCmd | bash"
     $detectResult = Invoke-CommandSafe -Command "wsl" -Arguments @(
-        "-d", $DistroName, "bash", "-c", "echo $encodedScript | base64 -d | bash"
+        "-d", $DistroName, "bash", "-c", $bashCmd
     ) -TimeoutSec 20
 
     if (-not $detectResult.Success) {
@@ -618,6 +623,14 @@ echo "CCDI_DETECTION_COMPLETE=1"
     }
 
     $output = $detectResult.Output
+
+    # 检查 base64 命令是否可用
+    if ($output -match 'CCDI_BASE64_MISSING') {
+        $result.Summary = "WSL 内 base64 命令不可用，无法执行综合检测"
+        Write-Log "WARN" "Test-WslClaudeComprehensive: WSL 内 base64 命令不可用"
+        [void]$result.DetectionNotes.Add("base64 命令不可用")
+        return $result
+    }
 
     # 解析检测结果
     if ($output -match 'CCDI_CLAUDE_IN_PATH=1') {
