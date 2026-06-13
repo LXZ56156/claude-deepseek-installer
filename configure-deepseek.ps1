@@ -80,7 +80,9 @@ else {
     Write-Host ""
     Write-Info "请输入您的 DeepSeek API Key。"
     Write-Info "获取地址: https://platform.deepseek.com → API Keys"
-    Write-Warning "输入时字符不会显示（安全保护），请粘贴后按回车。"
+    Write-Info "输入时不会显示字符，这是正常的安全保护。"
+    Write-Info "请直接粘贴后按回车。"
+    Write-Info "下一步会显示脱敏后的 Key，可选择 R 重新粘贴。"
     Write-Warning "如选择 API 测试，Key 会发送到 DeepSeek 官方接口验证，不会发送给第三方。"
     Write-Host ""
 
@@ -126,6 +128,8 @@ if ($SkipApiTest) {
 }
 else {
     # 测试 API 连接
+    Write-Info "正在测试 DeepSeek API，最长等待 30 秒。"
+    Write-Info "如果失败，配置仍会保留，可稍后运行一键诊断。"
     Write-Info "正在测试 DeepSeek API 连接（Anthropic Format）..."
     $apiTest = Test-DeepSeekApiAnthropic -ApiKey $apiKey
 

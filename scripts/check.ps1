@@ -1038,6 +1038,78 @@ if ($installPs1Text -notmatch '"ConfigureOnly"\s+\{\s*"正在切换到 DeepSeek 
 Write-Host "[check] Legacy install.ps1 entry point guardrails OK"
 
 # ============================================================
+# UX 文案检查（v1.3.2 第二轮优化）
+# ============================================================
+Write-Host "[check] UX text checks for API key onboarding and wait-state messaging"
+
+$startHereText = Get-Content -Path (Join-Path $RootDir "Start-Here.ps1") -Raw -Encoding UTF8
+$configureText = Get-Content -Path (Join-Path $RootDir "configure-deepseek.ps1") -Raw -Encoding UTF8
+
+# 1. Step-GetApiKey 菜单文案
+$menuTexts = @(
+    "我已复制 Key，开始粘贴",
+    "重新打开 DeepSeek API Key 页面",
+    "暂时跳过，稍后配置",
+    "查看获取 Key 的简明步骤"
+)
+foreach ($mt in $menuTexts) {
+    if ($startHereText -notmatch [regex]::Escape($mt)) {
+        throw "Step-GetApiKey missing menu text: $mt"
+    }
+}
+
+# 2. Step-TestApi 等待提示
+$waitTexts = @(
+    "最长等待 30 秒",
+    "配置仍会保留"
+)
+foreach ($wt in $waitTexts) {
+    if ($startHereText -notmatch [regex]::Escape($wt)) {
+        throw "Step-TestApi missing wait prompt: $wt"
+    }
+}
+
+# 3. Start-LazyInstall Step 2 之后不得只有无上下文的 Pause-ForUser -Force
+# 必须包含 "Claude Code 安装验证已通过" 等上下文
+if ($startHereText -notmatch "Claude Code 安装验证已通过") {
+    throw "Start-LazyInstall must show context message after Step 2 install success"
+}
+if ($startHereText -notmatch "下一步将配置 DeepSeek API Key") {
+    throw "Start-LazyInstall must explain next step (DeepSeek API Key config) after Step 2"
+}
+if ($startHereText -notmatch "检测到 Claude Code 已安装，继续配置 DeepSeek") {
+    throw "Start-LazyInstall must show existing-install message when Claude is already installed"
+}
+
+# 4. configure-deepseek.ps1 API 测试最长等待提示
+if ($configureText -notmatch [regex]::Escape("最长等待 30 秒")) {
+    throw "configure-deepseek.ps1 must prompt '最长等待 30 秒' before API test"
+}
+if ($configureText -notmatch [regex]::Escape("如果失败，配置仍会保留")) {
+    throw "configure-deepseek.ps1 must show '配置仍会保留' on API test failure path"
+}
+
+# 5. configure-deepseek.ps1 key input prompts
+if ($configureText -notmatch "输入时不会显示字符，这是正常的安全保护") {
+    throw "configure-deepseek.ps1 must show security notice before key input"
+}
+if ($configureText -notmatch "下一步会显示脱敏后的 Key，可选择 R 重新粘贴") {
+    throw "configure-deepseek.ps1 must show re-paste hint before key input"
+}
+
+# 6. SkipApiTest / TestSafe / NonInteractive 不受影响
+# Step-GetApiKey NonInteractive 路径必须存在（不做菜单）
+if ($startHereText -notmatch 'if\s*\(\$NonInteractive\)\s*\{[\s\S]{0,300}Get-ApiKeyFromEnvironment') {
+    throw "Step-GetApiKey NonInteractive path must still use Get-ApiKeyFromEnvironment"
+}
+# Step-TestApi SkipApiTest 路径必须存在
+if ($startHereText -notmatch '\$script:EffectiveSkipApiTest') {
+    throw "Step-TestApi must still check EffectiveSkipApiTest"
+}
+
+Write-Host "[check] UX text checks OK"
+
+# ============================================================
 # 安装安全与返回结构检查（全部在 CCDI_TEST_MODE=1 下运行）
 #
 # 覆盖内容:

@@ -564,6 +564,52 @@ x-api-key: $TestApiKey
     } "install.ps1 ConfigureOnly 模式使用了不准确的'一键安装流程'文案"
 
     # ============================================================
+    # 17. UX 文案检查（v1.3.2 API Key 引导和等待提示）
+    # ============================================================
+    Write-CheckHeader "17. UX 文案检查"
+
+    $startHerePath = Join-Path $ScriptRoot "Start-Here.ps1"
+    $configurePath = Join-Path $ScriptRoot "configure-deepseek.ps1"
+    $startHereText = Get-Content $startHerePath -Raw -Encoding UTF8
+    $configureText = Get-Content $configurePath -Raw -Encoding UTF8
+
+    # Step-GetApiKey 菜单文案必须存在
+    $menuTexts = @(
+        "我已复制 Key，开始粘贴",
+        "重新打开 DeepSeek API Key 页面",
+        "暂时跳过，稍后配置",
+        "查看获取 Key 的简明步骤"
+    )
+    foreach ($mt in $menuTexts) {
+        Assert "Step-GetApiKey 包含菜单文案: $mt" { $startHereText -match [regex]::Escape($mt) } "缺失菜单文案"
+    }
+
+    # Step-TestApi 等待提示
+    Assert "Step-TestApi 包含『最长等待 30 秒』" { $startHereText -match [regex]::Escape("最长等待 30 秒") } "缺失等待提示"
+    Assert "Step-TestApi 包含『配置仍会保留』" { $startHereText -match [regex]::Escape("配置仍会保留") } "缺失保留说明"
+
+    # Start-LazyInstall Step 2 后有上下文文案
+    Assert "Step 2 后有 Claude Code 安装验证已通过" { $startHereText -match "Claude Code 安装验证已通过" } "缺失安装成功文案"
+    Assert "Step 2 后有下一步说明" { $startHereText -match "下一步将配置 DeepSeek API Key" } "缺失下一步说明"
+    Assert "Step 2 后有已安装检测" { $startHereText -match "检测到 Claude Code 已安装，继续配置 DeepSeek" } "缺失已安装检测"
+
+    # configure-deepseek.ps1 提示
+    Assert "configure-deepseek.ps1 包含最长等待 30 秒" { $configureText -match [regex]::Escape("最长等待 30 秒") } "缺失等待提示"
+    Assert "configure-deepseek.ps1 包含配置仍会保留" { $configureText -match [regex]::Escape("如果失败，配置仍会保留") } "缺失保留说明"
+    Assert "configure-deepseek.ps1 包含安全提示" { $configureText -match "输入时不会显示字符，这是正常的安全保护" } "缺失安全提示"
+    Assert "configure-deepseek.ps1 包含重新粘贴提示" { $configureText -match "下一步会显示脱敏后的 Key，可选择 R 重新粘贴" } "缺失重新粘贴提示"
+
+    # SkipApiTest / TestSafe / NonInteractive 路径未受影响
+    Assert "Step-GetApiKey NonInteractive 路径存在" {
+        $startHereText -match 'if\s*\(\$NonInteractive\)\s*\{[\s\S]{0,300}Get-ApiKeyFromEnvironment'
+    } "NonInteractive 路径缺失"
+    Assert "Step-TestApi EffectiveSkipApiTest 存在" {
+        $startHereText -match '\$script:EffectiveSkipApiTest'
+    } "EffectiveSkipApiTest 缺失"
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""

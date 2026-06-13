@@ -104,6 +104,39 @@ function Pause-ForUser {
     }
 }
 
+function Pause-ForNextStep {
+    <#
+    .SYNOPSIS
+        显示多行说明后暂停，仅在交互模式下生效。
+        不影响 NonInteractive，不破坏 StepPause 参数。
+    .PARAMETER Messages
+        要显示的多行说明文本。
+    .PARAMETER Force
+        强制暂停（忽略 StepPause 开关）。
+    #>
+    param(
+        [string[]]$Messages,
+        [switch]$Force
+    )
+
+    if ($NonInteractive) {
+        Write-Log "DEBUG" "Pause-ForNextStep: 非交互模式，跳过暂停"
+        return
+    }
+
+    if (-not ($Force -or $StepPause)) {
+        Write-Log "DEBUG" "Pause-ForNextStep: StepPause 未启用且非强制，跳过暂停"
+        return
+    }
+
+    Write-Host ""
+    foreach ($msg in $Messages) {
+        Write-Info $msg
+    }
+    Write-Host ""
+    Read-Host "按回车键继续..."
+}
+
 # ============================================================
 # 免责声明
 # ============================================================
@@ -446,18 +479,7 @@ function Step-GetApiKey {
         return $envKey.Key
     }
 
-    # 提示获取方式
-    Write-Host "  ---------------------------------------------------------" -ForegroundColor Cyan
-    Write-Host "    获取 API Key 步骤:                                     " -ForegroundColor Cyan
-    Write-Host "    1. 打开 https://platform.deepseek.com/api_keys          " -ForegroundColor Cyan
-    Write-Host "    2. 注册/登录 DeepSeek 账号                              " -ForegroundColor Cyan
-    Write-Host "    3. 点击「创建 API Key」                                 " -ForegroundColor Cyan
-    Write-Host "    4. 复制生成的 Key（通常以 sk- 开头）                    " -ForegroundColor Cyan
-    Write-Host "    5. 回到此窗口粘贴                                       " -ForegroundColor Cyan
-    Write-Host "  ---------------------------------------------------------" -ForegroundColor Cyan
-    Write-Host ""
-
-    # 自动打开 DeepSeek API Key 页面
+    # 自动打开 DeepSeek API Key 页面（首次）
     Write-Info "正在为您打开 DeepSeek API Key 页面..."
     try {
         Start-Process "https://platform.deepseek.com/api_keys"
@@ -466,31 +488,89 @@ function Step-GetApiKey {
     catch {
         Write-Info "请手动在浏览器中打开: https://platform.deepseek.com/api_keys"
     }
-    Write-Host ""
 
-    Write-Warning "请不要把 API Key 发给卖家或任何第三方！"
-    Write-Info "输入时不会显示字符，这是正常的安全保护。"
-    Write-Info "请直接粘贴后按回车。"
-    Write-Host ""
+    # 预备菜单循环
+    :menu while ($true) {
+        Write-Host ""
+        Write-Host "==============================================================" -ForegroundColor Cyan
+        Write-Host "  DeepSeek API Key 准备" -ForegroundColor Cyan
+        Write-Host "==============================================================" -ForegroundColor Cyan
+        Write-Host "已为你打开 DeepSeek API Key 页面。"
+        Write-Host "请在浏览器中登录 / 创建 API Key，然后回到本窗口继续。"
+        Write-Host ""
+        Write-Host "  [1] 我已复制 Key，开始粘贴"
+        Write-Host "  [2] 重新打开 DeepSeek API Key 页面"
+        Write-Host "  [3] 暂时跳过，稍后配置"
+        Write-Host "  [4] 查看获取 Key 的简明步骤"
+        Write-Host ""
 
-    $apiKey = Read-ApiKeyWithMaskedConfirmation -Prompt "请粘贴您的 DeepSeek API Key"
+        $choice = Read-Host "请输入选项编号（直接回车默认 1）"
 
-    if ([string]::IsNullOrWhiteSpace($apiKey)) {
-        Write-Error-Msg "API Key 不能为空！"
-        Write-Info "您可以稍后运行 configure-deepseek.ps1 单独配置。"
-        return $null
-    }
+        if ([string]::IsNullOrWhiteSpace($choice)) {
+            $choice = "1"
+        }
 
-    # 格式检查
-    if (-not (Is-ApiKeyFormatValid -Key $apiKey)) {
-        Write-Warning "API Key 格式看起来不典型（DeepSeek Key 通常以 sk- 开头，长度 >= 32 字符）"
-        if (-not (Confirm-UserChoice -Message "是否仍然使用此 Key？")) {
-            Write-Info "已取消。您可以稍后重新运行配置。"
-            return $null
+        switch ($choice) {
+            "1" {
+                Write-Host ""
+                Write-Warning "请不要把 API Key 发给卖家或任何第三方！"
+                Write-Info "输入时不会显示字符，这是正常的安全保护。"
+                Write-Info "请直接粘贴后按回车。"
+                Write-Info "下一步会显示脱敏后的 Key，可选择 R 重新粘贴。"
+                Write-Host ""
+
+                $apiKey = Read-ApiKeyWithMaskedConfirmation -Prompt "请粘贴您的 DeepSeek API Key"
+
+                if ([string]::IsNullOrWhiteSpace($apiKey)) {
+                    Write-Error-Msg "API Key 不能为空！"
+                    Write-Info "您可以稍后运行 configure-deepseek.ps1 单独配置。"
+                    return $null
+                }
+
+                # 格式检查
+                if (-not (Is-ApiKeyFormatValid -Key $apiKey)) {
+                    Write-Warning "API Key 格式看起来不典型（DeepSeek Key 通常以 sk- 开头，长度 >= 32 字符）"
+                    if (-not (Confirm-UserChoice -Message "是否仍然使用此 Key？")) {
+                        Write-Info "已取消。您可以稍后重新运行配置。"
+                        return $null
+                    }
+                }
+
+                return $apiKey
+            }
+            "2" {
+                Write-Info "正在重新打开 DeepSeek API Key 页面..."
+                try {
+                    Start-Process "https://platform.deepseek.com/api_keys"
+                }
+                catch {
+                    Write-Info "请手动在浏览器中打开: https://platform.deepseek.com/api_keys"
+                }
+                continue menu
+            }
+            "3" {
+                Write-Host ""
+                Write-Info "已跳过 API Key 配置。"
+                Write-Info "可稍后运行：开始安装.cmd -> 高级选项 -> 仅配置 DeepSeek API。"
+                Write-Info "也可以运行 configure-deepseek.ps1 单独配置。"
+                return $null
+            }
+            "4" {
+                Write-Host ""
+                Write-Info "获取 DeepSeek API Key 步骤："
+                Write-Info "  1. 打开 https://platform.deepseek.com/api_keys"
+                Write-Info "  2. 登录 DeepSeek 账号"
+                Write-Info "  3. 点击创建 API Key"
+                Write-Info "  4. 复制以 sk- 开头的 Key"
+                Write-Info "  5. 回到此窗口选择 1 粘贴"
+                continue menu
+            }
+            default {
+                Write-Warning "无效选项，请输入 1-4。"
+                continue menu
+            }
         }
     }
-
-    return $apiKey
 }
 
 # ============================================================
@@ -548,6 +628,8 @@ function Step-TestApi {
         return
     }
 
+    Write-Info "正在测试 DeepSeek API，最长等待 30 秒。"
+    Write-Info "如果测试失败，配置仍会保留，可稍后运行「一键诊断.cmd」重新检测。"
     Write-Info "正在使用 Anthropic Format 接口验证 DeepSeek API..."
     Write-Info "测试模型: deepseek-v4-flash（快速模型，响应快，成本低）"
     Write-Info "这只发送极短测试消息 'Reply OK only.'"
@@ -1046,7 +1128,18 @@ function Start-LazyInstall {
         return
     }
 
-    Pause-ForUser -Force
+    # 安装成功后暂停：区分已安装和新安装的提示
+    if ($script:ClaudeInstallMethod -eq "existing" -or $script:ClaudeInstallStatus -eq "skipped_existing") {
+        Write-Info "检测到 Claude Code 已安装，继续配置 DeepSeek。"
+        Pause-ForUser
+    }
+    else {
+        Pause-ForNextStep -Force -Messages @(
+            "Claude Code 安装验证已通过。",
+            "下一步将配置 DeepSeek API Key。",
+            "你需要在浏览器中复制自己的 DeepSeek API Key。"
+        )
+    }
 
     # Step 3: 获取 API Key
     $apiKey = Step-GetApiKey
