@@ -1004,6 +1004,37 @@ if ($installLineCount -gt 120) {
     throw "install.ps1 should be a lightweight shim (<= 120 lines), actually $installLineCount lines"
 }
 
+# 10. Must NOT contain exit $LASTEXITCODE (unreliable for .ps1 exit status)
+if ($installPs1Text -match 'exit\s+\$LASTEXITCODE') {
+    throw "install.ps1 must NOT use exit `$LASTEXITCODE; use Invoke-CcdiScriptAndExit instead"
+}
+
+# 11. Must contain Invoke-CcdiScriptAndExit safe forwarding function
+if ($installPs1Text -notmatch 'function Invoke-CcdiScriptAndExit') {
+    throw "install.ps1 must define Invoke-CcdiScriptAndExit safe forwarding function"
+}
+
+# 12. All three forwarding branches must use Invoke-CcdiScriptAndExit
+if ($installPs1Text -notmatch 'Invoke-CcdiScriptAndExit\s+-ScriptPath\s+\$doctorPath') {
+    throw "install.ps1 Doctor branch must use Invoke-CcdiScriptAndExit"
+}
+if ($installPs1Text -notmatch 'Invoke-CcdiScriptAndExit\s+-ScriptPath\s+\$configPath') {
+    throw "install.ps1 ConfigureOnly branch must use Invoke-CcdiScriptAndExit"
+}
+if ($installPs1Text -notmatch 'Invoke-CcdiScriptAndExit\s+-ScriptPath\s+\$startHerePath') {
+    throw "install.ps1 Start-Here forwarding must use Invoke-CcdiScriptAndExit"
+}
+
+# 13. Doctor mode forwardMessage must NOT say "一键安装流程" (inaccurate for diagnostic mode)
+if ($installPs1Text -notmatch '"Doctor"\s+\{\s*"正在切换到新版诊断入口') {
+    throw "install.ps1 Doctor mode must use diagnostic-specific forwarding message (not '一键安装流程')"
+}
+
+# 14. ConfigureOnly mode forwardMessage must NOT say "一键安装流程" (inaccurate for config-only mode)
+if ($installPs1Text -notmatch '"ConfigureOnly"\s+\{\s*"正在切换到 DeepSeek 单独配置入口') {
+    throw "install.ps1 ConfigureOnly mode must use config-specific forwarding message (not '一键安装流程')"
+}
+
 Write-Host "[check] Legacy install.ps1 entry point guardrails OK"
 
 # ============================================================

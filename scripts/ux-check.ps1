@@ -535,6 +535,34 @@ x-api-key: $TestApiKey
         ($installContent -split "`n").Count -le 120
     } "install.ps1 超过 120 行，不是轻量入口"
 
+    Assert "install.ps1 不依赖 LASTEXITCODE" {
+        $installContent -notmatch 'exit\s+\$LASTEXITCODE'
+    } "install.ps1 使用不可靠的 exit `$LASTEXITCODE"
+
+    Assert "install.ps1 包含安全转发函数" {
+        $installContent -match 'function Invoke-CcdiScriptAndExit'
+    } "install.ps1 缺少 Invoke-CcdiScriptAndExit 安全转发函数"
+
+    Assert "install.ps1 Doctor 分支使用安全转发" {
+        $installContent -match 'Invoke-CcdiScriptAndExit[\s\S]{0,50}\$doctorPath'
+    } "install.ps1 Doctor 分支未使用安全转发函数"
+
+    Assert "install.ps1 ConfigureOnly 分支使用安全转发" {
+        $installContent -match 'Invoke-CcdiScriptAndExit[\s\S]{0,50}\$configPath'
+    } "install.ps1 ConfigureOnly 分支未使用安全转发函数"
+
+    Assert "install.ps1 Start-Here 分支使用安全转发" {
+        $installContent -match 'Invoke-CcdiScriptAndExit[\s\S]{0,50}\$startHerePath'
+    } "install.ps1 Start-Here 分支未使用安全转发函数"
+
+    Assert "install.ps1 Doctor 模式文案准确" {
+        $installContent -match '"Doctor"\s+\{\s*"正在切换到新版诊断入口'
+    } "install.ps1 Doctor 模式使用了不准确的'一键安装流程'文案"
+
+    Assert "install.ps1 ConfigureOnly 模式文案准确" {
+        $installContent -match '"ConfigureOnly"\s+\{\s*"正在切换到 DeepSeek 单独配置入口'
+    } "install.ps1 ConfigureOnly 模式使用了不准确的'一键安装流程'文案"
+
     # ============================================================
     # 最终汇总
     # ============================================================
