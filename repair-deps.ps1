@@ -260,7 +260,7 @@ function Start-RepairDeps {
     # ============================================================
     Write-Info "--- PATH ---"
     $npmGlobalPath = ""
-    $npmPrefix = Invoke-CommandSafe -Command "npm" -Arguments @("prefix", "-g")
+    $npmPrefix = Invoke-CommandSafe -Command "npm" -Arguments @("prefix", "-g") -TimeoutSec 8
     if ($npmPrefix.Success) {
         $npmGlobalPath = $npmPrefix.Output.Trim()
         if ($env:Path -contains $npmGlobalPath -or $env:Path.ToLowerInvariant().Contains($npmGlobalPath.ToLowerInvariant())) {

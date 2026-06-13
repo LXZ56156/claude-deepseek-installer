@@ -96,6 +96,15 @@ function Write-ResultLine {
     Write-Log "INFO" "[$Status] $Label - $Detail"
 }
 
+function Write-CheckProgress {
+    param(
+        [int]$Current,
+        [int]$Total,
+        [string]$Name
+    )
+    Write-Info "[$Current/$Total] 正在检测 $Name..."
+}
+
 function Pause-ForUser {
     param([switch]$Force)
 
@@ -209,7 +218,7 @@ function Step-CheckEnvironment {
     # ============================================================
     # 最低要求检测（硬性判断）
     # ============================================================
-    Write-Info "【最低系统要求检测】"
+    Write-CheckProgress -Current 1 -Total 10 -Name "最低系统要求"
     Write-Host ""
 
     $minReq = Test-MinimumRequirements
@@ -293,7 +302,8 @@ function Step-CheckEnvironment {
         }
     }
 
-    Write-Info "【其他环境检测】"
+    Write-Host ""
+    Write-CheckProgress -Current 2 -Total 10 -Name "DeepSeek 网络"
     Write-Host ""
 
     # 网络检测
@@ -317,6 +327,7 @@ function Step-CheckEnvironment {
     }
 
     # Claude Code 检测
+    Write-CheckProgress -Current 3 -Total 10 -Name "Claude Code"
     $claudeVersion = Test-ClaudeInstalled
     if ($claudeVersion) {
         Write-ResultLine "Claude Code" "OK" "已安装: $claudeVersion"
@@ -326,6 +337,7 @@ function Step-CheckEnvironment {
     }
 
     # Node.js 检测
+    Write-CheckProgress -Current 4 -Total 10 -Name "Node.js"
     $nodeInfo = Test-NodeJsInstalled
     if ($nodeInfo.Installed) {
         if ($nodeInfo.IsSupported) {
@@ -340,6 +352,7 @@ function Step-CheckEnvironment {
     }
 
     # npm 检测
+    Write-CheckProgress -Current 5 -Total 10 -Name "npm"
     $npmInfo = Test-NpmInstalled
     if ($npmInfo.Installed) {
         Write-ResultLine "npm" "OK" $npmInfo.Version
@@ -349,6 +362,7 @@ function Step-CheckEnvironment {
     }
 
     # winget 检测
+    Write-CheckProgress -Current 6 -Total 10 -Name "winget"
     $wingetOk = Test-CommandAvailable -CommandName "winget"
     if ($wingetOk) {
         Write-ResultLine "winget" "OK" "可用"
@@ -358,6 +372,7 @@ function Step-CheckEnvironment {
     }
 
     # VS Code
+    Write-CheckProgress -Current 7 -Total 10 -Name "VS Code"
     $codeVersion = Test-CodeInstalled
     if ($codeVersion) {
         $codeShort = ($codeVersion -split "`n")[0]
@@ -368,6 +383,7 @@ function Step-CheckEnvironment {
     }
 
     # Git
+    Write-CheckProgress -Current 8 -Total 10 -Name "Git"
     $gitVersion = Test-GitInstalled
     if ($gitVersion) {
         Write-ResultLine "Git" "OK" $gitVersion
@@ -377,6 +393,7 @@ function Step-CheckEnvironment {
     }
 
     # WSL
+    Write-CheckProgress -Current 9 -Total 10 -Name "WSL"
     $wslInfo = Test-WslInstalled
     if ($wslInfo.Installed) {
         $ubuntuInfo = Test-UbuntuInWsl
@@ -392,6 +409,7 @@ function Step-CheckEnvironment {
     }
 
     # 配置文件
+    Write-CheckProgress -Current 10 -Total 10 -Name "Claude 配置"
     $configInfo = Test-ClaudeConfigExists
     if ($configInfo.Exists) {
         if ($configInfo.IsValid) {
@@ -1388,63 +1406,16 @@ function Start-WslSetup {
     }
 
     Write-Host ""
-    Write-Info "有两种配置方式:"
+    Write-Info "为避免 Windows 路径、权限、WSL 发行版差异导致失败，新版不再默认"
+    Write-Info "从 Windows 端自动调用 WSL。请按以下方式手动操作："
     Write-Host ""
-    Write-Host "  方式 A（推荐）: 在 WSL 终端中手动运行" -ForegroundColor Green
+    Write-Host "  推荐方式：打开 WSL Ubuntu 终端，手动运行 install_wsl.sh" -ForegroundColor Green
     Write-Host "    1. 打开 WSL 终端（开始菜单搜索 'Ubuntu'）" -ForegroundColor White
     Write-Host "    2. cd 到本项目目录" -ForegroundColor White
     Write-Host "    3. 运行: chmod +x install_wsl.sh && ./install_wsl.sh" -ForegroundColor White
     Write-Host ""
-    Write-Host "  方式 B（实验性，不推荐新手使用）: Windows 端调用 WSL" -ForegroundColor DarkGray
-    Write-Host "    （将自动转换路径并执行，但可能因路径/权限问题失败）" -ForegroundColor White
+    Write-Info "如果在 WSL 中遇到网络或权限问题，请参考 README.md 中的 WSL 章节。"
 
-    if (-not (Confirm-UserChoice -Message "是否使用方式 A（推荐）在 WSL 终端中手动运行？" -Default "Yes")) {
-        # 方式 B：二次确认
-        Write-Warning "您选择了方式 B（实验性，不推荐新手使用）。"
-        Write-Warning "此方式可能因路径含特殊字符、WSL 配置差异等原因失败。"
-        if (-not (Confirm-UserChoice -Message "确认使用方式 B（实验性）？建议选择 N 改用方式 A" -Default "No")) {
-            Write-Info "请在 WSL 终端中手动运行 install_wsl.sh。"
-            return
-        }
-
-        # 安全检查：路径是否包含危险字符
-        if (-not (Test-WslPathSafe -WindowsPath $ScriptDir)) {
-            Write-Error-Msg "无法安全地自动传递路径到 WSL。"
-            Write-Info "请改用方式 A：在 WSL 终端中手动运行 install_wsl.sh。"
-            return
-        }
-
-        # 使用 wslpath 转换路径
-        $wslPath = Convert-WindowsPathToWslPath -WindowsPath $ScriptDir
-        if ($null -eq $wslPath) {
-            Write-Error-Msg "无法自动转换 Windows 路径到 WSL 路径。"
-            Write-Info "请改用方式 A：在 WSL 终端中手动运行 install_wsl.sh。"
-            return
-        }
-
-        Write-Info "正在 WSL 中执行 install_wsl.sh（可能需要几分钟）..."
-        Write-Info "WSL 路径: $wslPath"
-        $wslResult = Invoke-CommandSafe -Command "wsl" -Arguments @(
-            "bash", "-lc",
-            "cd '$wslPath' && chmod +x install_wsl.sh && ./install_wsl.sh"
-        ) -TimeoutSec 600 -ProgressMessage "仍在 WSL 中执行配置，请勿关闭窗口。"
-
-        if ($wslResult.Success) {
-            Write-Success "WSL 配置完成！"
-            Write-Host $wslResult.Output
-        }
-        else {
-            Write-Error-Msg "WSL 自动配置过程中出现错误。"
-            Write-Info "请改用方式 A：在 WSL 终端中手动运行 install_wsl.sh。"
-            Write-Info "具体方法: 打开 Ubuntu 终端，cd 到本项目目录，运行:"
-            Write-Host "  chmod +x install_wsl.sh && ./install_wsl.sh" -ForegroundColor Cyan
-        }
-    }
-    else {
-        Write-Info "请在 WSL 终端中手动运行 install_wsl.sh。"
-        Write-Info "具体方法: 打开 Ubuntu 终端，cd 到本项目目录，运行:"
-        Write-Host "  chmod +x install_wsl.sh && ./install_wsl.sh" -ForegroundColor Cyan
-    }
 }
 
 function Start-UninstallMenu {
@@ -1580,6 +1551,9 @@ function Main {
             Write-Warning "然后再双击 [开始安装.cmd]。"
             Write-Warning "不要在压缩包预览窗口中直接运行。"
             Write-Host ""
+            Write-Info "本次运行日志: $(Get-LogFilePath)"
+            Write-Info "如需排查问题，可将此日志文件发给技术支持。"
+            Write-Host ""
             if (-not $NonInteractive) {
                 Read-Host "按回车键退出..."
             }
@@ -1609,6 +1583,13 @@ function Main {
                 }
             }
             Write-Log "WARN" "路径风险警告已确认继续: $($pathRisk.Path)"
+        }
+
+        # 日志路径前置：交互模式下尽早显示
+        if (-not $NonInteractive) {
+            Write-Info "本次运行日志: $(Get-LogFilePath)"
+            Write-Info "如果窗口异常关闭，可把此文件发给技术支持。"
+            Write-Host ""
         }
 
         # -FixDeps 模式：转发到 repair-deps.ps1

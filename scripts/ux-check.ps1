@@ -741,6 +741,59 @@ x-api-key: $TestApiKey
     Write-Host ""
 
     # ============================================================
+    # 19. 第四批 UX 优化检查（进度感/日志路径/WSL 收口/timeout）
+    # ============================================================
+    Write-CheckHeader "19. 第四批 UX 优化检查"
+
+    $startHerePath = Join-Path $ScriptRoot "Start-Here.ps1"
+    $startHereText = Get-Content $startHerePath -Raw -Encoding UTF8
+    $repairDepsPath = Join-Path $ScriptRoot "repair-deps.ps1"
+    $repairDepsText = Get-Content $repairDepsPath -Raw -Encoding UTF8
+
+    # Write-CheckProgress 函数存在
+    Assert "Write-CheckProgress 函数存在" {
+        $startHereText -match 'function Write-CheckProgress'
+    } "Start-Here.ps1 缺失 Write-CheckProgress 函数"
+
+    # 日志路径前置显示
+    Assert "Start-Here.ps1 前置显示日志路径" {
+        $startHereText -match '本次运行日志.*Get-LogFilePath'
+    } "Start-Here.ps1 未前置显示日志路径"
+
+    Assert "Start-Here.ps1 包含日志路径指引文案" {
+        $startHereText -match '如果窗口异常关闭，可把此文件发给技术支持'
+    } "Start-Here.ps1 缺失日志路径指引文案"
+
+    # Step-CheckEnvironment 使用 Write-CheckProgress（至少 10 个进度调用）
+    Assert "Step-CheckEnvironment 包含 Write-CheckProgress -Current 1" {
+        $startHereText -match 'Write-CheckProgress\s+-Current\s+1\s+-Total\s+10'
+    } "Step-CheckEnvironment 缺失第 1 项进度提示"
+
+    Assert "Step-CheckEnvironment 包含 Write-CheckProgress -Current 10" {
+        $startHereText -match 'Write-CheckProgress\s+-Current\s+10\s+-Total\s+10'
+    } "Step-CheckEnvironment 缺失第 10 项进度提示"
+
+    # WSL 方式 B 已移除
+    Assert "Start-WslSetup 不再包含 Windows 端自动调用 WSL" {
+        $startHereText -notmatch 'Start-WslSetup[\s\S]{0,3000}Invoke-CommandSafe\s+-Command\s+"wsl"'
+    } "Start-WslSetup 仍包含 Invoke-CommandSafe wsl 调用"
+
+    Assert "Start-WslSetup 不显示过期的方式 B" {
+        $startHereText -notmatch '方式\s*B[\s\S]{0,50}实验性'
+    } "Start-WslSetup 仍显示方式 B"
+
+    Assert "Start-WslSetup 包含新版说明" {
+        $startHereText -match '为避免 Windows 路径、权限、WSL 发行版差异导致失败'
+    } "Start-WslSetup 缺失新版 WSL 说明文案"
+
+    # repair-deps.ps1 npm prefix -g TimeoutSec 8
+    Assert "repair-deps.ps1 npm prefix -g 有显式 TimeoutSec 8" {
+        $repairDepsText -match 'Invoke-CommandSafe[\s\S]{0,200}"npm"[\s\S]{0,200}"prefix"[\s\S]{0,200}\-g[\s\S]{0,30}\-TimeoutSec\s+8'
+    } "repair-deps.ps1 npm prefix -g 未设置 TimeoutSec 8"
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""

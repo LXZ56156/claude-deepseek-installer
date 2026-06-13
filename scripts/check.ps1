@@ -759,6 +759,77 @@ if ($doctorText -notmatch 'Test-WslClaudeComprehensive\s+-DistroName') {
 Write-Host "[check] Text cleaning and report safety functions OK"
 Write-Host "[check] WSL distro name and base64 compatibility OK"
 
+# ============================================================
+# 第四批 UX 优化防回归检查
+# ============================================================
+Write-Host "[check] Batch 4 UX regression checks (progress visibility, log path, WSL gate, timeout)"
+
+$startHereText = Get-Content -Path (Join-Path $RootDir "Start-Here.ps1") -Raw -Encoding UTF8
+$repairDepsText = Get-Content -Path (Join-Path $RootDir "repair-deps.ps1") -Raw -Encoding UTF8
+$longRunningCheckText = Get-Content -Path (Join-Path $RootDir "scripts\check-long-running-commands.ps1") -Raw -Encoding UTF8
+
+# 52. Start-Here.ps1 must have Write-CheckProgress function
+if ($startHereText -notmatch 'function Write-CheckProgress') {
+    throw "Start-Here.ps1 must define Write-CheckProgress function for per-check progress indicators"
+}
+
+# 53. Start-Here.ps1 must show log path early
+if ($startHereText -notmatch '本次运行日志.*Get-LogFilePath') {
+    throw "Start-Here.ps1 must show log path early in Main() (before disclaimer)"
+}
+if ($startHereText -notmatch '如果窗口异常关闭，可把此文件发给技术支持') {
+    throw "Start-Here.ps1 must include log path guidance text for crash scenarios"
+}
+
+# 54. Start-Here.ps1 WSL method B removed: no Invoke-CommandSafe + wsl in Start-WslSetup
+if ($startHereText -match 'Start-WslSetup[\s\S]{0,3000}Invoke-CommandSafe\s+-Command\s+"wsl"') {
+    throw "Start-Here.ps1: Start-WslSetup must NOT use Invoke-CommandSafe for wsl (method B removed)"
+}
+
+# 55. Start-Here.ps1 no "方式 B" in WSL context
+if ($startHereText -match '方式\s*B[\s\S]{0,100}Windows.*端.*WSL') {
+    throw "Start-Here.ps1 must NOT advertise WSL method B (Windows-side auto-call) to users"
+}
+
+# 56. repair-deps.ps1 npm prefix -g must have explicit TimeoutSec 8
+$rpmPrefix = [regex]::Match($repairDepsText, 'Invoke-CommandSafe[\s\S]{0,300}?"-g"\s*\)[\s\S]{0,30}?-TimeoutSec\s+(\d+)')
+if ($rpmPrefix.Success) {
+    $rpmPrefixFull = $rpmPrefix.Groups[0].Value
+    if ($rpmPrefixFull -match '"prefix"') {
+        $rpmSec = [int]$rpmPrefix.Groups[1].Value
+        if ($rpmSec -ne 8) {
+            throw "repair-deps.ps1 npm prefix -g TimeoutSec must be 8, got $rpmSec"
+        }
+    }
+} else {
+    throw "repair-deps.ps1 npm prefix -g must have explicit -TimeoutSec 8"
+}
+
+# 57. check-long-running-commands.ps1 must have new rules
+if ($longRunningCheckText -notmatch 'npm prefix -g') {
+    throw "check-long-running-commands.ps1 must check npm prefix -g TimeoutSec"
+}
+if ($longRunningCheckText -notmatch 'code --install-extension') {
+    throw "check-long-running-commands.ps1 must check code --install-extension via Invoke-CommandSafe"
+}
+if ($longRunningCheckText -notmatch 'Write-CheckProgress') {
+    throw "check-long-running-commands.ps1 must check for Write-CheckProgress in Start-Here.ps1"
+}
+if ($longRunningCheckText -notmatch '本次运行日志') {
+    throw "check-long-running-commands.ps1 must check for early log path display in Start-Here.ps1"
+}
+
+# 58. lib/env-check.ps1 WSL decoded pipe regression: must preserve 8759afa fix
+$envCheckText = Get-Content -Path (Join-Path $RootDir "lib\env-check.ps1") -Raw -Encoding UTF8
+if ($envCheckText -notmatch '`"\`\$decoded`"\s*\|\s*bash') {
+    throw "lib/env-check.ps1 decoded pipe to bash must have double quotes: printf '%s' `"`$decoded`" | bash"
+}
+if ($envCheckText -notmatch 'command\s+-v\s+base64') {
+    throw "lib/env-check.ps1 must check 'command -v base64' before piping to bash"
+}
+
+Write-Host "[check] Batch 4 UX regression checks OK"
+
 Write-Host "[check] Visible install command UX"
 $claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
 
