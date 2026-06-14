@@ -156,51 +156,51 @@ function Invoke-PowerShellScript {
 
     $allArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $FilePath) + $Arguments
 
-    # Use Start-Job for timeout safety; capture output via Receive-Job
-    $job = Start-Job -ScriptBlock {
-        param($File, $ArgsList)
-        & "powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $File @ArgsList 2>&1
-        return $LASTEXITCODE
-    } -ArgumentList $FilePath, $Arguments
+    # Build bootstrap cmd: let the child powershell write its own stdout/stderr files.
+    # This avoids .NET Process stream redirection entirely (no buffer deadlock possible).
+    # Parent Process tracks only PID and exit code.
+    $escapedFilePath = $FilePath -replace "'", "''"
+    $bootstrapArgs = @()
+    foreach ($a in $Arguments) {
+        $escaped = $a -replace "'", "''"
+        $bootstrapArgs += "'$escaped'"
+    }
+    $bootstrapCmd = (
+        '$ErrorActionPreference="Continue";' +
+        "& '$escapedFilePath' $($bootstrapArgs -join ' ') 1> '$stdoutPath' 2> '$stderrPath';" +
+        'exit $LASTEXITCODE'
+    )
 
-    $finished = Wait-Job $job -Timeout $TimeoutSec
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "powershell.exe"
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"$bootstrapCmd`""
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.WorkingDirectory = $script:RootDir
+
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+    [void]$proc.Start()
+
+    $finished = $proc.WaitForExit($TimeoutSec * 1000)
 
     if (-not $finished) {
-        # Kill process tree via taskkill, then clean up job
+        # Timeout: kill process tree by real PID, then fallback Stop-Process
+        $realPid = $proc.Id
         try {
-            $jobInfo = Get-Job -Id $job.Id -ErrorAction SilentlyContinue
-            if ($jobInfo -and $jobInfo.ChildJobs) {
-                foreach ($cj in $jobInfo.ChildJobs) {
-                    if ($cj.Location) { & taskkill.exe /PID $cj.Location /T /F 2>$null | Out-Null }
-                }
-            }
+            & taskkill.exe /PID $realPid /T /F 2>$null | Out-Null
+            Start-Sleep -Milliseconds 500
         } catch { }
-        Stop-Job $job
-        Receive-Job $job -ErrorAction SilentlyContinue | Out-File $stdoutPath -Encoding UTF8
-        Remove-Job $job -Force
+        if (-not $proc.HasExited) {
+            try { Stop-Process -Id $realPid -Force -ErrorAction SilentlyContinue } catch { }
+        }
         throw "TIMEOUT: $FilePath (${TimeoutSec}s) - stdout: $stdoutPath, stderr: $stderrPath"
     }
 
-    $output = Receive-Job $job
-    Remove-Job $job -Force
-
-    if ($output -is [array]) {
-        $exitCode = $output[-1]
-        $textOutput = $output[0..($output.Count - 2)]
-    } else {
-        $exitCode = $output
-        $textOutput = ""
-    }
-
-    if ($null -eq $exitCode) { $exitCode = 0 }
-
-    if ($textOutput) {
-        if ($textOutput -is [array]) { $textOutput = $textOutput -join "`r`n" }
-        [System.IO.File]::WriteAllText($stdoutPath, $textOutput, [System.Text.Encoding]::UTF8)
-    }
+    $exitCode = $proc.ExitCode
 
     if ($exitCode -ne 0) {
-        throw "$FilePath failed with exit code $exitCode - stdout: $stdoutPath"
+        throw "$FilePath failed with exit code $exitCode - stderr: $stderrPath - stdout: $stdoutPath"
     }
 }
 

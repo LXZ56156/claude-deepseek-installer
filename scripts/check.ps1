@@ -567,11 +567,23 @@ $validateText = Get-Content -Path (Join-Path $RootDir "scripts\validate.ps1") -R
 if ($validateText -notmatch '\[int\]\$TimeoutSec') {
     throw "validate.ps1 Invoke-PowerShellScript must have TimeoutSec parameter"
 }
-if ($validateText -notmatch 'taskkill\.exe\s+/PID') {
-    throw "validate.ps1 timeout branch must call taskkill.exe /PID"
+if ($validateText -match 'Start-Job[\s\S]{0,300}Invoke-PowerShellScript') {
+    throw "validate.ps1 Invoke-PowerShellScript must NOT use Start-Job for child execution"
 }
-if ($validateText -notmatch '/T\s+/F') {
-    throw "validate.ps1 timeout taskkill must use /T /F for process tree"
+if ($validateText -notmatch 'System\.Diagnostics\.ProcessStartInfo') {
+    throw "validate.ps1 must use System.Diagnostics.ProcessStartInfo for child process"
+}
+if ($validateText -notmatch 'System\.Diagnostics\.Process') {
+    throw "validate.ps1 must use System.Diagnostics.Process for real PID"
+}
+if ($validateText -notmatch 'taskkill\.exe\s+/PID\s+\$realPid\s+/T\s+/F') {
+    throw "validate.ps1 timeout must call taskkill.exe /PID `$realPid /T /F with real PID"
+}
+if ($validateText -notmatch 'Stop-Process\s+-Id\s+\$realPid\s+-Force') {
+    throw "validate.ps1 timeout must have Stop-Process -Id `$realPid -Force fallback"
+}
+if ($validateText -notmatch '\$proc\.WaitForExit\(\$TimeoutSec') {
+    throw "validate.ps1 must use `$proc.WaitForExit(`$TimeoutSec * 1000) for total timeout"
 }
 if ($validateText -notmatch 'doctor\.ps1[\s\S]{0,300}-TestSafe') {
     throw "validate.ps1 CoreSandboxFlow must pass -TestSafe to doctor.ps1"
