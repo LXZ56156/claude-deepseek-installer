@@ -105,7 +105,19 @@ $scenarios = @(
         AutoLevel   = "AUTO"
         Category    = "Delivery verification"
         Description = "Chinese/English .cmd launchers, missing file prompts, ZIP integrity"
-    }
+    },
+    @{ Id = "WIN-SHELL-001"; Name = "Shell command mismatch (PS vs CMD)"; Tool = "hardcore-scenario-matrix.ps1 (HC-X-PSH-MISMATCH)"; AutoLevel = "MOCK"; Category = "Shell compatibility"; Description = "Detects CMD syntax in PS and PS commands in CMD, provides user guidance" },
+    @{ Id = "WIN-PATH-001"; Name = "PATH repair: missing local/bin"; Tool = "doctor-repair-matrix.ps1 (REPAIR-001)"; AutoLevel = "MOCK"; Category = "PATH repair"; Description = "claude not recognized after install, path refresh and restart guidance" },
+    @{ Id = "WIN-PATH-002"; Name = "duplicate claude installations"; Tool = "doctor-repair-matrix.ps1 (REPAIR-002)"; AutoLevel = "MOCK"; Category = "Duplicate installations"; Description = "Multiple claude in PATH, detection and listing of conflicting installations" },
+    @{ Id = "WIN-PATH-003"; Name = "WindowsApps Claude Desktop override"; Tool = "doctor-repair-matrix.ps1 (REPAIR-003)"; AutoLevel = "MOCK"; Category = "WindowsApps override"; Description = "Claude Desktop app opens instead of CLI, PATH order detection" },
+    @{ Id = "WIN-ARCH-001"; Name = "PowerShell x86 / 32-bit detection"; Tool = "claude-failure-catalog.ps1 (SYS-002)"; AutoLevel = "MOCK"; Category = "Architecture check"; Description = "Detects 32-bit OS or PS x86, gives clear error with next steps" },
+    @{ Id = "WIN-TLS-001"; Name = "TLS/SSL certificate and proxy issues"; Tool = "hardcore-scenario-matrix.ps1 (NET-006..012)"; AutoLevel = "MOCK"; Category = "TLS/Proxy/CA"; Description = "Enterprise proxy, self-signed cert, NODE_EXTRA_CA_CERTS, schannel errors" },
+    @{ Id = "WIN-AV-001"; Name = "file locked by antivirus during install"; Tool = "doctor-repair-matrix.ps1 (REPAIR-009)"; AutoLevel = "MOCK"; Category = "Antivirus interference"; Description = "File locked by AV scanning, Controlled Folder Access blocking writes" },
+    @{ Id = "WIN-NPM-001"; Name = "npm optional dependency missing"; Tool = "doctor-repair-matrix.ps1 (REPAIR-006)"; AutoLevel = "MOCK"; Category = "npm config"; Description = "optional=false or ignore-scripts=true in .npmrc prevents postinstall" },
+    @{ Id = "WIN-WSL-001"; Name = "WSL1/WSL2/distro name detection"; Tool = "hardcore-scenario-matrix.ps1 (SYS-006..008)"; AutoLevel = "MOCK"; Category = "WSL compatibility"; Description = "WSL1 exec format error, WSL2 stopped distro, non-Ubuntu distro" },
+    @{ Id = "WIN-API-001"; Name = "DeepSeek API status matrix"; Tool = "hardcore-scenario-matrix.ps1 (HC-X-API-MATRIX)"; AutoLevel = "MOCK"; Category = "API status"; Description = "401/402/429/500/503/timeout responses, targeted user guidance per code" },
+    @{ Id = "WIN-SAN-001"; Name = "report sanitization completeness"; Tool = "hardcore-scenario-matrix.ps1 (HC-X-REPORT-SANITIZE)"; AutoLevel = "MOCK"; Category = "Report sanitization"; Description = "API key masking, path desensitization, GrowthBook/OAuth field filtering" },
+    @{ Id = "WIN-FAKE-001"; Name = "fake installer / non-official source warning"; Tool = "hardcore-scenario-matrix.ps1 (HC-X-FAKE-INSTALLER)"; AutoLevel = "MOCK"; Category = "Delivery security"; Description = "Official source verification, no exe/msi in ZIP, whitelist enforcement" }
 )
 
 # Report generation
@@ -195,6 +207,22 @@ $decisionResult = Invoke-ToolCheck -Name "install-decision-matrix.ps1" -ToolPath
 $toolResults["decision"] = $decisionResult
 $colorD = if ($decisionResult.Success) { "Green" } else { "Red" }
 Write-Host ("  install-decision-matrix.ps1: exit={0}" -f $decisionResult.ExitCode) -ForegroundColor $colorD
+
+# New hardcore validation tools
+$catalogResult = Invoke-ToolCheck -Name "claude-failure-catalog.ps1" -ToolPath (Join-Path $ScriptDir "scripts\claude-failure-catalog.ps1")
+$toolResults["catalog"] = $catalogResult
+$colorCat = if ($catalogResult.Success) { "Green" } else { "Red" }
+Write-Host ("  claude-failure-catalog.ps1: exit={0}" -f $catalogResult.ExitCode) -ForegroundColor $colorCat
+
+$hardcoreResult = Invoke-ToolCheck -Name "hardcore-scenario-matrix.ps1" -ToolPath (Join-Path $ScriptDir "scripts\hardcore-scenario-matrix.ps1") -Arguments @("-Version", $Version)
+$toolResults["hardcore"] = $hardcoreResult
+$colorHc = if ($hardcoreResult.Success) { "Green" } else { "Red" }
+Write-Host ("  hardcore-scenario-matrix.ps1: exit={0}" -f $hardcoreResult.ExitCode) -ForegroundColor $colorHc
+
+$doctorResult = Invoke-ToolCheck -Name "doctor-repair-matrix.ps1" -ToolPath (Join-Path $ScriptDir "scripts\doctor-repair-matrix.ps1") -Arguments @("-Version", $Version)
+$toolResults["doctor-repair"] = $doctorResult
+$colorDr = if ($doctorResult.Success) { "Green" } else { "Red" }
+Write-Host ("  doctor-repair-matrix.ps1: exit={0}" -f $doctorResult.ExitCode) -ForegroundColor $colorDr
 
 if (-not $Quick) {
     Write-Host "[matrix] Building release and running user simulation..." -ForegroundColor Yellow
@@ -311,6 +339,67 @@ foreach ($scenario in $scenarios) {
             } else { $result = "FAIL"; $suggestion = "Run simulate-user-release.ps1 full flow" }
             $evidence = "simulate-user-release.ps1 full user flow"
         }
+        # === New hardcore/repair matrix scenarios ===
+        "WIN-SHELL-001" {
+            if ($hardcoreResult.Success) { $result = "PASS" }
+            else { $result = "FAIL"; $suggestion = "Run hardcore-scenario-matrix.ps1" }
+            $evidence = "hardcore-scenario-matrix.ps1 HC-X-PSH-MISMATCH (catalog PSH-003..006)"
+        }
+        "WIN-PATH-001" {
+            if ($doctorResult.Success) { $result = "PASS" }
+            else { $result = "FAIL"; $suggestion = "Run doctor-repair-matrix.ps1" }
+            $evidence = "doctor-repair-matrix.ps1 REPAIR-001 (catalog PATH-001)"
+        }
+        "WIN-PATH-002" {
+            if ($doctorResult.Success) { $result = "PASS" }
+            else { $result = "FAIL"; $suggestion = "Run doctor-repair-matrix.ps1" }
+            $evidence = "doctor-repair-matrix.ps1 REPAIR-002 (catalog PATH-003)"
+        }
+        "WIN-PATH-003" {
+            if ($doctorResult.Success) { $result = "PASS" }
+            else { $result = "FAIL"; $suggestion = "Run doctor-repair-matrix.ps1" }
+            $evidence = "doctor-repair-matrix.ps1 REPAIR-003 (catalog PATH-004)"
+        }
+        "WIN-ARCH-001" {
+            if ($catalogResult.Success) { $result = "PASS" }
+            else { $result = "FAIL"; $suggestion = "Run claude-failure-catalog.ps1" }
+            $evidence = "claude-failure-catalog.ps1 SYS-002 validation"
+        }
+        "WIN-TLS-001" {
+            if ($hardcoreResult.Success) { $result = "PASS" }
+            else { $result = "FAIL"; $suggestion = "Run hardcore-scenario-matrix.ps1" }
+            $evidence = "hardcore-scenario-matrix.ps1 NET-006..012 (TLS/proxy/CA coverage)"
+        }
+        "WIN-AV-001" {
+            if ($doctorResult.Success) { $result = "PASS" }
+            else { $result = "FAIL"; $suggestion = "Run doctor-repair-matrix.ps1" }
+            $evidence = "doctor-repair-matrix.ps1 REPAIR-009 (catalog FS-008..010)"
+        }
+        "WIN-NPM-001" {
+            if ($doctorResult.Success) { $result = "PASS" }
+            else { $result = "FAIL"; $suggestion = "Run doctor-repair-matrix.ps1" }
+            $evidence = "doctor-repair-matrix.ps1 REPAIR-006 (catalog NODE-007..008)"
+        }
+        "WIN-WSL-001" {
+            if ($hardcoreResult.Success) { $result = "PASS" }
+            else { $result = "FAIL"; $suggestion = "Run hardcore-scenario-matrix.ps1" }
+            $evidence = "hardcore-scenario-matrix.ps1 SYS-006..008 (WSL1/2/distro detection)"
+        }
+        "WIN-API-001" {
+            if ($hardcoreResult.Success) { $result = "PASS" }
+            else { $result = "FAIL"; $suggestion = "Run hardcore-scenario-matrix.ps1" }
+            $evidence = "hardcore-scenario-matrix.ps1 HC-X-API-MATRIX (catalog NET-015..020)"
+        }
+        "WIN-SAN-001" {
+            if ($hardcoreResult.Success) { $result = "PASS" }
+            else { $result = "FAIL"; $suggestion = "Run hardcore-scenario-matrix.ps1" }
+            $evidence = "hardcore-scenario-matrix.ps1 HC-X-REPORT-SANITIZE (catalog CFG-012, RUN-005)"
+        }
+        "WIN-FAKE-001" {
+            if ($hardcoreResult.Success) { $result = "PASS" }
+            else { $result = "FAIL"; $suggestion = "Run hardcore-scenario-matrix.ps1" }
+            $evidence = "hardcore-scenario-matrix.ps1 HC-X-FAKE-INSTALLER (catalog SEC-001..002)"
+        }
     }
 
     switch ($result) {
@@ -393,7 +482,7 @@ Write-ReportLine "  Tool Run Details"
 Write-ReportLine "=============================================================="
 Write-ReportLine ""
 
-foreach ($toolName in @("check", "ux-check", "decision", "simulate")) {
+foreach ($toolName in @("check", "ux-check", "decision", "simulate", "catalog", "hardcore", "doctor-repair")) {
     $tr = $toolResults[$toolName]
     Write-ReportLine ("  [{0}]" -f $tr.Name)
     Write-ReportLine ("    ExitCode: {0}" -f $tr.ExitCode)

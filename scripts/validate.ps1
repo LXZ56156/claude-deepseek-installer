@@ -5,6 +5,7 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode Smoke
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode Full
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode Release
+#   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode Hardcore
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode All
 #
 # Notes:
@@ -12,14 +13,15 @@
 #   Flows that write Claude config must use CCDI_TEST_MODE + CCDI_TEST_USERPROFILE.
 #
 # Mode coverage (v1.3.2):
-#   Smoke:  git diff --check + check.ps1 (PS 5.1 + pwsh)
-#   Full:   Smoke + AST parse + ux-check.ps1 + install-decision-matrix.ps1 + Core sandbox
-#   Release: package-release.ps1 + simulate-user-release.ps1 + windows-scenario-matrix.ps1 (-Quick)
-#   All:    Full + Release + real settings.json unchanged check
+#   Smoke:    git diff --check + check.ps1 (PS 5.1 + pwsh)
+#   Full:     Smoke + AST parse + ux-check.ps1 + install-decision-matrix.ps1 + Core sandbox
+#   Release:  package-release.ps1 + simulate-user-release.ps1 + windows-scenario-matrix.ps1 (-Quick)
+#   Hardcore: claude-failure-catalog.ps1 + hardcore-scenario-matrix.ps1 + doctor-repair-matrix.ps1 + check.ps1
+#   All:      Full + Release + Hardcore + real settings.json unchanged check
 # ============================================================
 
 param(
-    [ValidateSet("Smoke", "Full", "Release", "All")]
+    [ValidateSet("Smoke", "Full", "Release", "Hardcore", "All")]
     [string]$Mode = "Smoke",
 
     [string]$Version = "1.3.2",
@@ -256,6 +258,23 @@ function Invoke-ReleaseValidation {
     })
 }
 
+function Invoke-HardcoreValidation {
+    Write-ValidationHeader "Hardcore validation (failure catalog + extreme scenarios + repair matrix)"
+
+    Invoke-ValidationStep -Name "scripts/claude-failure-catalog.ps1" -ScriptBlock ([scriptblock]{
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\claude-failure-catalog.ps1")
+    })
+    Invoke-ValidationStep -Name "scripts/hardcore-scenario-matrix.ps1" -ScriptBlock ([scriptblock]{
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\hardcore-scenario-matrix.ps1") -Arguments @("-Version", $Version)
+    })
+    Invoke-ValidationStep -Name "scripts/doctor-repair-matrix.ps1" -ScriptBlock ([scriptblock]{
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\doctor-repair-matrix.ps1") -Arguments @("-Version", $Version)
+    })
+    Invoke-ValidationStep -Name "scripts/check.ps1" -ScriptBlock ([scriptblock]{
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\check.ps1")
+    })
+}
+
 $beforeSettings = Get-RealSettingsSnapshot
 Write-Host "[validate] Mode=$Mode Version=$Version Branch=$(git branch --show-current) RequireClean=$requireCleanForRun"
 Write-Host "[validate] Real settings baseline: Exists=$($beforeSettings.Exists) Length=$($beforeSettings.Length) SHA256=$($beforeSettings.SHA256)"
@@ -281,9 +300,13 @@ switch ($Mode) {
     "Release" {
         Invoke-ReleaseValidation
     }
+    "Hardcore" {
+        Invoke-HardcoreValidation
+    }
     "All" {
         Invoke-FullValidation
         Invoke-ReleaseValidation
+        Invoke-HardcoreValidation
     }
 }
 
