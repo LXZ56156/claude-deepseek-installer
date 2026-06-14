@@ -142,12 +142,66 @@ function Invoke-PowerShellScript {
         [Parameter(Mandatory = $true)]
         [string]$FilePath,
 
-        [string[]]$Arguments = @()
+        [string[]]$Arguments = @(),
+
+        [int]$TimeoutSec = 300
     )
 
-    Invoke-ExternalCommand -FileName "powershell.exe" -Arguments (@(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $FilePath
-    ) + $Arguments)
+    $name = [System.IO.Path]::GetFileNameWithoutExtension($FilePath)
+    $ts = Get-Date -Format "yyyyMMdd-HHmmss"
+    $reportsDir = Join-Path $script:RootDir "reports"
+    if (-not (Test-Path $reportsDir)) { New-Item -ItemType Directory -Path $reportsDir -Force | Out-Null }
+    $stdoutPath = Join-Path $reportsDir "validate-child-$ts-$name.stdout.txt"
+    $stderrPath = Join-Path $reportsDir "validate-child-$ts-$name.stderr.txt"
+
+    $allArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $FilePath) + $Arguments
+
+    # Use Start-Job for timeout safety; capture output via Receive-Job
+    $job = Start-Job -ScriptBlock {
+        param($File, $ArgsList)
+        & "powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $File @ArgsList 2>&1
+        return $LASTEXITCODE
+    } -ArgumentList $FilePath, $Arguments
+
+    $finished = Wait-Job $job -Timeout $TimeoutSec
+
+    if (-not $finished) {
+        # Kill process tree via taskkill, then clean up job
+        try {
+            $jobInfo = Get-Job -Id $job.Id -ErrorAction SilentlyContinue
+            if ($jobInfo -and $jobInfo.ChildJobs) {
+                foreach ($cj in $jobInfo.ChildJobs) {
+                    if ($cj.Location) { & taskkill.exe /PID $cj.Location /T /F 2>$null | Out-Null }
+                }
+            }
+        } catch { }
+        Stop-Job $job
+        Receive-Job $job -ErrorAction SilentlyContinue | Out-File $stdoutPath -Encoding UTF8
+        Remove-Job $job -Force
+        throw "TIMEOUT: $FilePath (${TimeoutSec}s) - stdout: $stdoutPath, stderr: $stderrPath"
+    }
+
+    $output = Receive-Job $job
+    Remove-Job $job -Force
+
+    if ($output -is [array]) {
+        $exitCode = $output[-1]
+        $textOutput = $output[0..($output.Count - 2)]
+    } else {
+        $exitCode = $output
+        $textOutput = ""
+    }
+
+    if ($null -eq $exitCode) { $exitCode = 0 }
+
+    if ($textOutput) {
+        if ($textOutput -is [array]) { $textOutput = $textOutput -join "`r`n" }
+        [System.IO.File]::WriteAllText($stdoutPath, $textOutput, [System.Text.Encoding]::UTF8)
+    }
+
+    if ($exitCode -ne 0) {
+        throw "$FilePath failed with exit code $exitCode - stdout: $stdoutPath"
+    }
 }
 
 function Invoke-CoreSandboxFlow {
@@ -175,12 +229,12 @@ function Invoke-CoreSandboxFlow {
 
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "Start-Here.ps1") -Arguments @(
             "-NonInteractive", "-SkipDisclaimer", "-TestSafe"
-        )
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "repair-deps.ps1") -Arguments @("-TestSafe")
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "Start-Here.ps1") -Arguments @("-FixDeps", "-TestSafe")
+        ) -TimeoutSec 300
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "repair-deps.ps1") -Arguments @("-TestSafe") -TimeoutSec 300
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "Start-Here.ps1") -Arguments @("-FixDeps", "-TestSafe") -TimeoutSec 300
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "doctor.ps1") -Arguments @(
-            "-ShareSafe", "-SkipApiTest", "-NoOpenReport"
-        )
+            "-ShareSafe", "-SkipApiTest", "-NoOpenReport", "-TestSafe"
+        ) -TimeoutSec 300
     }
     finally {
         foreach ($name in $old.Keys) {
@@ -218,7 +272,7 @@ function Invoke-SmokeValidation {
         Invoke-ExternalCommand -FileName "git" -Arguments @("diff", "--cached", "--check")
     })
     Invoke-ValidationStep -Name "scripts/check.ps1 (Windows PowerShell)" -ScriptBlock ([scriptblock]{
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\check.ps1")
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\check.ps1") -TimeoutSec 300
     })
     $pwshCommand = Get-Command "pwsh" -ErrorAction SilentlyContinue
     if ((-not $SkipPwsh) -and $pwshCommand) {
@@ -236,10 +290,10 @@ function Invoke-FullValidation {
     Invoke-SmokeValidation
     Invoke-ValidationStep -Name "PowerShell full AST parse" -ScriptBlock ([scriptblock]{ Invoke-ParseCheck })
     Invoke-ValidationStep -Name "scripts/ux-check.ps1" -ScriptBlock ([scriptblock]{
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\ux-check.ps1")
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\ux-check.ps1") -TimeoutSec 180
     })
     Invoke-ValidationStep -Name "scripts/install-decision-matrix.ps1 (mock)" -ScriptBlock ([scriptblock]{
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\install-decision-matrix.ps1")
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\install-decision-matrix.ps1") -TimeoutSec 180
     })
     Invoke-ValidationStep -Name "Core TestSafe sandbox flow" -ScriptBlock ([scriptblock]{ Invoke-CoreSandboxFlow })
 }
@@ -248,13 +302,13 @@ function Invoke-ReleaseValidation {
     Write-ValidationHeader "Release validation"
 
     Invoke-ValidationStep -Name "package release ZIP" -ScriptBlock ([scriptblock]{
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\package-release.ps1") -Arguments @("-Version", $Version)
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\package-release.ps1") -Arguments @("-Version", $Version) -TimeoutSec 300
     })
     Invoke-ValidationStep -Name "release ZIP user simulation" -ScriptBlock ([scriptblock]{
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\simulate-user-release.ps1") -Arguments @("-Version", $Version)
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\simulate-user-release.ps1") -Arguments @("-Version", $Version) -TimeoutSec 600
     })
     Invoke-ValidationStep -Name "Windows scenario matrix" -ScriptBlock ([scriptblock]{
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\windows-scenario-matrix.ps1") -Arguments @("-Version", $Version, "-Quick", "-AssumePreviousSimulationPassed")
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\windows-scenario-matrix.ps1") -Arguments @("-Version", $Version, "-Quick", "-AssumePreviousSimulationPassed") -TimeoutSec 300
     })
 }
 
@@ -262,16 +316,16 @@ function Invoke-HardcoreValidation {
     Write-ValidationHeader "Hardcore validation (failure catalog + extreme scenarios + repair matrix)"
 
     Invoke-ValidationStep -Name "scripts/claude-failure-catalog.ps1" -ScriptBlock ([scriptblock]{
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\claude-failure-catalog.ps1")
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\claude-failure-catalog.ps1") -TimeoutSec 180
     })
     Invoke-ValidationStep -Name "scripts/hardcore-scenario-matrix.ps1" -ScriptBlock ([scriptblock]{
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\hardcore-scenario-matrix.ps1") -Arguments @("-Version", $Version)
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\hardcore-scenario-matrix.ps1") -Arguments @("-Version", $Version) -TimeoutSec 300
     })
     Invoke-ValidationStep -Name "scripts/doctor-repair-matrix.ps1" -ScriptBlock ([scriptblock]{
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\doctor-repair-matrix.ps1") -Arguments @("-Version", $Version)
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\doctor-repair-matrix.ps1") -Arguments @("-Version", $Version) -TimeoutSec 180
     })
     Invoke-ValidationStep -Name "scripts/check.ps1" -ScriptBlock ([scriptblock]{
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\check.ps1")
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\check.ps1") -TimeoutSec 300
     })
 }
 

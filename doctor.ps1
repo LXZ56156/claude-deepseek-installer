@@ -16,6 +16,7 @@ param(
     [switch]$NoOpenReport, # 不自动打开或选中诊断报告
     [switch]$ShareSafe,    # 生成脱敏版报告（替换用户名/路径，可安全分享）
     [switch]$Anonymize,    # ShareSafe 的别名
+    [switch]$TestSafe,     # 测试安全模式：跳过真实网络请求、WSL 启动、claude doctor 等外部调用
     [string]$OutputPath    # 报告输出路径，默认为当前目录 report.txt
 )
 
@@ -39,6 +40,12 @@ if (-not $EntryScriptDir) { $EntryScriptDir = (Get-Location).Path }
 $ScriptDir = Initialize-CcdiScript -ScriptName "doctor"
 
 $ScriptVersion = "1.3.2"
+
+# 测试安全模式：显式 -TestSafe 参数或 CCDI_TEST_MODE 环境变量
+$script:DoctorTestSafeMode = $TestSafe -or ($env:CCDI_TEST_MODE -eq "1")
+if ($script:DoctorTestSafeMode) {
+    $env:CCDI_TEST_MODE = "1"
+}
 
 # 报告状态集中放在脚本级对象中，避免函数作用域下 += 丢失内容。
 $script:DoctorState = @{
@@ -270,7 +277,7 @@ function Check-Commands {
 
         # 运行 claude doctor。使用新的 Invoke-ClaudeDoctor 入口，
         # 不展示原始 TUI 输出，只显示解析后的摘要。
-        if ($env:CCDI_TEST_MODE -eq "1") {
+        if ($script:DoctorTestSafeMode) {
             Write-Info "测试安全模式：跳过 claude doctor 诊断。"
             Add-CheckResult "claude doctor" "SKIP" "测试安全模式已跳过"
         }
@@ -420,10 +427,14 @@ function Check-Files {
     }
 
     # 检查 WSL 配置
-    $ubuntuInfo = Test-UbuntuInWsl
-    if ($ubuntuInfo.Exists) {
-        # 尝试检查 WSL 内的配置
-        $wslConfigCheck = Invoke-CommandSafe -Command "wsl" -Arguments @("bash", "-c", "test -f ~/.claude/settings.json && echo 'EXISTS' || echo 'NOT_FOUND'")
+    if ($script:DoctorTestSafeMode) {
+        Add-CheckResult "WSL settings.json" "SKIP" "测试安全模式不调用 WSL"
+    }
+    else {
+        $ubuntuInfo = Test-UbuntuInWsl
+        if ($ubuntuInfo.Exists) {
+            # 尝试检查 WSL 内的配置
+            $wslConfigCheck = Invoke-CommandSafe -Command "wsl" -Arguments @("bash", "-c", "test -f ~/.claude/settings.json && echo 'EXISTS' || echo 'NOT_FOUND'")
         if ($wslConfigCheck.Success) {
             if ($wslConfigCheck.Output -match "EXISTS") {
                 Add-CheckResult "WSL settings.json" "OK" "~/.claude/settings.json 存在"
@@ -445,6 +456,7 @@ function Check-Files {
             Add-CheckResult "WSL settings.json" "SKIP" "无法检查 WSL 内部"
         }
     }
+    }  # end if/else DoctorTestSafeMode for WSL settings
 }
 
 # ============================================================
@@ -453,6 +465,12 @@ function Check-Files {
 
 function Check-Network {
     Write-Step "诊断项目 5/8：网络检测"
+
+    if ($script:DoctorTestSafeMode) {
+        Write-Info "测试安全模式：跳过真实网络请求。"
+        Add-CheckResult "网络检测" "SKIP" "测试安全模式已跳过真实网络请求"
+        return
+    }
 
     # DNS 检测
     try {
@@ -599,6 +617,12 @@ function Check-VSCode {
 
 function Check-WSL {
     Write-Step "诊断项目 8/8：WSL 检测"
+
+    if ($script:DoctorTestSafeMode) {
+        Write-Info "测试安全模式：不启动 WSL，跳过 WSL 检测。"
+        Add-CheckResult "WSL 检测" "SKIP" "测试安全模式不启动 WSL"
+        return
+    }
 
     $wslInfo = Test-WslInstalled
     if (-not $wslInfo.Installed) {
@@ -1190,7 +1214,7 @@ function Main {
         $supportPathForClipboard = $shareRootPath
     }
 
-    if ($env:CCDI_TEST_MODE -ne "1") {
+    if (-not $script:DoctorTestSafeMode) {
         if (Get-Command Set-Clipboard -ErrorAction SilentlyContinue) {
             try {
                 Set-Clipboard -Value $supportPathForClipboard

@@ -542,6 +542,41 @@ if ($claudeInstallText -match '无超时保护下运行') {
     throw "Invoke-ClaudeDoctorInteractiveSafe must NOT promise timeout protection it cannot deliver"
 }
 
+# 17. doctor.ps1 regression: TestSafe parameter + sandbox-safe network/WSL skip
+$doctorTextFull = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+
+if ($doctorTextFull -notmatch '\[switch\]\$TestSafe') {
+    throw "doctor.ps1 param must include [switch]`$TestSafe"
+}
+if ($doctorTextFull -notmatch '\$script:DoctorTestSafeMode\s*=\s*\$TestSafe\s+-or\s+\(\$env:CCDI_TEST_MODE\s+-eq\s+"1"\)') {
+    throw "doctor.ps1 must define `$script:DoctorTestSafeMode from -TestSafe or CCDI_TEST_MODE"
+}
+if ($doctorTextFull -notmatch 'function Check-Network[\s\S]{0,200}DoctorTestSafeMode[\s\S]{0,200}测试安全模式已跳过真实网络请求') {
+    throw "doctor.ps1 Check-Network must early-return when DoctorTestSafeMode"
+}
+if ($doctorTextFull -notmatch 'function Check-WSL[\s\S]{0,300}DoctorTestSafeMode[\s\S]{0,300}测试安全模式') {
+    throw "doctor.ps1 Check-WSL must early-return when DoctorTestSafeMode"
+}
+if ($doctorTextFull -notmatch 'DoctorTestSafeMode[\s\S]{0,300}测试安全模式不调用 WSL') {
+    throw "doctor.ps1 WSL settings.json check must skip when DoctorTestSafeMode"
+}
+
+# 18. validate.ps1 regression: Invoke-PowerShellScript timeout + taskkill
+$validateText = Get-Content -Path (Join-Path $RootDir "scripts\validate.ps1") -Raw -Encoding UTF8
+
+if ($validateText -notmatch '\[int\]\$TimeoutSec') {
+    throw "validate.ps1 Invoke-PowerShellScript must have TimeoutSec parameter"
+}
+if ($validateText -notmatch 'taskkill\.exe\s+/PID') {
+    throw "validate.ps1 timeout branch must call taskkill.exe /PID"
+}
+if ($validateText -notmatch '/T\s+/F') {
+    throw "validate.ps1 timeout taskkill must use /T /F for process tree"
+}
+if ($validateText -notmatch 'doctor\.ps1[\s\S]{0,300}-TestSafe') {
+    throw "validate.ps1 CoreSandboxFlow must pass -TestSafe to doctor.ps1"
+}
+
 # 17. Start-Job failure must log skip reason with "避免诊断流程卡死"
 if ($claudeInstallText -notmatch '已跳过 claude doctor，避免诊断流程卡死') {
     throw "Invoke-ClaudeDoctorInteractiveSafe must log that claude doctor was skipped to avoid hang"
