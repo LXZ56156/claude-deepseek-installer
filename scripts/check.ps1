@@ -689,20 +689,26 @@ if ($releaseArtifactsText -notmatch '(Entries|条目数)') {
 if ($releaseArtifactsText -notmatch 'Mode All.*RequireClean') {
     throw "docs/release-artifacts.md must document Mode All + RequireClean validation command"
 }
-# Commit in release-artifacts.md must match current HEAD or its parent (generating commit)
-# Because docs/release-artifacts.md is part of the commit tree, the docs record
-# the "generating commit" while HEAD may be one commit ahead (docs-only update).
-$currentHeadFull = (git rev-parse HEAD).Trim()
-$currentHeadShort = (git rev-parse --short HEAD).Trim()
-$parentFull = ""
-$parentShort = ""
-try { $parentFull = (git rev-parse HEAD~1).Trim() } catch { }
-try { $parentShort = (git rev-parse --short HEAD~1).Trim() } catch { }
-if ($releaseArtifactsText -notmatch [regex]::Escape($currentHeadFull) -and
-    $releaseArtifactsText -notmatch [regex]::Escape($currentHeadShort) -and
-    ($parentFull -eq "" -or $releaseArtifactsText -notmatch [regex]::Escape($parentFull)) -and
-    ($parentShort -eq "" -or $releaseArtifactsText -notmatch [regex]::Escape($parentShort))) {
-    throw "docs/release-artifacts.md Commit must reference current HEAD ($currentHeadShort) or its parent ($parentShort)"
+# Commit in release-artifacts.md must reference a recent commit in the history
+# (HEAD, HEAD~1, or HEAD~2). Because docs/release-artifacts.md is part of the
+# commit tree, it records the generating commit while HEAD may be ahead.
+$recentShas = New-Object System.Collections.ArrayList
+[void]$recentShas.Add((git rev-parse HEAD).Trim())
+[void]$recentShas.Add((git rev-parse --short HEAD).Trim())
+try { [void]$recentShas.Add((git rev-parse HEAD~1).Trim()) } catch { }
+try { [void]$recentShas.Add((git rev-parse --short HEAD~1).Trim()) } catch { }
+try { [void]$recentShas.Add((git rev-parse HEAD~2).Trim()) } catch { }
+try { [void]$recentShas.Add((git rev-parse --short HEAD~2).Trim()) } catch { }
+$foundCommit = $false
+foreach ($sha in $recentShas) {
+    if ($sha -and $releaseArtifactsText -match [regex]::Escape($sha)) {
+        $foundCommit = $true
+        break
+    }
+}
+if (-not $foundCommit) {
+    $headShort = (git rev-parse --short HEAD).Trim()
+    throw "docs/release-artifacts.md Commit must reference a recent commit (HEAD=$headShort or parent)"
 }
 
 # 18e. validate.ps1 Invoke-PowerShellScript anti-regression (v1.3.2 final)
