@@ -1169,6 +1169,11 @@ function Invoke-ClaudeDoctorInteractiveSafe {
         Write-Log "INFO" "Invoke-ClaudeDoctorInteractiveSafe: 启动 claude doctor (Start-Process, stdout/stderr 重定向)"
         $proc.Start() | Out-Null
 
+        # 异步读取 stdout 和 stderr —— 必须在写 stdin 之前启动，
+        # 防止 doctor 输出填满 pipe 缓冲区导致进程阻塞（经典 .NET Process 死锁）。
+        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+        $stderrTask = $proc.StandardError.ReadToEndAsync()
+
         # 向 stdin 写入足够的换行防止分页卡住
         $stdinWriter = $proc.StandardInput
         try {
@@ -1181,10 +1186,6 @@ function Invoke-ClaudeDoctorInteractiveSafe {
         catch {
             Write-Log "DEBUG" "stdin 写入异常（可能 doctor 已退出）: $_"
         }
-
-        # 异步读取 stdout 和 stderr
-        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
-        $stderrTask = $proc.StandardError.ReadToEndAsync()
 
         # 等待进程完成或超时
         $finished = $proc.WaitForExit($TimeoutSec * 1000)
@@ -1232,9 +1233,31 @@ function Invoke-ClaudeDoctorInteractiveSafe {
                     Write-Log "ERROR" "无法终止 claude doctor 进程: $_"
                 }
             }
-            # 读取已捕获的部分输出
-            $stdOut = if ($stdOut) { $stdOut } else { "" }
-            $stdErr = if ($stdErr) { $stdErr } else { "" }
+            # 进程被杀后 pipe 关闭，异步任务应已完成；等待并获取已捕获的部分输出
+            try {
+                if (-not $stdoutTask.IsCompleted) {
+                    $stdoutTask.Wait(5000) | Out-Null
+                }
+                if ($stdoutTask.IsCompleted) {
+                    $stdOut = $stdoutTask.Result
+                }
+            }
+            catch {
+                Write-Log "DEBUG" "超时后 stdout 任务结果获取异常: $_"
+            }
+            try {
+                if (-not $stderrTask.IsCompleted) {
+                    $stderrTask.Wait(3000) | Out-Null
+                }
+                if ($stderrTask.IsCompleted) {
+                    $stdErr = $stderrTask.Result
+                }
+            }
+            catch {
+                Write-Log "DEBUG" "超时后 stderr 任务结果获取异常: $_"
+            }
+            if (-not $stdOut) { $stdOut = "" }
+            if (-not $stdErr) { $stdErr = "" }
         }
 
         $sw.Stop()
