@@ -174,6 +174,67 @@ function Invoke-SandboxProcess {
 }
 
 # ============================================================
+# Helper: run a PowerShell snippet in subprocess that dot-sources
+# release libs and calls a specific function. Parses structured
+# SANDBOX_TEST: markers to determine pass/fail.
+# ============================================================
+function Invoke-SandboxFunctionTest {
+    param(
+        [string]$Label,
+        [string]$ReleaseRoot,
+        [string]$ScriptText,
+        [hashtable]$Environment = @{},
+        [int]$TimeoutSec = 60
+    )
+
+    # Build a self-contained test script
+    $testScript = @"
+`$ErrorActionPreference = 'Continue'
+Set-Location '$ReleaseRoot'
+
+# Load libraries
+. .\lib\logger.ps1 2>`$null
+. .\lib\common.ps1 2>`$null
+. .\lib\state.ps1 2>`$null
+. .\lib\env-check.ps1 2>`$null
+. .\lib\config-writer.ps1 2>`$null
+. .\lib\claude-install.ps1 2>`$null
+
+# Suppress Write-Log output in subprocess
+function global:Write-Log { param(`$Level, `$Message) }
+function global:Write-Info { param(`$Message) }
+function global:Write-Success { param(`$Message) }
+function global:Write-Warning { param(`$Message) }
+function global:Write-Error-Msg { param(`$Message) }
+function global:Write-FatalError { param(`$Message) }
+function global:Write-Step { param(`$Message) }
+function global:Write-Result { param(`$Status, `$Label, `$Detail = '') }
+function global:Add-CheckResult { param(`$Label, `$Status, `$Detail = '') }
+function global:Add-Suggestion { param(`$Message) }
+
+$ScriptText
+"@
+
+    # Write temp file
+    $tempTestFile = Join-Path ([System.IO.Path]::GetTempPath()) "ccdi_sandbox_fntest_${PID}_$(Get-Random).ps1"
+    try {
+        [System.IO.File]::WriteAllText($tempTestFile, $testScript, (New-Object System.Text.UTF8Encoding($false)))
+
+        $result = Invoke-SandboxProcess -Label $Label `
+            -FileName "powershell.exe" `
+            -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tempTestFile) `
+            -WorkingDirectory $ReleaseRoot `
+            -Environment $Environment `
+            -TimeoutSec $TimeoutSec
+
+        return $result
+    }
+    finally {
+        Remove-Item $tempTestFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ============================================================
 # Setup sandbox directories
 # ============================================================
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ccdi_sandbox_full_$PID")
@@ -682,11 +743,17 @@ try {
             Write-SandboxPass "H1. No raw proxy credentials leaked"
         }
 
-        # Check sanitized markers
-        if ($proxyCombined -match "<AUTH>@" -or $proxyCombined -match "<AUTH>@127") {
-            Write-SandboxPass "H2. Proxy URLs sanitized with <AUTH>@"
+        # Check sanitized markers in reports/logs.
+        # If proxy variables appear in output, they MUST be sanitized.
+        # If proxy section is skipped (TestSafe), H4 function test provides coverage.
+        if ($proxyCombined -match "<AUTH>@") {
+            Write-SandboxPass "H2. Proxy URLs sanitized with <AUTH>@ in outputs"
+        } elseif ($proxyCombined -match 'HTTPS_PROXY|HTTP_PROXY|ALL_PROXY') {
+            # Proxy vars ARE in output but NOT sanitized -> FAIL
+            Write-SandboxFail "H2. Proxy sanitize" "proxy variables present but <AUTH>@ marker not found"
         } else {
-            Write-SandboxInfo "H2. <AUTH>@ marker not found (may be skipped in TestSafe)"
+            # Proxy section skipped entirely (likely TestSafe skip of network checks)
+            Write-SandboxPass "H2. Proxy section not in output (TestSafe skip), covered by H4 function test"
         }
 
         # Quick scan individual log files
@@ -705,6 +772,42 @@ try {
         if (-not $logLeak) {
             Write-SandboxPass "H3. Log files free of proxy credentials"
         }
+
+        # H4: FUNCTION-LEVEL test of Sanitize-ProxyUrl
+        $h4Script = @'
+$r1 = Sanitize-ProxyUrl -Text "http://user:pass@127.0.0.1:7890"
+if ($r1 -match '<AUTH>@' -and $r1 -notmatch 'user:pass') {
+    Write-Output "SANDBOX_TEST:PASS:H4_http"
+} else {
+    Write-Output "SANDBOX_TEST:FAIL:H4_http:got=$r1"
+}
+
+$r2 = Sanitize-ProxyUrl -Text "socks5://abc:def@127.0.0.1:7892"
+if ($r2 -match '<AUTH>@' -and $r2 -notmatch 'abc:def') {
+    Write-Output "SANDBOX_TEST:PASS:H4_socks"
+} else {
+    Write-Output "SANDBOX_TEST:FAIL:H4_socks:got=$r2"
+}
+
+$r3 = Sanitize-ProxyUrl -Text "http://no-auth-proxy.example.com:8080"
+if ($r3 -eq "http://no-auth-proxy.example.com:8080") {
+    Write-Output "SANDBOX_TEST:PASS:H4_noauth"
+} else {
+    Write-Output "SANDBOX_TEST:FAIL:H4_noauth:got=$r3"
+}
+'@
+        $h4Result = Invoke-SandboxFunctionTest -Label "Sanitize-ProxyUrl function" `
+            -ReleaseRoot $extractDir -ScriptText $h4Script -TimeoutSec 30
+
+        $h4Passes = 0
+        $h4Fails = 0
+        if ($h4Result.Stdout -match 'SANDBOX_TEST:PASS:H4_http') { $h4Passes++ } else { $h4Fails++; Write-SandboxFail "H4. Sanitize-ProxyUrl http" "function test failed: $($h4Result.Stdout)" }
+        if ($h4Result.Stdout -match 'SANDBOX_TEST:PASS:H4_socks') { $h4Passes++ } else { $h4Fails++; Write-SandboxFail "H4. Sanitize-ProxyUrl socks" "function test failed: $($h4Result.Stdout)" }
+        if ($h4Result.Stdout -match 'SANDBOX_TEST:PASS:H4_noauth') { $h4Passes++ } else { $h4Fails++; Write-SandboxFail "H4. Sanitize-ProxyUrl noauth" "function test failed: $($h4Result.Stdout)" }
+
+        if ($h4Fails -eq 0) {
+            Write-SandboxPass "H4. Sanitize-ProxyUrl function tests ($h4Passes/3 passed)"
+        }
     } catch {
         Write-SandboxFail "H. Proxy masking" $_.Exception.Message
     }
@@ -716,8 +819,6 @@ try {
     Write-Host "=== SCENARIO I: Native Install File Lock RawError ===" -ForegroundColor Cyan
 
     try {
-        # Source the claude-install.ps1 to test function directly
-        # But since this is complex with dependencies, instead test via pattern matching in source code
         $claudeInstallPath = Join-Path $extractDir "lib\claude-install.ps1"
         $claudeInstallSource = Get-Content -Path $claudeInstallPath -Raw -Encoding UTF8
 
@@ -742,47 +843,79 @@ try {
             Write-SandboxFail "I3. HasRawError log" "structured format not found"
         }
 
-        # I4: File lock patterns recognized
-        $lockPatterns = @(
-            "used by another process",
-            "being used by another process",
-            "The process cannot access the file",
-            "because it is being used by another process",
-            "文件正由另一进程使用"
-        )
-        $allPatternsFound = $true
-        foreach ($lp in $lockPatterns) {
-            if ($claudeInstallSource -notmatch [regex]::Escape($lp)) {
-                Write-SandboxFail "I4. Lock pattern" "missing: $lp"
-                $allPatternsFound = $false
-            }
-        }
-        if ($allPatternsFound) { Write-SandboxPass "I4. All file lock patterns recognized" }
+        # I4: FUNCTION-LEVEL test: real call to Test-IsClaudeNativeFileLockError
+        $i4Script = @'
+# Test 1: real file-lock error (should return $true)
+$lockText = "The process cannot access the file because it is being used by another process`n$env:USERPROFILE\.claude\downloads"
+$r1 = Test-IsClaudeNativeFileLockError -Text $lockText
+if ($r1 -eq $true) {
+    Write-Output "SANDBOX_TEST:PASS:LOCK_TRUE"
+} else {
+    Write-Output "SANDBOX_TEST:FAIL:LOCK_TRUE:returned=$r1"
+}
 
-        # I5: Verify TestSafe mode for file lock function
-        # We can directly call Test-IsClaudeNativeFileLockError if the lib is loaded
-        # But in this script, we verify via source code pattern
-        if ($claudeInstallSource -match "close.*claude.*node.*PowerShell|关闭.*claude" -or
-            $claudeInstallSource -match "关闭 claude|关闭 Node|关闭 PowerShell") {
+# Test 2: Chinese file-lock error (should return $true)
+$cnText = "文件正由另一进程使用，因此该进程无法访问此文件。`nC:\Users\test\.claude\downloads"
+$r2 = Test-IsClaudeNativeFileLockError -Text $cnText
+if ($r2 -eq $true) {
+    Write-Output "SANDBOX_TEST:PASS:LOCK_CN_TRUE"
+} else {
+    Write-Output "SANDBOX_TEST:FAIL:LOCK_CN_TRUE:returned=$r2"
+}
+
+# Test 3: network timeout (should return $false, NOT a file-lock error)
+$netText = "The request timed out while downloading install.ps1"
+$r3 = Test-IsClaudeNativeFileLockError -Text $netText
+if ($r3 -eq $false) {
+    Write-Output "SANDBOX_TEST:PASS:NETWORK_FALSE"
+} else {
+    Write-Output "SANDBOX_TEST:FAIL:NETWORK_FALSE:returned=$r3"
+}
+
+# Test 4: access denied (should match "Access to the path" or "is denied")
+$deniedText = "Access to the path 'C:\Users\test\.claude\downloads' is denied."
+$r4 = Test-IsClaudeNativeFileLockError -Text $deniedText
+if ($r4 -eq $true) {
+    Write-Output "SANDBOX_TEST:PASS:DENIED_TRUE"
+} else {
+    Write-Output "SANDBOX_TEST:FAIL:DENIED_TRUE:returned=$r4"
+}
+
+# Test 5: empty text (should return $false)
+$r5 = Test-IsClaudeNativeFileLockError -Text ""
+if ($r5 -eq $false) {
+    Write-Output "SANDBOX_TEST:PASS:EMPTY_FALSE"
+} else {
+    Write-Output "SANDBOX_TEST:FAIL:EMPTY_FALSE:returned=$r5"
+}
+'@
+        $i4Result = Invoke-SandboxFunctionTest -Label "Test-IsClaudeNativeFileLockError function" `
+            -ReleaseRoot $extractDir -ScriptText $i4Script -TimeoutSec 30
+
+        $i4Passes = 0
+        $i4Fails = 0
+        $i4Markers = @("LOCK_TRUE", "LOCK_CN_TRUE", "NETWORK_FALSE", "DENIED_TRUE", "EMPTY_FALSE")
+        foreach ($marker in $i4Markers) {
+            if ($i4Result.Stdout -match "SANDBOX_TEST:PASS:$marker") { $i4Passes++ }
+            else { $i4Fails++; Write-SandboxFail "I4. $marker" "function test failed: $($i4Result.Stdout)" }
+        }
+        if ($i4Fails -eq 0) {
+            Write-SandboxPass "I4. Test-IsClaudeNativeFileLockError function tests ($i4Passes/5 passed)"
+        }
+
+        # I5: User guidance for file lock (source check)
+        if ($claudeInstallSource -match "关闭 claude|关闭 Node|关闭 PowerShell|close.*claude|关闭.*PowerShell.*Windows Terminal") {
             Write-SandboxPass "I5. File lock user guidance mentions closing processes"
         } else {
-            Write-SandboxInfo "I5. File lock guidance: will verify during runtime if needed"
+            Write-SandboxFail "I5. File lock guidance" "no user-friendly closing-processes advice"
         }
 
-        # I6: No auto-kill of processes or auto-delete of .claude files in lock handler
-        if ($claudeInstallSource -match 'Remove-Item.*\.claude\\downloads' -and
-            $claudeInstallSource -match 'Test-IsClaudeNativeFileLockError') {
-            # Check the context around the Remove-Item to ensure it's guidance, not auto-delete
-            $lockFuncBlock = if ($claudeInstallSource -match '(?s)function Invoke-ClaudeCodeNativeInstall.*?(?=^function\s)') {
-                $matches[0]
-            } else { "" }
-            if ($lockFuncBlock -and $lockFuncBlock -notmatch 'Remove-Item.*\\\.claude\\settings\.json') {
-                Write-SandboxPass "I6. No auto-delete of settings.json in lock handler"
-            } else {
-                Write-SandboxPass "I6. No auto-delete of settings.json in lock handler"
-            }
+        # I6: No auto-kill of processes or auto-delete of .claude files
+        if ($claudeInstallSource -match 'Remove-Item.*\\\.claude\\settings\.json.*-Force' -and
+            $claudeInstallSource -match 'Test-IsClaudeNativeFileLockError[\s\S]{0,500}Remove-Item') {
+            Write-SandboxFail "I6. Auto-delete" "settings.json auto-delete detected in lock handler"
         } else {
-            Write-SandboxPass "I6. File lock handler does not auto-kill processes or delete settings"
+            Write-SandboxPass "I6. No auto-delete of settings.json in lock handler"
         }
     } catch {
         Write-SandboxFail "I. Native file lock" $_.Exception.Message
@@ -797,44 +930,87 @@ try {
     try {
         $sourceCheck = $claudeInstallSource
 
-        # J1: Test-ClaudeCommandExisting must detect native_local_bin
+        # J1: Test-ClaudeCommandExisting must detect native_local_bin (source check)
         if ($sourceCheck -match 'native_local_bin') {
-            Write-SandboxPass "J1. native_local_bin detection present"
+            Write-SandboxPass "J1. native_local_bin detection present in source"
         } else {
             Write-SandboxFail "J1. native_local_bin" "not in claude-install.ps1"
         }
 
-        # J2: WindowsApps alias must be recognized
+        # J2: WindowsApps alias must be recognized (source check)
         if ($sourceCheck -match 'WindowsApps') {
-            Write-SandboxPass "J2. WindowsApps alias detection present"
+            Write-SandboxPass "J2. WindowsApps alias detection present in source"
         } else {
             Write-SandboxFail "J2. WindowsApps" "not in source"
         }
 
-        # J3: PATH conflict when PATH claude broken but native_local_bin usable
+        # J3: PATH conflict when PATH claude broken but native_local_bin usable (source check)
         if ($sourceCheck -match 'PATH.*冲突|BadPath|PATH 中 claude 不可用.*native_local_bin') {
             Write-SandboxPass "J3. PATH conflict detection for broken PATH + native_local_bin"
         } else {
             Write-SandboxFail "J3. PATH conflict" "no detection of broken PATH claude + native_local_bin"
         }
 
-        # J4: Multiple source types detected
-        $sources = @('native_local_bin', 'WindowsApps', 'npm_global', 'Get-Command')
-        $sourcesFound = 0
-        foreach ($s in $sources) {
-            if ($sourceCheck -match [regex]::Escape($s)) { $sourcesFound++ }
-        }
-        if ($sourcesFound -ge 3) {
-            Write-SandboxPass "J4. Multiple Claude command sources detected ($sourcesFound types)"
+        # J4: CCDI_MOCK_CLAUDE mock support in source
+        if ($sourceCheck -match "CCDI_MOCK_CLAUDE") {
+            Write-SandboxPass "J4. CCDI_MOCK_CLAUDE mock mode present in source"
         } else {
-            Write-SandboxInfo "J4. Only $sourcesFound source types found in source"
+            Write-SandboxFail "J4. CCDI_MOCK_CLAUDE" "mock mode not in source"
         }
 
-        # J5: MOCK mode for Test-ClaudeCommandExisting
-        if ($sourceCheck -match "CCDI_MOCK_CLAUDE") {
-            Write-SandboxPass "J5. CCDI_MOCK_CLAUDE mock mode present"
-        } else {
-            Write-SandboxFail "J5. CCDI_MOCK_CLAUDE" "mock mode not in source"
+        # J5: FUNCTION-LEVEL Mock Matrix Runtime Test
+        $j5Script = @'
+$env:CCDI_TEST_MODE = "1"
+$env:CCDI_MOCK_INSTALL_DECISION = "1"
+
+# Test ok
+$env:CCDI_MOCK_CLAUDE = "ok"
+$rOk = Test-ClaudeCommandExisting
+if ($rOk.Exists -eq $true -and $rOk.Usable -eq $true) {
+    Write-Output "SANDBOX_TEST:PASS:MOCK_OK"
+} else {
+    Write-Output "SANDBOX_TEST:FAIL:MOCK_OK:Exists=$($rOk.Exists):Usable=$($rOk.Usable)"
+}
+
+# Test broken
+$env:CCDI_MOCK_CLAUDE = "broken"
+$rBroken = Test-ClaudeCommandExisting
+if ($rBroken.Exists -eq $true -and $rBroken.Usable -eq $false) {
+    Write-Output "SANDBOX_TEST:PASS:MOCK_BROKEN"
+} else {
+    Write-Output "SANDBOX_TEST:FAIL:MOCK_BROKEN:Exists=$($rBroken.Exists):Usable=$($rBroken.Usable)"
+}
+
+# Test missing
+$env:CCDI_MOCK_CLAUDE = "missing"
+$rMissing = Test-ClaudeCommandExisting
+if ($rMissing.Exists -eq $false -and $rMissing.Usable -eq $false) {
+    Write-Output "SANDBOX_TEST:PASS:MOCK_MISSING"
+} else {
+    Write-Output "SANDBOX_TEST:FAIL:MOCK_MISSING:Exists=$($rMissing.Exists):Usable=$($rMissing.Usable)"
+}
+
+# Test default (no CCDI_MOCK_CLAUDE set)
+Remove-Item Env:CCDI_MOCK_CLAUDE -ErrorAction SilentlyContinue
+$rDefault = Test-ClaudeCommandExisting
+if ($rDefault.Exists -eq $false) {
+    Write-Output "SANDBOX_TEST:PASS:MOCK_DEFAULT_MISSING"
+} else {
+    Write-Output "SANDBOX_TEST:FAIL:MOCK_DEFAULT_MISSING:Exists=$($rDefault.Exists)"
+}
+'@
+        $j5Result = Invoke-SandboxFunctionTest -Label "Claude mock matrix runtime" `
+            -ReleaseRoot $extractDir -ScriptText $j5Script -TimeoutSec 30
+
+        $j5Passes = 0
+        $j5Fails = 0
+        $j5Markers = @("MOCK_OK", "MOCK_BROKEN", "MOCK_MISSING", "MOCK_DEFAULT_MISSING")
+        foreach ($marker in $j5Markers) {
+            if ($j5Result.Stdout -match "SANDBOX_TEST:PASS:$marker") { $j5Passes++ }
+            else { $j5Fails++; Write-SandboxFail "J5. $marker" "mock matrix test failed: $($j5Result.Stdout)" }
+        }
+        if ($j5Fails -eq 0) {
+            Write-SandboxPass "J5. Claude mock matrix runtime tests ($j5Passes/4 passed)"
         }
     } catch {
         Write-SandboxFail "J. Claude inventory" $_.Exception.Message
@@ -847,43 +1023,87 @@ try {
     Write-Host "=== SCENARIO K: npm.cmd Resolution ===" -ForegroundColor Cyan
 
     try {
-        # Check Resolve-NpmCmdPath in common.ps1 (not claude-install.ps1)
+        # K1: Resolve-NpmCmdPath must exist in common.ps1
         $commonSource = Get-Content -Path (Join-Path $extractDir "lib\common.ps1") -Raw -Encoding UTF8
 
         if ($commonSource -match 'function Resolve-NpmCmdPath') {
             Write-SandboxPass "K1. Resolve-NpmCmdPath function exists (in common.ps1)"
         } else {
-            Write-SandboxFail "K1. Resolve-NpmCmdPath" "function not found in common.ps1 or claude-install.ps1"
+            Write-SandboxFail "K1. Resolve-NpmCmdPath" "function not found in common.ps1"
         }
 
-        # Prefer .cmd over .ps1: check both common.ps1 and claude-install.ps1
-        if ($commonSource -match 'npm\.cmd|npm\.C,' -or $sourceCheck -match 'npm\.cmd') {
-            Write-SandboxPass "K2. npm.cmd preferred over npm.ps1"
-        } else {
-            Write-SandboxInfo "K2. Need to verify npm.cmd preference in Resolve-NpmCmdPath"
-        }
-
-        # cmd.exe /d /s /c wrapping
-        if ($commonSource -match 'cmd\.exe.*[/-]d.*[/-]s.*[/-]c' -or
-            $sourceCheck -match 'cmd\.exe.*[/-]d.*[/-]s.*[/-]c') {
-            Write-SandboxPass "K3. npm commands wrapped with cmd.exe /d /s /c"
-        } else {
-            Write-SandboxInfo "K3. cmd.exe wrapping check: may use Invoke-CommandSafe"
-        }
-
-        # No "%1 is not a valid Win32 application" - verified via source comment
+        # K2: Source check: npm.ps1 risk documented
         if ($commonSource -match '"%1 is not a valid Win32 application"' -or $commonSource -match '%1 is not a valid Win32') {
-            Write-SandboxPass "K4. npm.ps1 risk documented in comments"
+            Write-SandboxPass "K2. npm.ps1 risk documented in source"
         } else {
-            Write-SandboxInfo "K4. npm.ps1 risk check: reference in common.ps1 comments only"
+            Write-SandboxFail "K2. npm.ps1 risk" "warning not documented in Resolve-NpmCmdPath"
         }
 
-        # K5: Resolve-NpmCmdPath must not return npm.ps1
-        if ($commonSource -match 'function Resolve-NpmCmdPath[\s\S]{0,1000}npm\.cmd') {
-            Write-SandboxPass "K5. Resolve-NpmCmdPath resolves to npm.cmd (not .ps1)"
+        # K3: FUNCTION-LEVEL test: Resolve-NpmCmdPath prefers npm.cmd
+        $npmTestDir = Join-Path $sandboxDir "npm-path-test"
+        New-Item -ItemType Directory -Path $npmTestDir -Force | Out-Null
+        # Create npm.cmd (simulates real npm)
+        Set-Content -Path (Join-Path $npmTestDir "npm.cmd") -Value "@echo npm.cmd mock" -Encoding ASCII
+        # Create npm.ps1 (should NOT be preferred)
+        Set-Content -Path (Join-Path $npmTestDir "npm.ps1") -Value "Write-Output 'npm.ps1 mock'" -Encoding UTF8
+
+        $k3Script = @"
+`$npmTestDir = '$npmTestDir'
+`$oldPath = `$env:PATH
+try {
+    `$env:PATH = "`$npmTestDir;`$oldPath"
+    `$r = Resolve-NpmCmdPath
+    if (`$r.Found -and `$r.Path -match 'npm\.cmd$') {
+        Write-Output "SANDBOX_TEST:PASS:NPM_CMD_RESOLVED"
+        Write-Output "SANDBOX_TEST:INFO:path=`$(`$r.Path)"
+    } elseif (`$r.Found -and `$r.Path -match 'npm\.ps1$') {
+        Write-Output "SANDBOX_TEST:FAIL:NPM_PS1_RETURNED:path=`$(`$r.Path)"
+    } else {
+        Write-Output "SANDBOX_TEST:FAIL:NPM_NOT_FOUND:Found=`$(`$r.Found):Path=`$(`$r.Path):Error=`$(`$r.Error)"
+    }
+} finally {
+    `$env:PATH = `$oldPath
+}
+"@
+        $k3Result = Invoke-SandboxFunctionTest -Label "Resolve-NpmCmdPath npm.cmd preference" `
+            -ReleaseRoot $extractDir -ScriptText $k3Script -TimeoutSec 30
+
+        if ($k3Result.Stdout -match 'SANDBOX_TEST:PASS:NPM_CMD_RESOLVED') {
+            Write-SandboxPass "K3. Resolve-NpmCmdPath returns npm.cmd (not .ps1)"
+        } elseif ($k3Result.Stdout -match 'SANDBOX_TEST:FAIL:NPM_PS1_RETURNED') {
+            Write-SandboxFail "K3. npm.ps1 returned" "Resolve-NpmCmdPath returned .ps1 instead of .cmd"
         } else {
-            Write-SandboxInfo "K5. Verify Resolve-NpmCmdPath always prefers npm.cmd"
+            Write-SandboxFail "K3. Resolve-NpmCmdPath" "function test failed: $($k3Result.Stdout)"
         }
+
+        # K4: FUNCTION-LEVEL test: npm.cmd only (no npm.ps1 to compete)
+        Remove-Item (Join-Path $npmTestDir "npm.ps1") -Force -ErrorAction SilentlyContinue
+        $k4Script = @"
+`$npmTestDir = '$npmTestDir'
+`$oldPath = `$env:PATH
+try {
+    `$env:PATH = "`$npmTestDir;`$oldPath"
+    `$r = Resolve-NpmCmdPath
+    if (`$r.Found -and `$r.Path -match 'npm\.cmd$') {
+        Write-Output "SANDBOX_TEST:PASS:NPM_CMD_ONLY"
+    } else {
+        Write-Output "SANDBOX_TEST:FAIL:NPM_CMD_ONLY:Found=`$(`$r.Found):Path=`$(`$r.Path)"
+    }
+} finally {
+    `$env:PATH = `$oldPath
+}
+"@
+        $k4Result = Invoke-SandboxFunctionTest -Label "Resolve-NpmCmdPath npm.cmd only" `
+            -ReleaseRoot $extractDir -ScriptText $k4Script -TimeoutSec 30
+
+        if ($k4Result.Stdout -match 'SANDBOX_TEST:PASS:NPM_CMD_ONLY') {
+            Write-SandboxPass "K4. Resolve-NpmCmdPath finds npm.cmd when only .cmd exists"
+        } else {
+            Write-SandboxFail "K4. npm.cmd only" "test failed: $($k4Result.Stdout)"
+        }
+
+        # Cleanup
+        Remove-Item $npmTestDir -Recurse -Force -ErrorAction SilentlyContinue
     } catch {
         Write-SandboxFail "K. npm resolution" $_.Exception.Message
     }
@@ -926,12 +1146,12 @@ try {
             Write-SandboxFail "L4. Architecture check" "missing 64-bit OS/Process checks"
         }
 
-        # L5: Doctor uses architecture info
+        # L5: Doctor must reference architecture / 32-bit detection
         $doctorSource = Get-Content -Path $doctorPath -Raw -Encoding UTF8
         if ($doctorSource -match 'IsWow64PowerShell|Is64BitProcess' -or $doctorSource -match 'Test-MinimumRequirements') {
             Write-SandboxPass "L5. Doctor references architecture checks"
         } else {
-            Write-SandboxInfo "L5. Doctor may use Test-MinimumRequirements for architecture"
+            Write-SandboxFail "L5. Doctor architecture" "doctor.ps1 does not reference IsWow64PowerShell or Test-MinimumRequirements"
         }
     } catch {
         Write-SandboxFail "L. 32-bit PS detection" $_.Exception.Message
@@ -947,28 +1167,28 @@ try {
         # Check doctor.ps1 for non-blocking patterns
         $doctorSource = Get-Content -Path $doctorPath -Raw -Encoding UTF8
 
-        # M1: Git missing should be WARN or INFO, not ERROR
+        # M1: Git missing should be WARN or INFO, not ERROR (source check - must exist)
         if ($doctorSource -match 'Git 不是安装 Claude Code 的硬性要求|Git.*推荐|Git.*WARN|Git.*INFO') {
             Write-SandboxPass "M1. Git missing is non-blocking (WARN/INFO)"
         } else {
-            Write-SandboxInfo "M1. Git missing message check: need runtime verification"
+            Write-SandboxFail "M1. Git non-blocking" "doctor.ps1 does not contain Git non-blocking message"
         }
 
-        # M2: VS Code missing should be WARN/INFO
+        # M2: VS Code missing should be WARN/INFO (source check - must exist)
         if ($doctorSource -match 'VS Code.*WARN|VS Code.*INFO|VS Code.*推荐|VS Code.*SKIP|VS Code.*不是硬性') {
             Write-SandboxPass "M2. VS Code missing is non-blocking"
         } else {
-            Write-SandboxInfo "M2. VS Code non-blocking: will verify at runtime"
+            Write-SandboxFail "M2. VS Code non-blocking" "doctor.ps1 does not contain VS Code non-blocking message"
         }
 
-        # M3: WSL missing should be SKIP/INFO/WARN
+        # M3: WSL missing should be SKIP/INFO/WARN, not block Windows native (source check - must exist)
         if ($doctorSource -match 'WSL.*SKIP|WSL.*INFO|WSL 是高级选项|不影响 Windows 原生') {
             Write-SandboxPass "M3. WSL missing is non-blocking for Windows native install"
         } else {
-            Write-SandboxInfo "M3. WSL non-blocking: will verify at runtime"
+            Write-SandboxFail "M3. WSL non-blocking" "doctor.ps1 does not contain WSL non-blocking message"
         }
 
-        # Runtime check from default doctor report
+        # M4: Runtime check from default doctor report (environment-dependent, INFO OK)
         $defReportPath = Join-Path $extractDir "report.txt"
         if (Test-Path $defReportPath) {
             $defContent = Get-Content -Path $defReportPath -Raw -Encoding UTF8
@@ -976,7 +1196,7 @@ try {
             # Git/VS Code/WSL should not cause Overall=ERROR
             if ($defContent -match "整体评估.*ERROR" -and
                 $defContent -notmatch "API Key|DeepSeek.*ERROR|Claude.*ERROR") {
-                Write-SandboxInfo "M4. Overall ERROR may be from non-Git/VS Code/WSL causes"
+                Write-SandboxInfo "M4. Overall ERROR may be from non-Git/VS Code/WSL causes (environment-specific)"
             } else {
                 Write-SandboxPass "M4. Git/VS Code/WSL do not block Windows native conclusion"
             }
@@ -1137,7 +1357,7 @@ try {
         if ($corrLogText -match "JSON 格式无效|JSON.*无效|settings\.json.*格式") {
             Write-SandboxPass "O1. Corrupted JSON detected with clear message"
         } else {
-            Write-SandboxInfo "O1. JSON error detection: check configure-deepseek logs"
+            Write-SandboxFail "O1. JSON error message" "configure-deepseek logs do not contain JSON format error message"
         }
 
         # O2: Backup of corrupted file should exist
@@ -1271,36 +1491,54 @@ try {
         }
         if (-not $internalFound) { Write-SandboxPass "P9. No internal auth/field exposure" }
 
-        # P10: Check HasRawError= is present in logs
-        if ($scanContent -match "Native Install lock check: HasRawError=" -or
-            $scanContent -match "HasRawError") {
-            Write-SandboxPass "P10. HasRawError structured log present"
+        # P10: HasRawError structured log format MUST exist in source code (I3 already verified).
+        # Runtime logs won't contain it in TestSafe (no real Native Install), so verify via source.
+        $claudeInstallSourceForP10 = Get-Content -Path (Join-Path $extractDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+        if ($claudeInstallSourceForP10 -match "Native Install lock check: HasRawError=") {
+            Write-SandboxPass "P10. HasRawError structured log format present in source"
+        } else {
+            Write-SandboxFail "P10. HasRawError" "structured HasRawError log format not found in claude-install.ps1"
         }
 
-        # P11: Check-WSL has single Test-WslInstalled call (static verification)
-        $doctorSource = Get-Content -Path (Join-Path $extractDir "doctor.ps1") -Raw -Encoding UTF8
-        $checkWslBody = if ($doctorSource -match '(?s)function Check-WSL\s*\{(.*?)\n(?=^function\s)') {
-            $matches[1]
-        } else { "" }
-        if ($checkWslBody) {
+        # P11: Check-WSL has single Test-WslInstalled call (line-based extraction)
+        $doctorLines = Get-Content -Path (Join-Path $extractDir "doctor.ps1") -Encoding UTF8
+        $checkWslStart = -1; $checkWslEnd = $doctorLines.Count
+        $nextFuncPattern = '^function\s'
+        for ($i = 0; $i -lt $doctorLines.Count; $i++) {
+            if ($doctorLines[$i] -match '^function Check-WSL\b') { $checkWslStart = $i }
+            elseif ($checkWslStart -ge 0 -and $doctorLines[$i] -match $nextFuncPattern) {
+                $checkWslEnd = $i; break
+            }
+        }
+        if ($checkWslStart -lt 0) {
+            Write-SandboxFail "P11. Check-WSL" "could not locate function Check-WSL in doctor.ps1"
+        } else {
+            $checkWslBody = ($doctorLines[$checkWslStart..($checkWslEnd - 1)] -join "`n")
             $wslCount = ([regex]::Matches($checkWslBody, 'Test-WslInstalled')).Count
             if ($wslCount -eq 1) {
                 Write-SandboxPass "P11. Check-WSL has exactly 1 Test-WslInstalled call"
             } else {
-                Write-SandboxFail "P11. Check-WSL" "Test-WslInstalled count = $wslCount, expected 1"
+                Write-SandboxFail "P11. Check-WSL" "Test-WslInstalled count = $wslCount, expected 1 (body lines $checkWslStart-$checkWslEnd)"
             }
         }
 
         # P12: Check-Commands does NOT call Test-WslInstalled
-        $checkCmdsBody = if ($doctorSource -match '(?s)function Check-Commands\s*\{(.*?)\n(?=^function\s)') {
-            $matches[1]
-        } else { "" }
-        if ($checkCmdsBody -and $checkCmdsBody -notmatch 'Test-WslInstalled') {
-            Write-SandboxPass "P12. Check-Commands does NOT call Test-WslInstalled"
-        } elseif ($checkCmdsBody -and $checkCmdsBody -match 'Test-WslInstalled') {
-            Write-SandboxFail "P12. Check-Commands" "still calls Test-WslInstalled"
+        $checkCmdsStart = -1; $checkCmdsEnd = $doctorLines.Count
+        for ($i = 0; $i -lt $doctorLines.Count; $i++) {
+            if ($doctorLines[$i] -match '^function Check-Commands\b') { $checkCmdsStart = $i }
+            elseif ($checkCmdsStart -ge 0 -and $doctorLines[$i] -match $nextFuncPattern) {
+                $checkCmdsEnd = $i; break
+            }
+        }
+        if ($checkCmdsStart -lt 0) {
+            Write-SandboxFail "P12. Check-Commands" "could not locate function Check-Commands in doctor.ps1"
         } else {
-            Write-SandboxInfo "P12. Could not extract Check-Commands body"
+            $checkCmdsBody = ($doctorLines[$checkCmdsStart..($checkCmdsEnd - 1)] -join "`n")
+            if ($checkCmdsBody -match 'Test-WslInstalled') {
+                Write-SandboxFail "P12. Check-Commands" "still calls Test-WslInstalled (body lines $checkCmdsStart-$checkCmdsEnd)"
+            } else {
+                Write-SandboxPass "P12. Check-Commands does NOT call Test-WslInstalled"
+            }
         }
     } catch {
         Write-SandboxFail "P. Privacy scan" $_.Exception.Message
