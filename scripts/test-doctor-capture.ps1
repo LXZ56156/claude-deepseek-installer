@@ -8,23 +8,39 @@
 # 用法: powershell -ExecutionPolicy Bypass -File .\scripts\test-doctor-capture.ps1
 # ============================================================
 
-Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-try {
-    $ScriptDir = Split-Path -Parent ($MyInvocation.MyCommand.Path)
-} catch {
-    $ScriptDir = $PSScriptRoot
-}
-$RootDir = Split-Path -Parent $ScriptDir
-if (-not $RootDir) { $RootDir = (Get-Location).Path }
+$ScriptDir = Split-Path -Parent $PSScriptRoot
+. (Join-Path $ScriptDir "lib\bootstrap.ps1")
 
-# 加载库
-$bootstrapPath = Join-Path $RootDir "lib\bootstrap.ps1"
-if (-not (Test-Path $bootstrapPath)) { throw "bootstrap.ps1 not found at: $bootstrapPath" }
-. $bootstrapPath
+Set-StrictMode -Version Latest
 if (-not (Get-Command Initialize-CcdiScript -ErrorAction SilentlyContinue)) { throw "Initialize-CcdiScript not available after loading bootstrap" }
 $null = Initialize-CcdiScript -ScriptName "test-doctor-capture"
+
+# 保存并清除 CCDI_TEST_MODE，防止 fake 测试被跳过
+$oldTestMode = $env:CCDI_TEST_MODE
+$oldMockDecision = $env:CCDI_MOCK_INSTALL_DECISION
+
+function Restore-TestEnv {
+    $testMode = Get-Variable -Name oldTestMode -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if ($null -ne $testMode) {
+        $env:CCDI_TEST_MODE = $testMode
+    }
+    else {
+        Remove-Item Env:\CCDI_TEST_MODE -ErrorAction SilentlyContinue
+    }
+    $mockDecision = Get-Variable -Name oldMockDecision -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if ($null -ne $mockDecision) {
+        $env:CCDI_MOCK_INSTALL_DECISION = $mockDecision
+    }
+    else {
+        Remove-Item Env:\CCDI_MOCK_INSTALL_DECISION -ErrorAction SilentlyContinue
+    }
+}
+
+try {
+    Remove-Item Env:\CCDI_TEST_MODE -ErrorAction SilentlyContinue
+    Remove-Item Env:\CCDI_MOCK_INSTALL_DECISION -ErrorAction SilentlyContinue
 
 $failed = 0
 
@@ -134,9 +150,13 @@ finally {
 Write-Host ""
 if ($failed -eq 0) {
     Write-Host "test-doctor-capture.ps1: ALL TESTS PASSED" -ForegroundColor Green
-    exit 0
 }
 else {
     Write-Host "test-doctor-capture.ps1: $failed TEST(S) FAILED" -ForegroundColor Red
-    exit 1
 }
+}
+finally {
+    Restore-TestEnv
+}
+
+exit $failed

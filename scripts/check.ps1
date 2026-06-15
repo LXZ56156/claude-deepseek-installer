@@ -10,7 +10,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$RootDir = Split-Path -Parent $PSScriptRoot
+$ScriptDir = $PSScriptRoot
+$RootDir = Split-Path -Parent $ScriptDir
 Set-Location $RootDir
 
 Write-Host "PowerShell: $($PSVersionTable.PSVersion) $($PSVersionTable.PSEdition)"
@@ -450,8 +451,20 @@ if ($doctorText -notmatch '截图|复制终端中的完整输出') {
     throw "doctor.ps1 must suggest screenshot or copy terminal output for support"
 }
 
-# 3. doctor.ps1 no longer calls Invoke-ClaudeDoctor automatically;
-# the related timeout/prompt checks are legacy and no longer required.
+# 3. doctor.ps1 Check-Commands must NOT automatically call Invoke-ClaudeDoctor*
+$doctorTextFull = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+$checkCommandsText = if ($doctorTextFull -match '(?s)function Check-Commands\s*\{(.*?)function Check-Files\s*\{') {
+    $matches[1]
+}
+else {
+    throw "Unable to locate Check-Commands block in doctor.ps1"
+}
+if ($checkCommandsText -match '\bInvoke-ClaudeDoctor\b' -or
+    $checkCommandsText -match '\bInvoke-ClaudeDoctorInteractiveSafe\b' -or
+    $checkCommandsText -match '\bInvoke-ClaudeDoctorSafe\b') {
+    throw "doctor.ps1 Check-Commands must not automatically call Invoke-ClaudeDoctor / Invoke-ClaudeDoctorInteractiveSafe / Invoke-ClaudeDoctorSafe"
+}
+Write-Host "[check] doctor.ps1 manual claude doctor flow OK"
 
 # 4. Invoke-CommandSafe uses taskkill /T /F for process tree termination
 if ($commonText -notmatch 'taskkill\.exe\s+/PID') {
@@ -878,6 +891,15 @@ if ($testDoctorCaptureText -notmatch '\$env:PATH') {
 }
 if ($testDoctorCaptureText -notmatch 'finally') {
     throw "test-doctor-capture.ps1 must use finally for cleanup"
+}
+if ($testDoctorCaptureText -notmatch 'CCDI_TEST_MODE') {
+    throw "test-doctor-capture.ps1 must clear/restore CCDI_TEST_MODE so fake capture is not skipped"
+}
+if ($testDoctorCaptureText -notmatch 'CCDI_MOCK_INSTALL_DECISION') {
+    throw "test-doctor-capture.ps1 must clear/restore CCDI_MOCK_INSTALL_DECISION"
+}
+if ($testDoctorCaptureText -notmatch 'Restore-TestEnv' -and $testDoctorCaptureText -notmatch 'Remove-Item Env:\\CCDI_TEST_MODE') {
+    throw "test-doctor-capture.ps1 must restore test environment variables in finally"
 }
 Write-Host "[check] test-doctor-capture.ps1 structure OK"
 

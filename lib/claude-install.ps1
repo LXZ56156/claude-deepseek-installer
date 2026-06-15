@@ -1572,7 +1572,7 @@ function Invoke-ClaudeDoctorInteractiveSafe {
         Write-Log "WARN" "Invoke-ClaudeDoctorInteractiveSafe: $($result.Error)"
 
         try {
-            $postClean = Clear-StaleClaudeDoctorProcesses -ParentPid $parentPid
+            $postClean = Clear-StaleClaudeDoctorProcesses -ParentPid $parentPid -Force
             Write-Log "INFO" "超时后清理本进程 doctor 子进程: 清理了 $($postClean.KilledCount) 个"
         }
         catch {
