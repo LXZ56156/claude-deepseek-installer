@@ -574,11 +574,29 @@ if ($validateText -match 'function Invoke-PowerShellScript[\s\S]{0,2500}\bStart-
 if ($validateText -notmatch 'doctor\.ps1[\s\S]{0,300}-TestSafe') {
     throw "validate.ps1 CoreSandboxFlow must pass -TestSafe to doctor.ps1"
 }
-# validate.ps1 Invoke-PowerShellScript must use & powershell.exe (simplest reliable approach)
-# All other approaches (ProcessStartInfo, WaitForExit, Start-Process, Start-Job) have
-# fatal issues with PS 5.1: null ExitCode, buffer deadlock, or handle inheritance.
-if ($validateText -notmatch '&\s*"powershell\.exe"\s*@allArgs') {
-    throw "validate.ps1 Invoke-PowerShellScript must use & powershell.exe @allArgs"
+if ($validateText -notmatch 'Start-Here\.ps1[\s\S]{0,300}-FixDeps[\s\S]{0,120}-NonInteractive') {
+    throw "validate.ps1 CoreSandboxFlow FixDeps step must pass -NonInteractive"
+}
+# validate.ps1 Invoke-PowerShellScript: uses System.Diagnostics.Process + WaitForExit
+# with timeout + taskkill /T /F + Stop-Process fallback.
+# This avoids PowerShell Start-Process ExitCode/NoNewWindow/hang issues.
+if ($validateText -notmatch 'System\.Diagnostics\.ProcessStartInfo') {
+    throw "validate.ps1 Invoke-PowerShellScript must use System.Diagnostics.ProcessStartInfo"
+}
+if ($validateText -notmatch '\[System\.Diagnostics\.Process\]::Start\(\$psi\)') {
+    throw "validate.ps1 Invoke-PowerShellScript must use [System.Diagnostics.Process]::Start(`$psi)"
+}
+if ($validateText -notmatch '\$proc\.WaitForExit\(\$TimeoutSec\s*\*\s*1000\)') {
+    throw "validate.ps1 Invoke-PowerShellScript must use `$proc.WaitForExit(`$TimeoutSec * 1000)"
+}
+if ($validateText -notmatch 'taskkill\.exe\s+/PID\s+\$realPid\s+/T\s+/F') {
+    throw "validate.ps1 Invoke-PowerShellScript timeout must call taskkill.exe /T /F"
+}
+if ($validateText -notmatch 'Stop-Process\s+-Id\s+\$realPid\s+-Force') {
+    throw "validate.ps1 Invoke-PowerShellScript timeout must have Stop-Process fallback"
+}
+if ($validateText -notmatch 'CreateNoWindow\s*=\s*\$true') {
+    throw "validate.ps1 Invoke-PowerShellScript must set CreateNoWindow = true"
 }
 
 # 18b. windows-scenario-matrix.ps1 regression: Invoke-ToolCheck real timeout
@@ -883,6 +901,9 @@ if ($rpmPrefix.Success) {
     }
 } else {
     throw "repair-deps.ps1 npm prefix -g must have explicit -TimeoutSec 8"
+}
+if ($repairDepsText -notmatch 'if\s*\(\s*-not\s+\$NonInteractive\s+-and\s+-not\s+\$IsTestSafe\s*\)\s*\{[\s\S]{0,120}Read-Host') {
+    throw "repair-deps.ps1 TestSafe/DryRun mode must not wait for final Read-Host"
 }
 
 # 57. check-long-running-commands.ps1 must have new rules

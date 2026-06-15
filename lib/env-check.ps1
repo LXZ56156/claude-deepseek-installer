@@ -830,6 +830,20 @@ function Test-NodeJsInstalled {
         ErrorMessage  = ""
     }
 
+    # TestSafe mode: skip real node --version to avoid process hang
+    if ($env:CCDI_TEST_MODE -eq "1") {
+        $cmd = Get-Command node -ErrorAction SilentlyContinue
+        if ($cmd) {
+            $result.Installed = $true
+            $result.Version = "v20.0.0 (test-safe)"
+            $result.MajorVersion = 20
+            $result.IsSupported = $true
+            return $result
+        }
+        $result.ErrorMessage = "TestSafe: node not found"
+        return $result
+    }
+
     # 检测 node 命令
     $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
     if (-not $nodeCmd) {
@@ -884,6 +898,26 @@ function Test-NpmInstalled {
         Version      = $null
         Status       = ""
         ErrorMessage = ""
+    }
+
+    # TestSafe mode: skip real node/npm version checks to avoid process hang
+    if ($env:CCDI_TEST_MODE -eq "1") {
+        $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
+        if ($npmCmd) {
+            $result.Installed = $true
+            $result.Version = "10.0.0 (test-safe)"
+            $result.Status = "ok"
+            return $result
+        }
+        $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+        if ($nodeCmd) {
+            $result.Status = "failed_missing_npm"
+            $result.ErrorMessage = "TestSafe: npm not found (node exists)"
+            return $result
+        }
+        $result.Status = "failed_missing_node"
+        $result.ErrorMessage = "TestSafe: node not found"
+        return $result
     }
 
     # 先检测 Node.js 是否存在

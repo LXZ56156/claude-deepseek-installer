@@ -151,11 +151,38 @@ function Invoke-PowerShellScript {
         [int]$TimeoutSec = 300
     )
 
-    $allArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $FilePath) + $Arguments
+    $safeFilePath = [System.IO.Path]::GetFullPath($FilePath)
+    $escapedArgs = @()
+    foreach ($a in $Arguments) {
+        if ($a -match '[\s"]') {
+            $escapedArgs += "`"$($a -replace '"', '""')`""
+        }
+        else {
+            $escapedArgs += $a
+        }
+    }
+    $cliArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$safeFilePath`" $($escapedArgs -join ' ')"
+    $displayCommand = if ($Arguments.Count -gt 0) { "$safeFilePath $($Arguments -join ' ')" } else { $safeFilePath }
 
-    & "powershell.exe" @allArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "$FilePath failed with exit code $LASTEXITCODE"
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "powershell.exe"
+    $psi.Arguments = $cliArgs
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $finished = $proc.WaitForExit($TimeoutSec * 1000)
+
+    if (-not $finished) {
+        $realPid = $proc.Id
+        & taskkill.exe /PID $realPid /T /F 2>$null | Out-Null
+        Start-Sleep -Milliseconds 500
+        if (-not $proc.HasExited) { Stop-Process -Id $realPid -Force -ErrorAction SilentlyContinue }
+        throw "TIMEOUT: $displayCommand (${TimeoutSec}s)"
+    }
+
+    if ($proc.ExitCode -ne 0) {
+        throw "$displayCommand failed with exit code $($proc.ExitCode)"
     }
 }
 
@@ -185,7 +212,7 @@ function Invoke-CoreSandboxFlow {
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "Start-Here.ps1") -Arguments @(
             "-NonInteractive", "-SkipDisclaimer", "-TestSafe"
         ) -TimeoutSec 300
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "Start-Here.ps1") -Arguments @("-FixDeps", "-TestSafe") -TimeoutSec 300
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "Start-Here.ps1") -Arguments @("-FixDeps", "-TestSafe", "-NonInteractive") -TimeoutSec 300
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "doctor.ps1") -Arguments @(
             "-ShareSafe", "-SkipApiTest", "-NoOpenReport", "-TestSafe"
         ) -TimeoutSec 300

@@ -259,19 +259,24 @@ function Start-RepairDeps {
     # 5. 检测 PATH
     # ============================================================
     Write-Info "--- PATH ---"
-    $npmGlobalPath = ""
-    $npmPrefix = Invoke-CommandSafe -Command "npm" -Arguments @("prefix", "-g") -TimeoutSec 8
-    if ($npmPrefix.Success) {
-        $npmGlobalPath = $npmPrefix.Output.Trim()
-        if ($env:Path -contains $npmGlobalPath -or $env:Path.ToLowerInvariant().Contains($npmGlobalPath.ToLowerInvariant())) {
-            Add-CR "npm 全局 PATH" "OK" "已在 PATH 中"
-        }
-        else {
-            Add-CR "npm 全局 PATH" "WARN" "$npmGlobalPath 不在当前 PATH 中"
-        }
+    if ($IsTestSafe) {
+        Add-CR "npm 全局 PATH" "SKIP" "测试安全模式"
     }
     else {
-        Add-CR "npm 全局 PATH" "SKIP" "无法获取（可能 npm 不可用）"
+        $npmGlobalPath = ""
+        $npmPrefix = Invoke-CommandSafe -Command "npm" -Arguments @("prefix", "-g") -TimeoutSec 8
+        if ($npmPrefix.Success) {
+            $npmGlobalPath = $npmPrefix.Output.Trim()
+            if ($env:Path -contains $npmGlobalPath -or $env:Path.ToLowerInvariant().Contains($npmGlobalPath.ToLowerInvariant())) {
+                Add-CR "npm 全局 PATH" "OK" "已在 PATH 中"
+            }
+            else {
+                Add-CR "npm 全局 PATH" "WARN" "$npmGlobalPath 不在当前 PATH 中"
+            }
+        }
+        else {
+            Add-CR "npm 全局 PATH" "SKIP" "无法获取（可能 npm 不可用）"
+        }
     }
 
     Write-Host ""
@@ -374,7 +379,7 @@ function Start-RepairDeps {
 
     Generate-Report
 
-    if (-not $NonInteractive) {
+    if (-not $NonInteractive -and -not $IsTestSafe) {
         Write-Host ""
         Read-Host "按回车键退出..."
     }
