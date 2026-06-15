@@ -10,6 +10,24 @@
 # 路径和目录函数
 # ============================================================
 
+function Initialize-CcdiNetworkDefaults {
+    <#
+    .SYNOPSIS
+        初始化网络默认设置（TLS 1.2 兼容性修复）。
+        仅针对 Windows PowerShell Desktop 设置，不影响 PowerShell Core。
+        失败不阻断脚本执行。
+    #>
+    try {
+        if ($PSVersionTable.PSEdition -eq "Desktop") {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Write-Log "DEBUG" "已设置 .NET SecurityProtocol = Tls12"
+        }
+    }
+    catch {
+        Write-Log "WARN" "设置 TLS 1.2 失败: $_"
+    }
+}
+
 function Get-UserProfilePath {
     <#
     .SYNOPSIS
@@ -1307,6 +1325,32 @@ function Sanitize-PathForReport {
     return $result
 }
 
+function Sanitize-ProxyUrl {
+    <#
+    .SYNOPSIS
+        脱敏代理 URL 中的用户名密码。
+    .PARAMETER Text
+        原始文本（可能包含代理 URL）
+    .RETURNS
+        脱敏后的文本
+    #>
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $Text
+    }
+
+    $result = $Text
+
+    # http://user:pass@host:port -> http://<AUTH>@host:port
+    $result = $result -replace '(?i)(https?://)[^/@\s:]+:[^/@\s]+@', '$1<AUTH>@'
+
+    # socks5://user:pass@host:port -> socks5://<AUTH>@host:port
+    $result = $result -replace '(?i)(socks5?h?://)[^/@\s:]+:[^/@\s]+@', '$1<AUTH>@'
+
+    return $result
+}
+
 function Sanitize-SecretLikeText {
     <#
     .SYNOPSIS
@@ -1351,6 +1395,9 @@ function Sanitize-SecretLikeText {
             }
         }
     }
+
+    # 代理 URL 脱敏
+    $result = Sanitize-ProxyUrl -Text $result
 
     return $result
 }
@@ -1828,6 +1875,9 @@ function Convert-ToSafeReportText {
 
     # 1. 路径和 API Key 脱敏（复用已有函数）
     $result = Sanitize-ReportText -Text $result
+
+    # 1b. 代理 URL 脱敏（http://user:pass@ 和 socks5://user:pass@）
+    $result = Sanitize-ProxyUrl -Text $result
 
     # 2. 清除 ANSI escape 序列（防止报告中出现控制符）
     $result = Remove-AnsiEscape -Text $result

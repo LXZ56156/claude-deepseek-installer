@@ -17,6 +17,7 @@ param(
     [switch]$ShareSafe,    # 生成脱敏版报告（替换用户名/路径，可安全分享）
     [switch]$Anonymize,    # ShareSafe 的别名
     [switch]$TestSafe,     # 测试安全模式：跳过真实网络请求、WSL 启动、claude doctor 等外部调用
+    [switch]$DeepWslCheck, # 深度 WSL 检测：在检查 WSL 时启动 Ubuntu（含 wsl -d 等命令）
     [string]$OutputPath    # 报告输出路径，默认为当前目录 report.txt
 )
 
@@ -168,6 +169,19 @@ function Check-MinimumRequirements {
         Add-Suggestion "PowerShell 版本过低。请从 https://aka.ms/PSWindows 升级。"
     }
 
+    # PowerShell 进程架构（32/64 bit）
+    $archInfo = $minReq.Details["Architecture"]
+    if ($archInfo.IsWow64PowerShell) {
+        Add-CheckResult "PowerShell 进程架构" "ERROR" "当前为 32-bit PowerShell，但系统是 64-bit Windows"
+        Add-Suggestion "当前打开的是 32 位 PowerShell。请关闭本窗口，重新双击 00-点我开始安装.cmd，或打开普通 Windows PowerShell，不要打开 Windows PowerShell (x86)。"
+    }
+    elseif ($archInfo.Is64BitProcess) {
+        Add-CheckResult "PowerShell 进程架构" "OK" "64-bit"
+    }
+    else {
+        Add-CheckResult "PowerShell 进程架构" "OK" "32-bit (32-bit OS)"
+    }
+
     # 总体最低要求判断
     if ($minReq.IsSupported) {
         Add-CheckResult "最低要求" "OK" "满足安装的最低系统要求"
@@ -203,6 +217,15 @@ function Check-SystemInfo {
     }
     else {
         Add-CheckResult "管理员权限" "OK" "普通用户（推荐）"
+    }
+
+    # TLS 设置摘要
+    try {
+        $tlsText = [Net.ServicePointManager]::SecurityProtocol.ToString()
+        Add-CheckResult "TLS 设置" "INFO" $tlsText
+    }
+    catch {
+        Add-CheckResult "TLS 设置" "INFO" "无法读取 TLS 设置"
     }
 }
 
@@ -243,7 +266,7 @@ function Check-Commands {
     }
     else {
         Add-CheckResult "Git" "WARN" "未安装"
-        Add-Suggestion "Git 未安装。可从 https://git-scm.com 下载安装。"
+        Add-Suggestion "Git 不是安装 Claude Code 的硬性要求，但推荐安装。部分 Bash/Shell 体验、项目操作、Git 仓库功能会更完整。可从 https://git-scm.com 下载安装。"
     }
 
     $codeVersion = Test-CodeInstalled
@@ -502,6 +525,15 @@ function Check-Files {
         Add-CheckResult "settings.json" "WARN" "配置文件不存在"
         Add-Suggestion "配置文件不存在，请运行 install.ps1 并选择配置 DeepSeek API。"
     }
+
+    # Claude downloads 缓存目录
+    $downloadsDir = Join-Path (Join-Path (Get-UserProfilePath) ".claude") "downloads"
+    if (Test-Path $downloadsDir) {
+        Add-CheckResult "Claude downloads 缓存" "INFO" "目录存在；如 Native Install 报文件占用，可关闭相关进程后删除该 downloads 目录。"
+    }
+    else {
+        Add-CheckResult "Claude downloads 缓存" "INFO" "未发现残留 downloads 目录"
+    }
 }
 
 # ============================================================
@@ -553,6 +585,40 @@ function Check-Network {
         else {
             Add-Suggestion "网络连接失败: $errDetail。请检查网络设置。"
         }
+    }
+
+    # downloads.claude.ai 轻量检测
+    $netDownloads = Test-NetworkConnectivity -Url "https://downloads.claude.ai" -TimeoutSec 10
+    if ($netDownloads.Reachable) {
+        Add-CheckResult "HTTPS: downloads.claude.ai" "OK" "可访问 (状态码 $($netDownloads.StatusCode))"
+    }
+    else {
+        Add-CheckResult "HTTPS: downloads.claude.ai" "WARN" "$($netDownloads.Error)"
+        $deepSeekReachable = $netDeepSeek.Reachable
+        if ($deepSeekReachable) {
+            Add-Suggestion "Claude 官方下载通道不可达，但 DeepSeek API 可达。这通常只影响 Claude Code 下载，不代表 DeepSeek 配置不可用。"
+        }
+    }
+
+    # 代理环境变量检测（Process / User / Machine 三层）
+    $proxyVars = @("HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "ALL_PROXY")
+    foreach ($var in $proxyVars) {
+        $value = [Environment]::GetEnvironmentVariable($var, "Process")
+        if (-not $value) { $value = [Environment]::GetEnvironmentVariable($var, "User") }
+        if (-not $value) { $value = [Environment]::GetEnvironmentVariable($var, "Machine") }
+
+        if ($value) {
+            Add-CheckResult "代理环境变量 $var" "INFO" (Sanitize-ProxyUrl -Text $value)
+        }
+    }
+
+    # WinHTTP 代理
+    $winhttp = Invoke-CommandSafe -Command "netsh" -Arguments @("winhttp", "show", "proxy") -TimeoutSec 8
+    if ($winhttp.Success) {
+        Add-CheckResult "WinHTTP 代理" "INFO" (Sanitize-ProxyUrl -Text (Normalize-ExternalCommandOutput -Text $winhttp.Output -MaxLength 1000))
+    }
+    else {
+        Add-CheckResult "WinHTTP 代理" "INFO" "无法读取或未配置"
     }
 }
 
@@ -688,9 +754,16 @@ function Check-WSL {
     $stateText = if ($ubuntuInfo.Running) { "Running" } else { "已停止" }
     Add-CheckResult "Ubuntu ($ubuntuDistroName)" "OK" $stateText
 
-    # 如果 Ubuntu 未运行，尝试临时启动 WSL 执行只读检测
-    if (-not $ubuntuInfo.Running) {
-        Write-Info "Ubuntu ($ubuntuDistroName) 当前未运行，诊断将临时启动 WSL 执行只读检测..."
+    # 如果 Ubuntu 未运行且未传 -DeepWslCheck，不启动 WSL
+    if (-not $ubuntuInfo.Running -and -not $DeepWslCheck) {
+        Add-CheckResult "Ubuntu 可启动" "INFO" "未执行深度启动检测；如需检测请运行 doctor.ps1 -DeepWslCheck"
+        Add-Suggestion "WSL 是高级选项，不影响 Windows 原生安装。"
+        return
+    }
+
+    # DeepWslCheck 模式下，如果 Ubuntu 未运行则尝试临时启动
+    if ($DeepWslCheck -and -not $ubuntuInfo.Running) {
+        Write-Info "Ubuntu ($ubuntuDistroName) 当前未运行，深度检测将临时启动 WSL 执行只读检测..."
         $wslStartCheck = Invoke-CommandSafe -Command "wsl" -Arguments @(
             "-d", $ubuntuDistroName, "bash", "-c", "echo 'WSL_START_OK'"
         ) -TimeoutSec 15
@@ -699,6 +772,11 @@ function Check-WSL {
             Add-Suggestion "请手动运行 'wsl -d $ubuntuDistroName' 启动后重新诊断。"
             return
         }
+    }
+
+    # 只有 $DeepWslCheck 为 true 时才执行深度检测
+    if (-not $DeepWslCheck) {
+        return
     }
 
     # 检查 WSL 内的 Claude 状态（使用综合检测，传入发行版名称）
@@ -882,22 +960,28 @@ function Write-QuickSummary {
         }
     }
 
-    # --- WSL 是否可用 ---
-    $wslCheck = Test-WslInstalled
-    if ($wslCheck.Installed) {
-        $wslClaudeCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -match "WSL: claude" }
-        if ($wslClaudeCheck -and $wslClaudeCheck.Status -eq "OK") {
-            Add-ReportLine "  WSL: 已启用，Claude Code 已安装"
-        }
-        elseif ($wslClaudeCheck -and $wslClaudeCheck.Status -eq "WARN") {
-            Add-ReportLine "  WSL: 已启用，Claude Code 需要配置"
+    # --- WSL 是否可用（从 CheckResults 读取，不再调用 Test-WslInstalled）---
+    $wslCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "WSL" } | Select-Object -First 1
+    $wslStateCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "WSL 状态" } | Select-Object -First 1
+    if ($wslCheck) {
+        if ($wslCheck.Status -eq "SKIP") {
+            Add-ReportLine "  WSL: 未启用"
         }
         else {
-            Add-ReportLine "  WSL: 已启用，Claude Code 未安装"
+            $wslClaudeCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -match "WSL: claude" }
+            if ($wslClaudeCheck -and $wslClaudeCheck.Status -eq "OK") {
+                Add-ReportLine "  WSL: 已启用，Claude Code 已安装"
+            }
+            elseif ($wslClaudeCheck -and $wslClaudeCheck.Status -eq "WARN") {
+                Add-ReportLine "  WSL: 已启用，Claude Code 需要配置"
+            }
+            else {
+                Add-ReportLine "  WSL: 已启用，Claude Code 未安装"
+            }
         }
     }
     else {
-        Add-ReportLine "  WSL: 未启用"
+        Add-ReportLine "  WSL: 未检测"
     }
 
     # --- 是否存在影响使用的问题 ---

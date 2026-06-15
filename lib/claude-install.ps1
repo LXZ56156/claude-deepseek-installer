@@ -798,6 +798,29 @@ function Get-NpmInstallRiskConfig {
 
 # ============================================================
 
+function Test-IsClaudeNativeFileLockError {
+    <#
+    .SYNOPSIS
+        检测 Native Install 失败输出中是否包含文件占用错误。
+    .PARAMETER Text
+        错误输出文本（英文或中文）。
+    .RETURNS
+        是否匹配文件占用错误特征。
+    #>
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+
+    return (
+        $Text -match "used by another process" -or
+        $Text -match "being used by another process" -or
+        $Text -match "文件正由另一进程使用" -or
+        $Text -match "无法访问该文件" -or
+        $Text -match "\.claude\\downloads" -or
+        $Text -match "\.claude/downloads"
+    )
+}
+
 function Install-ClaudeCodeNative {
     <#
     .SYNOPSIS
@@ -2581,6 +2604,15 @@ function Install-ClaudeCodeAuto {
             Write-Warning "Claude 官方安装通道执行失败，正在自动切换国内 npm 镜像安装。"
             Write-Info "这通常是官方下载通道不稳定或被网络拦截，不代表安装失败。"
             Write-Log "WARN" "Native Install 详细错误: $($nativeResult.Error)"
+
+            # 文件占用检测
+            if (Test-IsClaudeNativeFileLockError -Text $nativeResult.Error) {
+                Write-Warning "Claude 官方安装器提示文件被占用。"
+                Write-Info "请关闭所有 claude / node / PowerShell / Windows Terminal 窗口。"
+                Write-Info "然后删除 %USERPROFILE%\.claude\downloads 后重新运行安装。"
+                Write-Info "不要删除 %USERPROFILE%\.claude\settings.json。"
+            }
+
             Write-Info "将自动切换 npmmirror 镜像安装..."
         }
     }

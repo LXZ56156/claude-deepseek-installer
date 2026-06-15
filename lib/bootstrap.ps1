@@ -38,6 +38,7 @@ function Initialize-CcdiScript {
     )
 
     Initialize-Logger -LogDirPath (Join-Path $script:CcdiProjectRoot "logs") -ScriptName $ScriptName
+    Initialize-CcdiNetworkDefaults
 
     return $script:CcdiProjectRoot
 }

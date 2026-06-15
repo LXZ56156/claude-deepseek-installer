@@ -389,7 +389,7 @@ function Step-CheckEnvironment {
         Write-ResultLine "Git" "OK" $gitVersion
     }
     else {
-        Write-ResultLine "Git" "SKIP" "未安装（可选）"
+        Write-ResultLine "Git" "SKIP" "未安装（可选）；Git 不是安装 Claude Code 的硬性要求，但推荐安装"
     }
 
     # WSL

@@ -98,13 +98,27 @@ function Get-PowerShellVersionInfo {
 function Get-SystemArchitectureInfo {
     <#
     .SYNOPSIS
-        获取 CPU/OS 架构信息
+        获取 CPU/OS 架构信息，包括 64 位 OS + 32 位 PowerShell 检测
     .RETURNS
-        包含 Architecture, IsSupported 的哈希表
+        包含 Architecture, IsSupported, Is64BitOperatingSystem, Is64BitProcess, IsWow64PowerShell 的哈希表
     #>
     $info = @{
-        Architecture = "Unknown"
-        IsSupported  = $false
+        Architecture            = "Unknown"
+        IsSupported             = $false
+        Is64BitOperatingSystem  = $false
+        Is64BitProcess          = $false
+        IsWow64PowerShell       = $false
+    }
+
+    # 64 位 OS / 进程检测
+    try {
+        $info.Is64BitOperatingSystem = [Environment]::Is64BitOperatingSystem
+        $info.Is64BitProcess = [Environment]::Is64BitProcess
+        $info.IsWow64PowerShell = ($info.Is64BitOperatingSystem -and -not $info.Is64BitProcess)
+        Write-Log "DEBUG" "64-bit OS: $($info.Is64BitOperatingSystem), 64-bit Process: $($info.Is64BitProcess), Wow64 PowerShell: $($info.IsWow64PowerShell)"
+    }
+    catch {
+        Write-Log "WARN" "无法检测 64 位 OS/进程状态: $_"
     }
 
     try {
@@ -302,6 +316,13 @@ function Test-MinimumRequirements {
     if (-not $archInfo.IsSupported) {
         $result.IsSupported = $false
         [void]$result.Errors.Add("系统架构不支持。需要 x64 或 ARM64。当前: $($archInfo.Architecture)")
+    }
+
+    # 2b. 32 位 PowerShell on 64 位 Windows 检测
+    if ($archInfo.IsWow64PowerShell) {
+        $result.IsSupported = $false
+        [void]$result.Errors.Add("当前打开的是 32 位 PowerShell。请关闭本窗口，重新双击 00-点我开始安装.cmd，或打开普通 Windows PowerShell，不要打开 Windows PowerShell (x86)。")
+        Write-Log "WARN" "64 位 OS 上运行 32 位 PowerShell，视为不满足安装要求"
     }
 
     # 3. 物理内存

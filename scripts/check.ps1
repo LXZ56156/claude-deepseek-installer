@@ -2454,4 +2454,138 @@ if ($wqsFuncText -notmatch [regex]::Escape('详情见"Claude 命令来源"')) {
 
 Write-Host "[check] P1.2 fix anti-regression OK"
 
+# ============================================================
+# P1/P2 第三批防回归检查: 32-bit PS, TLS, 代理, 文件占用, WSL 可选, Git 文案
+# ============================================================
+Write-Host "[check] P1/P2 environment diagnostics anti-regression"
+
+# 1. 32-bit PowerShell detection
+$envCheckPath = Join-Path $RootDir "lib\env-check.ps1"
+$envCheckText = Get-Content $envCheckPath -Raw -Encoding UTF8
+if ($envCheckText -notmatch 'Is64BitOperatingSystem') { throw "env-check.ps1 must contain Is64BitOperatingSystem" }
+if ($envCheckText -notmatch 'Is64BitProcess') { throw "env-check.ps1 must contain Is64BitProcess" }
+if ($envCheckText -notmatch 'IsWow64PowerShell') { throw "env-check.ps1 must contain IsWow64PowerShell" }
+if ($envCheckText -notmatch '32 位 PowerShell') { throw "env-check.ps1 must contain 32-bit PowerShell warning text" }
+
+# 2. TLS
+$commonPath = Join-Path $RootDir "lib\common.ps1"
+$commonText = Get-Content $commonPath -Raw -Encoding UTF8
+if ($commonText -notmatch 'Initialize-CcdiNetworkDefaults') { throw "common.ps1 must contain Initialize-CcdiNetworkDefaults" }
+if ($commonText -notmatch 'Tls12') { throw "common.ps1 must contain Tls12" }
+$bootstrapPath = Join-Path $RootDir "lib\bootstrap.ps1"
+$bootstrapText = Get-Content $bootstrapPath -Raw -Encoding UTF8
+if ($bootstrapText -notmatch 'Initialize-CcdiNetworkDefaults') { throw "bootstrap.ps1 must call Initialize-CcdiNetworkDefaults" }
+
+# 3. Proxy sanitization
+if ($commonText -notmatch 'Sanitize-ProxyUrl') { throw "common.ps1 must contain Sanitize-ProxyUrl" }
+if ($commonText -notmatch 'http://user:pass@|https?://[^/@\s:]+:[^/@\s]+@') { throw "common.ps1 must handle http://user:pass@ proxy URLs" }
+if ($commonText -notmatch 'socks5?h?://[^/@\s:]+:[^/@\s]+@') { throw "common.ps1 must handle socks5://user:pass@ proxy URLs" }
+# Check that Convert-ToSafeReportText calls Sanitize-ProxyUrl
+$commonLines = Get-Content -Path (Join-Path $RootDir "lib\common.ps1") -Encoding UTF8
+$cstartLine = -1
+$cendLine = -1
+for ($i = 0; $i -lt $commonLines.Count; $i++) {
+    if ($commonLines[$i] -match '^function Convert-ToSafeReportText\b') { $cstartLine = $i }
+    if ($cstartLine -ge 0 -and $i -gt $cstartLine -and $commonLines[$i] -match '^function \w') {
+        $cendLine = $i - 1
+        break
+    }
+}
+if ($cstartLine -ge 0 -and $cendLine -lt 0) { $cendLine = $commonLines.Count - 1 }
+if ($cstartLine -ge 0) {
+    $csafeBody = ($commonLines[$cstartLine..$cendLine] -join "`n")
+    if ($csafeBody -notmatch 'Sanitize-ProxyUrl') { throw "Convert-ToSafeReportText must call Sanitize-ProxyUrl" }
+}
+
+# 4. Doctor proxy diagnostics
+$doctorPath = Join-Path $RootDir "doctor.ps1"
+$doctorText = Get-Content $doctorPath -Raw -Encoding UTF8
+if ($doctorText -notmatch 'HTTPS_PROXY') { throw "doctor.ps1 must contain HTTPS_PROXY" }
+if ($doctorText -notmatch 'HTTP_PROXY') { throw "doctor.ps1 must contain HTTP_PROXY" }
+if ($doctorText -notmatch 'NO_PROXY') { throw "doctor.ps1 must contain NO_PROXY" }
+if ($doctorText -notmatch 'ALL_PROXY') { throw "doctor.ps1 must contain ALL_PROXY" }
+if ($doctorText -notmatch 'netsh') { throw "doctor.ps1 must contain netsh" }
+if ($doctorText -notmatch 'winhttp') { throw "doctor.ps1 must contain winhttp" }
+if ($doctorText -notmatch 'show') { throw "doctor.ps1 must contain show (netsh winhttp show proxy)" }
+if ($doctorText -notmatch 'proxy') { throw "doctor.ps1 must contain proxy" }
+
+# 5. Native Install file lock error
+$claudeInstallPath = Join-Path $RootDir "lib\claude-install.ps1"
+$claudeInstallText = Get-Content $claudeInstallPath -Raw -Encoding UTF8
+if ($claudeInstallText -notmatch 'Test-IsClaudeNativeFileLockError') { throw "claude-install.ps1 must contain Test-IsClaudeNativeFileLockError" }
+if ($claudeInstallText -notmatch 'used by another process') { throw "claude-install.ps1 must contain 'used by another process'" }
+if ($claudeInstallText -notmatch '\.claude[/\\]downloads') { throw "claude-install.ps1 must contain .claude\downloads or .claude/downloads" }
+if ($claudeInstallText -notmatch '不要删除.*settings\.json|settings\.json.*保护') { throw "claude-install.ps1 must protect settings.json (do not delete)" }
+
+# 6. WSL
+if ($doctorText -notmatch '\[switch\]\$DeepWslCheck') { throw "doctor.ps1 must contain [switch]`$DeepWslCheck" }
+if ($doctorText -notmatch '未执行深度启动检测') { throw "doctor.ps1 must contain '未执行深度启动检测'" }
+if ($doctorText -notmatch 'WSL 是高级选项，不影响 Windows 原生安装') { throw "doctor.ps1 must contain WSL advice text" }
+$oneClickDiagnosisPath = Join-Path $RootDir "一键诊断.cmd"
+$oneClickText = Get-Content $oneClickDiagnosisPath -Raw -Encoding ASCII
+if ($oneClickText -match 'DeepWslCheck') { throw "一键诊断.cmd must NOT contain DeepWslCheck" }
+# Write-QuickSummary must not call Test-WslInstalled
+# Use line-number based extraction to avoid regex issues with CRLF
+$doctorLines = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Encoding UTF8
+$wqsStartLine = -1
+$wqsEndLine = -1
+for ($i = 0; $i -lt $doctorLines.Count; $i++) {
+    if ($doctorLines[$i] -match '^function Write-QuickSummary\b') { $wqsStartLine = $i }
+    if ($wqsStartLine -ge 0 -and $i -gt $wqsStartLine -and $doctorLines[$i] -match '^function \w') {
+        $wqsEndLine = $i - 1
+        break
+    }
+}
+if ($wqsStartLine -ge 0 -and $wqsEndLine -lt 0) { $wqsEndLine = $doctorLines.Count - 1 }
+if ($wqsStartLine -ge 0) {
+    $wqsBodyLines = $doctorLines[$wqsStartLine..$wqsEndLine]
+    $wqsBody = $wqsBodyLines -join "`n"
+    # Strip comments before checking (the comment itself mentions Test-WslInstalled)
+    $wqsBodyNoComments = ($wqsBodyLines | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    if ($wqsBodyNoComments -match 'Test-WslInstalled') { throw "Write-QuickSummary must NOT call Test-WslInstalled" }
+}
+
+# 7. Git文案
+$startHerePath = Join-Path $RootDir "Start-Here.ps1"
+$startHereText = Get-Content $startHerePath -Raw -Encoding UTF8
+$gitPhrase1 = "Git 不是安装 Claude Code 的硬性要求"
+$foundGitPhrase1 = ($startHereText -match [regex]::Escape($gitPhrase1)) -or ($doctorText -match [regex]::Escape($gitPhrase1))
+if (-not $foundGitPhrase1) {
+    # Check docs too
+    $readmePath = Join-Path $RootDir "README.md"
+    $readmeText = if (Test-Path $readmePath) { Get-Content $readmePath -Raw -Encoding UTF8 } else { "" }
+    $foundGitPhrase1 = ($readmeText -match [regex]::Escape($gitPhrase1))
+}
+if (-not $foundGitPhrase1) { throw "At least one of Start-Here.ps1, doctor.ps1, or docs must contain: Git 不是安装 Claude Code 的硬性要求" }
+
+# Check docs for prohibited phrases
+$docsDir = Join-Path $RootDir "docs"
+if (Test-Path $docsDir) {
+    $docFiles = Get-ChildItem $docsDir -Filter "*.md" -ErrorAction SilentlyContinue
+    foreach ($f in $docFiles) {
+        $docContent = Get-Content $f.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ($docContent -match '必须安装 Git 才能安装 Claude Code') {
+            throw "$($f.Name): must not contain '必须安装 Git 才能安装 Claude Code'"
+        }
+        if ($docContent -match 'Git 是安装 Claude Code 的硬性要求') {
+            throw "$($f.Name): must not contain 'Git 是安装 Claude Code 的硬性要求'"
+        }
+    }
+}
+
+# 8. P1.3 保持
+# Reuse wqsBodyLines from check 6 above (must not call Test-WslInstalled)
+if ($wqsStartLine -ge 0) {
+    $wqsBodyForP13 = ($doctorLines[$wqsStartLine..$wqsEndLine] -join "`n")
+}
+if ($wqsBodyForP13 -notmatch [regex]::Escape('详情见"Claude 命令来源"')) {
+    throw "Write-QuickSummary must still contain correctly quoted: 详情见`"Claude 命令来源`""
+}
+if ($wqsBodyForP13 -match [regex]::Escape('详情见"Claude 命令来源"')) {
+    # Should NOT have the unquoted version
+    Write-Log "DEBUG" "Write-QuickSummary correctly uses single quotes around the detail reference"
+}
+
+Write-Host "[check] P1/P2 environment diagnostics anti-regression OK"
+
 Write-Host "[check] OK"
