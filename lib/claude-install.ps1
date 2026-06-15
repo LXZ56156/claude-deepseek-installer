@@ -31,21 +31,23 @@ function Test-ClaudeCommandExisting {
         Error   = ""
     }
 
-    # Mock decision support（仅在 CCDI_MOCK_INSTALL_DECISION=1 且 CCDI_TEST_MODE=1 时生效）
-    if ($env:CCDI_MOCK_INSTALL_DECISION -eq "1" -and $env:CCDI_TEST_MODE -eq "1") {
-        $mockClaude = if ($env:CCDI_MOCK_CLAUDE) { $env:CCDI_MOCK_CLAUDE } else { "missing" }
-        Write-Log "DEBUG" "MOCK: Test-ClaudeCommandExisting -> CCDI_MOCK_CLAUDE=$mockClaude"
-        switch ($mockClaude) {
-            "ok" {
-                return @{ Exists = $true; Usable = $true; Version = "1.0.0-mock"; Error = "" }
-            }
-            "broken" {
-                return @{ Exists = $true; Usable = $false; Version = $null; Error = "mock: claude command exists but --version fails (corrupt or residual)" }
-            }
-            default {
-                return @{ Exists = $false; Usable = $false; Version = $null; Error = "mock: claude not found" }
+    # TestSafe / Mock mode: skip real claude --version to avoid process hang
+    if ($env:CCDI_TEST_MODE -eq "1") {
+        if ($env:CCDI_MOCK_INSTALL_DECISION -eq "1") {
+            $mockClaude = if ($env:CCDI_MOCK_CLAUDE) { $env:CCDI_MOCK_CLAUDE } else { "missing" }
+            Write-Log "DEBUG" "MOCK: Test-ClaudeCommandExisting -> CCDI_MOCK_CLAUDE=$mockClaude"
+            switch ($mockClaude) {
+                "ok" { return @{ Exists = $true; Usable = $true; Version = "1.0.0-mock"; Error = "" } }
+                "broken" { return @{ Exists = $true; Usable = $false; Version = $null; Error = "mock: claude command exists but --version fails (corrupt or residual)" } }
+                default { return @{ Exists = $false; Usable = $false; Version = $null; Error = "mock: claude not found" } }
             }
         }
+        # Non-mock TestSafe: use Get-Command only, skip --version
+        $cmd = Get-Command "claude" -ErrorAction SilentlyContinue
+        if ($cmd) {
+            return @{ Exists = $true; Usable = $true; Version = "test-safe"; Error = "" }
+        }
+        return @{ Exists = $false; Usable = $false; Version = $null; Error = "test-safe: claude not found" }
     }
 
     # 刷新 PATH 后检测

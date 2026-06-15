@@ -499,6 +499,12 @@ function Test-ClaudeInstalled {
     .RETURNS
         版本字符串，未安装返回 $null
     #>
+    # TestSafe mode: skip real claude --version to avoid process hang
+    if ($env:CCDI_TEST_MODE -eq "1") {
+        $cmd = Get-Command "claude" -ErrorAction SilentlyContinue
+        if ($cmd) { return "test-safe" }
+        return $null
+    }
     $result = Invoke-CommandSafe -Command "claude" -Arguments @("--version") -TimeoutSec 5
     if ($result.Success) {
         return $result.Output.Trim()
