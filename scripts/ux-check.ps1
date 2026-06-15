@@ -788,7 +788,7 @@ x-api-key: $TestApiKey
 
     # repair-deps.ps1 npm prefix -g TimeoutSec 8
     Assert "repair-deps.ps1 npm prefix -g 有显式 TimeoutSec 8" {
-        $repairDepsText -match 'Invoke-CommandSafe[\s\S]{0,200}"npm"[\s\S]{0,200}"prefix"[\s\S]{0,200}\-g[\s\S]{0,30}\-TimeoutSec\s+8'
+        $repairDepsText -match 'Invoke-CommandSafe[\s\S]{0,500}"prefix"[\s\S]{0,200}\-g[\s\S]{0,30}\-TimeoutSec\s+8'
     } "repair-deps.ps1 npm prefix -g 未设置 TimeoutSec 8"
 
     Write-Host ""

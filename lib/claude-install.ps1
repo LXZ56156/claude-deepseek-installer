@@ -854,10 +854,10 @@ function Install-ClaudeCodeNative {
             $mockNative = if ($env:CCDI_MOCK_NATIVE_INSTALL) { $env:CCDI_MOCK_NATIVE_INSTALL } else { "fail" }
             Write-Log "DEBUG" "MOCK: Install-ClaudeCodeNative -> CCDI_MOCK_NATIVE_INSTALL=$mockNative"
             if ($mockNative -eq "success") {
-                return @{ Success = $true; Error = ""; Status = "installed_mock" }
+                return @{ Success = $true; Error = ""; RawError = ""; Status = "installed_mock" }
             }
             else {
-                return @{ Success = $false; Error = "mock: native install failed"; Status = "failed_mock" }
+                return @{ Success = $false; Error = "mock: native install failed"; RawError = "mock: native install failed"; Status = "failed_mock" }
             }
         }
         Write-Log "INFO" "TestSafe: 跳过 Native Install 执行"

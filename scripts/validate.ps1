@@ -15,7 +15,7 @@
 # Mode coverage (v1.3.2):
 #   Smoke:    git diff --check + check.ps1 (PS 5.1 + pwsh)
 #   Full:     Smoke + AST parse + ux-check.ps1 + install-decision-matrix.ps1 + Core sandbox
-#   Release:  package-release.ps1 + simulate-user-release.ps1 + windows-scenario-matrix.ps1 (-Quick)
+#   Release:  package-release.ps1 + simulate-user-release.ps1 + sandbox-full-user-simulation.ps1 + windows-scenario-matrix.ps1 (-Quick)
 #   Hardcore: claude-failure-catalog.ps1 + hardcore-scenario-matrix.ps1 + doctor-repair-matrix.ps1 + check.ps1
 #   All:      Full + Release + Hardcore + real settings.json unchanged check
 # ============================================================
@@ -387,6 +387,9 @@ function Invoke-ReleaseValidation {
     })
     Invoke-ValidationStep -Name "release ZIP user simulation" -ScriptBlock ([scriptblock]{
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\simulate-user-release.ps1") -Arguments @("-Version", $Version) -TimeoutSec 600
+    })
+    Invoke-ValidationStep -Name "sandbox full user simulation (scenarios A-P)" -ScriptBlock ([scriptblock]{
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\sandbox-full-user-simulation.ps1") -Arguments @("-Version", $Version) -TimeoutSec 900
     })
     Invoke-ValidationStep -Name "Windows scenario matrix" -ScriptBlock ([scriptblock]{
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\windows-scenario-matrix.ps1") -Arguments @("-Version", $Version, "-Quick", "-AssumePreviousSimulationPassed") -TimeoutSec 300
