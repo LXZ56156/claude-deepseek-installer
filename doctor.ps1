@@ -842,7 +842,7 @@ function Write-QuickSummary {
         $claudeVer = "可用（PATH 冲突）"
         Add-ReportLine "  Windows 原生 Claude Code: 检测到可用安装，但 PATH 可能存在冲突"
         if ($activeClaudeCheck -and $activeClaudeCheck.Detail) {
-            Add-ReportLine "    详情见"Claude 命令来源""
+            Add-ReportLine '    详情见"Claude 命令来源"'
         }
     }
     elseif ($claudeStatus -eq "ERROR") {

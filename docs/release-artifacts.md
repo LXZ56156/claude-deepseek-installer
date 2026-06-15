@@ -7,7 +7,7 @@
 - Branch: `release/v1.3.2-rc`
 - Artifact source commit: `655d7cb2c6994b3a5ce21b3c9cbe25358714d6eb` (ZIP artifact source tree)
 - Generating code commit: `655d7cb2c6994b3a5ce21b3c9cbe25358714d6eb` (feat(release): rename to 00-点我开始安装.cmd)
-- Metadata HEAD: `ee643a257fbf1a882b5d6202a14deff97c600914` (release record metadata; current as of v1.3.2 P0 fix batch)
+- Metadata HEAD: `76c00d9` (release record metadata; current as of v1.3.2 P1.2 diagnostics fix)
 - ZIP: `ClaudeCode-DeepSeek-本地配置助手-v1.3.2.zip`
 - SHA256: `5a272b54a60d398b3a3620d31cabc3fd5e92ef7c214ce8627fc01201ef55ce29`
 - Size: 191605 bytes (187.1 KB)

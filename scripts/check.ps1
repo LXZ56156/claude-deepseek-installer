@@ -2443,6 +2443,15 @@ if ($checkCommandsText -notmatch '\$inventory\.Active\.Version') {
     throw "Check-Commands Claude Code CLI OK must use `$inventory.Active.Version as Detail"
 }
 
+# 5. Write-QuickSummary 禁止嵌套双引号拼接（如 "aaa"bbb"ccc"）
+#    "详情见"Claude 命令来源"" 这样的写法会导致 Add-ReportLine 参数绑定异常
+if ($wqsFuncText -match '"详情见"Claude 命令来源""') {
+    throw "Write-QuickSummary must NOT contain nested double-quote pattern: `"详情见`"Claude 命令来源`"`""
+}
+if ($wqsFuncText -notmatch [regex]::Escape('详情见"Claude 命令来源"')) {
+    throw "Write-QuickSummary must contain correctly quoted: 详情见`"Claude 命令来源`""
+}
+
 Write-Host "[check] P1.2 fix anti-regression OK"
 
 Write-Host "[check] OK"
