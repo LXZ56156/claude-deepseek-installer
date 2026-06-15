@@ -284,6 +284,95 @@ function Check-Commands {
         Add-CheckResult "Claude Code CLI" "ERROR" "claude 命令未找到"
         Add-Suggestion "未检测到 claude 命令。可能是安装失败，或 npm 全局 bin 路径未加入 PATH。请运行 install.ps1 安装，或关闭重开终端。"
     }
+
+    # Claude 命令来源检测
+    try {
+        $inventory = Get-ClaudeCommandInventory
+
+        if ($inventory.Candidates.Count -eq 0) {
+            Add-CheckResult "Claude 命令来源" "WARN" "未找到任何 claude 命令候选"
+        }
+        else {
+            Add-CheckResult "Claude 命令来源" "INFO" "检测到 $($inventory.Candidates.Count) 个候选"
+
+            # Active claude
+            if ($inventory.Active) {
+                $activePathSafe = Sanitize-PathForReport -Text $inventory.Active.Path
+                $activeStatus = if ($inventory.Active.Usable -and $inventory.Active.Risk -in @("OK", "INFO")) { "OK" }
+                elseif ($inventory.Active.Usable) { "WARN" }
+                elseif ($inventory.Active.Source -eq "windowsapps") { "WARN" }
+                else { "ERROR" }
+                Add-CheckResult "当前 claude 来源" $activeStatus "Source=$($inventory.Active.Source), Usable=$($inventory.Active.Usable), Path=$activePathSafe"
+            }
+
+            # 候选列表（最多 8 个）
+            $maxShow = [Math]::Min($inventory.Candidates.Count, 8)
+            for ($i = 0; $i -lt $maxShow; $i++) {
+                $c = $inventory.Candidates[$i]
+                $pathSafe = Sanitize-PathForReport -Text $c.Path
+                $candidateName = "claude 候选 $($i + 1)"
+                $candidateDetail = "Source=$($c.Source), Risk=$($c.Risk), Usable=$($c.Usable)"
+                if ($c.Version) { $candidateDetail += ", Version=$($c.Version)" }
+                $candidateDetail += ", Path=$pathSafe"
+                if ($c.Error) { $candidateDetail += ", Error=$($c.Error)" }
+                Add-CheckResult $candidateName "INFO" $candidateDetail
+            }
+
+            # 冲突检测
+            if ($inventory.HasConflict) {
+                Add-CheckResult "Claude 命令冲突" "WARN" $inventory.ConflictSummary
+                Add-Suggestion "检测到多个 claude 命令来源。建议优先保留官方 Native Install 或 npm 全局安装中的一种，避免 WindowsApps/旧 shim 抢占。"
+            }
+
+            # Active 不可用但存在其他可用候选
+            if ($inventory.Active -and -not $inventory.Active.Usable) {
+                $usableOthers = $inventory.Candidates | Where-Object { $_.Usable -and $_.Path -ne $inventory.Active.Path }
+                if ($usableOthers) {
+                    Add-Suggestion "当前 PATH 优先级异常：前面的 claude 不可用，但其他路径存在可用 claude。请关闭终端重开，或调整 PATH 后重试。"
+                }
+            }
+        }
+    }
+    catch {
+        Write-Log "WARN" "Get-ClaudeCommandInventory 调用失败: $_"
+        # 不阻塞诊断流程
+    }
+
+    # npm 安装风险配置检测
+    try {
+        $npmRisk = Get-NpmInstallRiskConfig
+        if ($npmRisk) {
+            if ($npmRisk.Registry) {
+                Add-CheckResult "npm registry" "INFO" $npmRisk.Registry
+            }
+            else {
+                Add-CheckResult "npm registry" "INFO" "未获取到 registry 配置"
+            }
+
+            $optionalStatus = if ($npmRisk.Optional -eq "false") { "WARN" } else { "OK" }
+            Add-CheckResult "npm optional" $optionalStatus $(if ($npmRisk.Optional) { $npmRisk.Optional } else { "(默认)" })
+
+            $omitStatus = if ($npmRisk.Omit -match "optional") { "WARN" } else { "INFO" }
+            Add-CheckResult "npm omit" $omitStatus $(if ($npmRisk.Omit) { $npmRisk.Omit } else { "(默认)" })
+
+            $ignoreScriptsStatus = if ($npmRisk.IgnoreScripts -eq "true") { "WARN" } else { "OK" }
+            Add-CheckResult "npm ignore-scripts" $ignoreScriptsStatus $(if ($npmRisk.IgnoreScripts) { $npmRisk.IgnoreScripts } else { "(默认)" })
+
+            if ($npmRisk.Warnings.Count -gt 0) {
+                Add-CheckResult "npm 安装风险配置" "WARN" ($npmRisk.Warnings -join "；")
+                foreach ($w in $npmRisk.Warnings) {
+                    Add-Suggestion $w
+                }
+            }
+            else {
+                Add-CheckResult "npm 安装风险配置" "OK" "未发现 optional/scripts 风险配置"
+            }
+        }
+    }
+    catch {
+        Write-Log "WARN" "Get-NpmInstallRiskConfig 调用失败: $_"
+        # 不阻塞诊断流程
+    }
 }
 
 # ============================================================
@@ -829,7 +918,8 @@ function Write-ReportChecks {
     # --- 1. 核心环境 ---
     $coreNames = @("Windows 版本", "系统架构", "物理内存", "PowerShell", "最低要求",
         "用户目录", "执行策略", "管理员权限", "Node.js", "npm", "Git", "VS Code (code)",
-        "Claude Code CLI", "Claude 配置目录", "settings.json")
+        "Claude Code CLI", "Claude 配置目录", "settings.json",
+        "npm registry", "npm optional", "npm omit", "npm ignore-scripts", "npm 安装风险配置")
     $coreChecks = $allChecks | Where-Object { $_.Name -in $coreNames }
     if ($coreChecks) {
         Add-ReportLine "  --- 核心环境 ---"
@@ -842,7 +932,23 @@ function Write-ReportChecks {
         Add-ReportLine ""
     }
 
-    # --- 2. DeepSeek 配置 ---
+    # --- 2. Claude 命令来源 ---
+    $claudeInvNames = @("Claude 命令来源", "当前 claude 来源", "Claude 命令冲突",
+        "claude 候选 1", "claude 候选 2", "claude 候选 3", "claude 候选 4",
+        "claude 候选 5", "claude 候选 6", "claude 候选 7", "claude 候选 8")
+    $claudeInvChecks = $allChecks | Where-Object { $_.Name -in $claudeInvNames }
+    if ($claudeInvChecks) {
+        Add-ReportLine "  --- Claude 命令来源 ---"
+        foreach ($check in $claudeInvChecks) {
+            $icon = Get-StatusIcon -Status $check.Status
+            $line = "  $icon $($check.Name)"
+            if ($check.Detail) { $line += " - $($check.Detail)" }
+            Add-ReportLine $line
+        }
+        Add-ReportLine ""
+    }
+
+    # --- 3. DeepSeek 配置 ---
     $dsNames = @("env 字段", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "API Key",
         "Anthropic Format smoke test", "DeepSeek API 测试",
@@ -905,7 +1011,7 @@ function Write-ReportChecks {
     }
 
     # --- 剩余未分组的检测项 ---
-    $groupedNames = $coreNames + $dsNames + $wslNames + $optionalNames + @("claude doctor")
+    $groupedNames = $coreNames + $claudeInvNames + $dsNames + $wslNames + $optionalNames + @("claude doctor")
     $remaining = $allChecks | Where-Object { $_.Name -notin $groupedNames }
     if ($remaining) {
         Add-ReportLine "  --- 其他检测 ---"

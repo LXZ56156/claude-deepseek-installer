@@ -127,6 +127,251 @@ function Test-ClaudeCommandExisting {
     return $result
 }
 
+function Get-ClaudeCommandInventory {
+    <#
+    .SYNOPSIS
+        收集当前 Windows 电脑上所有可能的 claude 命令来源，逐个执行 --version，
+        判断是否可用，并识别冲突。
+    .RETURNS
+        包含 Candidates, Active, HasConflict, ConflictSummary 的哈希表。
+        每个 Candidate 包含 Path, Source, Exists, Usable, Version, Risk, Note, Error。
+    #>
+    $inventory = @{
+        Candidates      = [System.Collections.ArrayList]::new()
+        Active          = $null
+        HasConflict     = $false
+        ConflictSummary = ""
+    }
+
+    $seen = @{}
+    $tempCandidates = [System.Collections.ArrayList]::new()
+
+    # --- 辅助函数：规范化路径用于去重 ---
+    function _normalize {
+        param([string]$P)
+        try { return [System.IO.Path]::GetFullPath($P).TrimEnd('\').ToLowerInvariant() }
+        catch { return $P.Trim().ToLowerInvariant() }
+    }
+
+    # --- 辅助函数：加入候选并去重 ---
+    function _add {
+        param([string]$CandidatePath, [string]$SourceHint, [string]$RiskHint, [string]$NoteHint)
+        if ([string]::IsNullOrWhiteSpace($CandidatePath)) { return }
+        $n = _normalize $CandidatePath
+        if ($seen.ContainsKey($n)) { return }
+        $seen[$n] = $true
+
+        $exists = Test-Path $CandidatePath
+        [void]$tempCandidates.Add([PSCustomObject]@{
+            Path    = $CandidatePath
+            Source  = $SourceHint
+            Exists  = $exists
+            Usable  = $false
+            Version = $null
+            Risk    = $RiskHint
+            Note    = $NoteHint
+            Error   = ""
+        })
+    }
+
+    # ============================================================
+    # 1. Get-Command claude -All
+    # ============================================================
+    $cmds = @(Get-Command "claude" -All -ErrorAction SilentlyContinue)
+    $firstCmdPath = $null
+    if ($cmds.Count -gt 0) {
+        $firstCmdPath = if ($cmds[0].Source) { $cmds[0].Source } else { $cmds[0].Definition }
+    }
+    foreach ($cmd in $cmds) {
+        $p = if ($cmd.Source) { $cmd.Source } else { $cmd.Definition }
+        _add -CandidatePath $p -SourceHint "path" -RiskHint "INFO" -NoteHint ""
+    }
+
+    # ============================================================
+    # 2. where.exe claude
+    # ============================================================
+    try {
+        $whereResult = & where.exe claude 2>$null
+        if ($whereResult) {
+            $lines = if ($whereResult -is [array]) { $whereResult } else { @($whereResult) }
+            foreach ($line in $lines) {
+                $trimmed = $line.Trim()
+                if ($trimmed -and (Test-Path $trimmed)) {
+                    _add -CandidatePath $trimmed -SourceHint "where" -RiskHint "INFO" -NoteHint ""
+                }
+            }
+        }
+    }
+    catch { }
+
+    # ============================================================
+    # 3. Native Install 默认路径 (%USERPROFILE%\.local\bin\claude.exe)
+    # ============================================================
+    $nativeClaudeExe = Join-Path (Join-Path (Get-UserProfilePath) ".local\bin") "claude.exe"
+    _add -CandidatePath $nativeClaudeExe -SourceHint "native_local_bin" -RiskHint "OK" `
+        -NoteHint "Claude 官方 Native Install 默认路径"
+
+    # ============================================================
+    # 4. npm 全局 shim 默认路径 (%APPDATA%\npm\claude.cmd)
+    # ============================================================
+    if ($env:APPDATA) {
+        $npmClaudeCmd = Join-Path $env:APPDATA "npm\claude.cmd"
+        _add -CandidatePath $npmClaudeCmd -SourceHint "npm_global" -RiskHint "INFO" `
+            -NoteHint "npm 全局安装 shim"
+    }
+
+    # ============================================================
+    # 5. WindowsApps alias 路径 (%LOCALAPPDATA%\Microsoft\WindowsApps\claude.exe)
+    # ============================================================
+    if ($env:LOCALAPPDATA) {
+        $windowsAppsClaude = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\claude.exe"
+        _add -CandidatePath $windowsAppsClaude -SourceHint "windowsapps" -RiskHint "WARN" `
+            -NoteHint "可能是 App Execution Alias / Claude Desktop alias，可能抢占真实 CLI"
+    }
+
+    # ============================================================
+    # 6. 当前 PATH 中的 claude.exe / claude.cmd / claude.bat
+    # ============================================================
+    $pathDirs = $env:Path.Split(';')
+    foreach ($dir in $pathDirs) {
+        $trimmedDir = $dir.Trim()
+        if (-not $trimmedDir) { continue }
+        try {
+            if (-not (Test-Path $trimmedDir -PathType Container)) { continue }
+            foreach ($ext in @("exe", "cmd", "bat")) {
+                $candidatePath = Join-Path $trimmedDir "claude.$ext"
+                if (Test-Path $candidatePath) {
+                    _add -CandidatePath $candidatePath -SourceHint "path" -RiskHint "INFO" -NoteHint ""
+                }
+            }
+        }
+        catch { }
+    }
+
+    # ============================================================
+    # 候选分类与可用性检测
+    # ============================================================
+    foreach ($candidate in $tempCandidates) {
+        $pathLower = $candidate.Path.ToLowerInvariant()
+
+        # 路径模式分类（覆盖临时 SourceHint）
+        if ($candidate.Source -in @("path", "where", "")) {
+            if ($pathLower -match '\\\.local\\bin\\claude\.exe$' -or $pathLower -match '/\.local/bin/claude\.exe$') {
+                $candidate.Source = "native_local_bin"
+                $candidate.Risk = "OK"
+                $candidate.Note = "Claude 官方 Native Install 默认路径"
+            }
+            elseif ($pathLower -match '\\appdata\\roaming\\npm\\claude\.cmd$' -or $pathLower -match '\\npm\\claude\.cmd$') {
+                $candidate.Source = "npm_global"
+                $candidate.Risk = "INFO"
+                $candidate.Note = "npm 全局安装 shim"
+            }
+            elseif ($pathLower -match '\\microsoft\\windowsapps\\') {
+                $candidate.Source = "windowsapps"
+                $candidate.Risk = "WARN"
+                $candidate.Note = "可能是 App Execution Alias / Claude Desktop alias，可能抢占真实 CLI"
+            }
+            else {
+                $candidate.Source = "unknown"
+                $candidate.Risk = "WARN"
+                $candidate.Note = "未知 claude 来源，请确认是否为旧安装或第三方文件"
+            }
+        }
+
+        # --version 检测
+        if ($candidate.Exists) {
+            $verResult = Invoke-CommandSafe -Command $candidate.Path -Arguments @("--version") -TimeoutSec 8
+            if ($verResult.Success -and -not [string]::IsNullOrWhiteSpace($verResult.Output)) {
+                $candidate.Usable = $true
+                $candidate.Version = $verResult.Output.Trim()
+            }
+            else {
+                $candidate.Usable = $false
+                $candidate.Error = if ($verResult.Error) { $verResult.Error } else { "--version 返回空" }
+                # 文件存在但无法运行 → 升级为 ERROR（windowsapps 除外）
+                if ($candidate.Source -ne "windowsapps") {
+                    $candidate.Risk = "ERROR"
+                    $candidate.Note = "文件存在但无法运行，可能是残留 shim、损坏安装或 PATH 冲突"
+                }
+            }
+        }
+
+        [void]$inventory.Candidates.Add($candidate)
+    }
+
+    # ============================================================
+    # Active 判定
+    # ============================================================
+    # 1. 首选 Get-Command claude 返回的第一个路径
+    if ($firstCmdPath) {
+        $firstNorm = _normalize $firstCmdPath
+        foreach ($c in $inventory.Candidates) {
+            if ((_normalize $c.Path) -eq $firstNorm) {
+                $inventory.Active = $c
+                break
+            }
+        }
+    }
+
+    # 2. 如果 Get-Command 没有返回，但 native_local_bin 可用
+    if (-not $inventory.Active) {
+        $nativeUsable = $inventory.Candidates | Where-Object { $_.Source -eq "native_local_bin" -and $_.Usable } | Select-Object -First 1
+        if ($nativeUsable) { $inventory.Active = $nativeUsable }
+    }
+
+    # 3. 第一个候选兜底
+    if (-not $inventory.Active -and $inventory.Candidates.Count -gt 0) {
+        $inventory.Active = $inventory.Candidates[0]
+    }
+
+    # ============================================================
+    # Conflict 判断
+    # ============================================================
+    $hasConflict = $false
+    $conflictReasons = [System.Collections.ArrayList]::new()
+
+    if ($inventory.Candidates.Count -gt 1) {
+        $hasConflict = $true
+        [void]$conflictReasons.Add("检测到多个 claude 命令来源，可能存在 PATH 优先级冲突。")
+    }
+
+    if ($inventory.Active -and -not $inventory.Active.Usable) {
+        $usableOthers = $inventory.Candidates | Where-Object { $_.Usable -and (_normalize $_.Path) -ne (_normalize $inventory.Active.Path) }
+        if ($usableOthers) {
+            $hasConflict = $true
+            [void]$conflictReasons.Add("当前 PATH 优先命中的 claude 不可用，但其他路径存在可用 claude。")
+        }
+    }
+
+    if ($inventory.Active -and $inventory.Active.Source -eq "windowsapps") {
+        $hasConflict = $true
+        [void]$conflictReasons.Add("WindowsApps alias 可能抢占真实 Claude Code CLI。")
+    }
+
+    $errorCandidates = $inventory.Candidates | Where-Object { $_.Risk -eq "ERROR" }
+    if ($errorCandidates) {
+        $hasConflict = $true
+        [void]$conflictReasons.Add("存在 $($errorCandidates.Count) 个无法运行的 claude 候选（残留或损坏）。")
+    }
+
+    $hasWA = $inventory.Candidates | Where-Object { $_.Source -eq "windowsapps" }
+    $hasNativeOrNpm = $inventory.Candidates | Where-Object { $_.Source -in @("native_local_bin", "npm_global") }
+    if ($hasWA -and $hasNativeOrNpm) {
+        $hasConflict = $true
+        [void]$conflictReasons.Add("WindowsApps alias 与 Native Install/npm 安装并存，可能冲突。")
+    }
+
+    $inventory.HasConflict = $hasConflict
+    $inventory.ConflictSummary = ($conflictReasons -join " ")
+
+    Write-Log "DEBUG" "Get-ClaudeCommandInventory: Candidates=$($inventory.Candidates.Count), HasConflict=$hasConflict"
+    if ($inventory.Active) {
+        Write-Log "DEBUG" "Get-ClaudeCommandInventory: Active.Path=$($inventory.Active.Path), Active.Source=$($inventory.Active.Source), Active.Usable=$($inventory.Active.Usable)"
+    }
+
+    return $inventory
+}
+
 function Test-HttpEndpointReachable {
     <#
     .SYNOPSIS
@@ -303,14 +548,22 @@ function Test-NpmMirrorClaudeCodeNetwork {
     <#
     .SYNOPSIS
         检测 npmmirror 的 @anthropic-ai/claude-code 包是否可访问。
+        同时检测 Windows 平台二进制包和 npm 安装风险配置。
     .RETURNS
-        包含 Reachable, NpmAvailable, NodeOk, Error 的哈希表
+        包含 Reachable, NpmAvailable, NodeOk, Error,
+        PlatformPackage, PlatformPackageReachable, PlatformPackageVersion,
+        PlatformPackageError, NpmConfigWarnings 的哈希表
     #>
     $result = @{
-        Reachable    = $false
-        NpmAvailable = $false
-        NodeOk       = $false
-        Error        = ""
+        Reachable                = $false
+        NpmAvailable             = $false
+        NodeOk                   = $false
+        Error                    = ""
+        PlatformPackage          = ""
+        PlatformPackageReachable = $false
+        PlatformPackageVersion   = ""
+        PlatformPackageError     = ""
+        NpmConfigWarnings        = @()
     }
 
     # Mock decision support（仅在 CCDI_MOCK_INSTALL_DECISION=1 且 CCDI_TEST_MODE=1 时生效）
@@ -345,11 +598,15 @@ function Test-NpmMirrorClaudeCodeNetwork {
 
         if ($mockMirror -eq "reachable") {
             $result.Reachable = $true
+            $result.PlatformPackageReachable = $true
+            $result.PlatformPackageVersion = "1.0.0-mock"
         }
         else {
             $result.Reachable = $false
             $result.Error = "mock: npmmirror unreachable"
+            $result.PlatformPackageError = "mock: platform package unreachable"
         }
+        $result.NpmConfigWarnings = @()
 
         return $result
     }
@@ -402,11 +659,121 @@ function Test-NpmMirrorClaudeCodeNetwork {
         Write-Log "WARN" "$($result.Error): $($npmViewResult.Error)"
     }
 
+    # 4. 检测 Windows 平台二进制包
+    $arch = $null
+    try {
+        $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+    }
+    catch {
+        $arch = $env:PROCESSOR_ARCHITECTURE
+    }
+
+    $platformPackage = ""
+    switch -Wildcard ($arch) {
+        "*x64*"   { $platformPackage = "@anthropic-ai/claude-code-win32-x64" }
+        "*X64*"   { $platformPackage = "@anthropic-ai/claude-code-win32-x64" }
+        "*AMD64*" { $platformPackage = "@anthropic-ai/claude-code-win32-x64" }
+        "*arm64*" { $platformPackage = "@anthropic-ai/claude-code-win32-arm64" }
+        "*Arm64*" { $platformPackage = "@anthropic-ai/claude-code-win32-arm64" }
+        "*ARM64*" { $platformPackage = "@anthropic-ai/claude-code-win32-arm64" }
+        default {
+            $result.PlatformPackageError = "未知架构 ($arch)，跳过平台包检测"
+            Write-Log "INFO" $result.PlatformPackageError
+        }
+    }
+    $result.PlatformPackage = $platformPackage
+
+    if ($platformPackage) {
+        $npmPlatViewCmd = "`"$($npmResolved.Path)`" view $platformPackage version --registry=https://registry.npmmirror.com"
+        $platViewResult = Invoke-CommandSafe -Command $cmdExe -Arguments @(
+            "/d", "/s", "/c", $npmPlatViewCmd
+        ) -TimeoutSec 60
+
+        if ($platViewResult.Success -and -not [string]::IsNullOrWhiteSpace($platViewResult.Output)) {
+            $result.PlatformPackageReachable = $true
+            $result.PlatformPackageVersion = $platViewResult.Output.Trim()
+            Write-Log "INFO" "npmmirror 平台包可达: $platformPackage $($result.PlatformPackageVersion)"
+        }
+        else {
+            $result.PlatformPackageReachable = $false
+            $result.PlatformPackageError = if ($platViewResult.Error) { $platViewResult.Error } else { "平台包版本查询失败" }
+            Write-Log "WARN" "npmmirror 主包可达，但平台包不可达: $platformPackage, Error=$($result.PlatformPackageError)"
+        }
+    }
+
+    # 5. 检测 npm 安装风险配置
+    $npmRisk = Get-NpmInstallRiskConfig
+    if ($npmRisk -and $npmRisk.Warnings) {
+        $result.NpmConfigWarnings = $npmRisk.Warnings
+        foreach ($w in $npmRisk.Warnings) {
+            Write-Log "WARN" $w
+        }
+    }
+
     return $result
 }
 
-# ============================================================
-# 安装函数
+function Get-NpmInstallRiskConfig {
+    <#
+    .SYNOPSIS
+        检测 npm 安装风险配置：optional, omit, ignore-scripts, registry。
+    .RETURNS
+        包含 Optional, Omit, IgnoreScripts, Registry, Warnings 的哈希表
+    #>
+    $result = @{
+        Optional       = ""
+        Omit           = ""
+        IgnoreScripts  = ""
+        Registry       = ""
+        Warnings       = [System.Collections.ArrayList]::new()
+    }
+
+    $npmResolved = Resolve-NpmCmdPath
+    if (-not $npmResolved.Found) {
+        [void]$result.Warnings.Add("npm.cmd 未找到，无法检查 npm 安装风险配置。")
+        return $result
+    }
+
+    $cmdExe = if ($env:ComSpec) { $env:ComSpec } else { "cmd.exe" }
+    $configKeys = @("optional", "omit", "ignore-scripts", "registry")
+    $configValues = @{}
+
+    foreach ($key in $configKeys) {
+        $npmConfigCmd = "`"$($npmResolved.Path)`" config get $key"
+        $configResult = Invoke-CommandSafe -Command $cmdExe -Arguments @(
+            "/d", "/s", "/c", $npmConfigCmd
+        ) -TimeoutSec 8
+
+        $val = ""
+        if ($configResult.Success -and $configResult.Output) {
+            $val = $configResult.Output.Trim()
+        }
+        $configValues[$key] = $val
+    }
+
+    $result.Optional = $configValues["optional"]
+    $result.Omit = $configValues["omit"]
+    $result.IgnoreScripts = $configValues["ignore-scripts"]
+    $result.Registry = $configValues["registry"]
+
+    # 风险判断
+    if ($result.Optional -eq "false") {
+        [void]$result.Warnings.Add("npm optional dependency 被禁用，Claude Code 平台二进制包可能不会安装。建议执行 npm config delete optional。")
+    }
+
+    if ($result.Omit -and $result.Omit -match "optional") {
+        [void]$result.Warnings.Add("npm omit 包含 optional，可能跳过平台二进制包。建议执行 npm config delete omit。")
+    }
+
+    if ($result.IgnoreScripts -eq "true") {
+        [void]$result.Warnings.Add("npm scripts 被禁用，可能影响安装后 shim 生成。建议执行 npm config set ignore-scripts false。")
+    }
+
+    Write-Log "DEBUG" "Get-NpmInstallRiskConfig: optional=$($result.Optional), omit=$($result.Omit), ignore-scripts=$($result.IgnoreScripts), registry=$($result.Registry), warnings=$($result.Warnings.Count)"
+
+    return $result
+}
+
 # ============================================================
 
 function Install-ClaudeCodeNative {
@@ -2076,8 +2443,16 @@ function Install-ClaudeCodeAuto {
         else {
             # claude 命令存在但不可用 → 残留/损坏，进入修复路径
             Write-Warning "检测到 Claude Code 残留或损坏: $($existingCheck.Error)"
+            Write-Warning "检测到 claude 命令来源异常，可能是旧安装、WindowsApps alias、Claude Desktop alias 或残留 shim。"
+            Write-Info "请运行「一键诊断.cmd」查看 Claude 命令来源。"
             Write-Info "将尝试通过安装流程修复（不覆盖已有配置）。"
             Write-Log "WARN" "Claude Code 存在但不可用 (existing_broken)，进入修复路径"
+            try {
+                $inv = Get-ClaudeCommandInventory
+                if ($inv.ConflictSummary) {
+                    Write-Log "WARN" "Claude command inventory conflict: $($inv.ConflictSummary)"
+                }
+            } catch { Write-Log "DEBUG" "Get-ClaudeCommandInventory failed (non-blocking): $_" }
         }
     }
     else {
@@ -2136,6 +2511,12 @@ function Install-ClaudeCodeAuto {
                 Write-Warning "检测到 claude 命令存在但无法运行，可能是旧安装、残留 shim、WindowsApps alias 或 PATH 冲突。"
                 Write-Log "WARN" "Native Install: claude exists but unusable: $($verifyResult.Error)"
                 Write-Info "将尝试 winget / npm 镜像安装作为备用方案..."
+                try {
+                    $inv = Get-ClaudeCommandInventory
+                    if ($inv.ConflictSummary) {
+                        Write-Log "WARN" "Claude command inventory: $($inv.ConflictSummary)"
+                    }
+                } catch { Write-Log "DEBUG" "Get-ClaudeCommandInventory failed (non-blocking): $_" }
                 # 继续 fallback 到 winget / npm mirror
             }
             else {
@@ -2161,6 +2542,12 @@ function Install-ClaudeCodeAuto {
                     Write-Warning "检测到 claude 命令存在但无法运行（PATH 刷新后），可能是旧安装或残留 shim。"
                     Write-Log "WARN" "Native Install PATH retry: claude exists but unusable: $($verifyResult2.Error)"
                     Write-Info "将尝试 winget / npm 镜像安装作为备用方案..."
+                    try {
+                        $inv = Get-ClaudeCommandInventory
+                        if ($inv.ConflictSummary) {
+                            Write-Log "WARN" "Claude command inventory: $($inv.ConflictSummary)"
+                        }
+                    } catch { Write-Log "DEBUG" "Get-ClaudeCommandInventory failed (non-blocking): $_" }
                 }
                 else {
                     Write-Warning "Native Install 安装脚本已执行但未检测到 claude 命令。"
@@ -2214,6 +2601,12 @@ function Install-ClaudeCodeAuto {
                 Write-Warning "检测到 claude 命令存在但无法运行，可能是旧安装、残留 shim 或 WindowsApps alias。"
                 Write-Log "WARN" "winget ClaudeCode: claude exists but unusable: $($verifyWingetClaude.Error)"
                 Write-Info "继续尝试 npm 镜像安装..."
+                try {
+                    $inv = Get-ClaudeCommandInventory
+                    if ($inv.ConflictSummary) {
+                        Write-Log "WARN" "Claude command inventory: $($inv.ConflictSummary)"
+                    }
+                } catch { Write-Log "DEBUG" "Get-ClaudeCommandInventory failed (non-blocking): $_" }
             }
             else {
                 Write-Warning "winget 安装已完成但 claude 命令未找到。继续尝试 npm 镜像安装..."
@@ -2335,6 +2728,12 @@ function Install-ClaudeCodeAuto {
                         Write-Warning "可能是旧安装、残留 shim、WindowsApps alias 或 PATH 冲突。"
                         Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
                         Write-Log "WARN" "npm mirror: claude exists but unusable: $($verifyResult.Error)"
+                        try {
+                            $inv = Get-ClaudeCommandInventory
+                            if ($inv.ConflictSummary) {
+                                Write-Log "WARN" "Claude command inventory: $($inv.ConflictSummary)"
+                            }
+                        } catch { Write-Log "DEBUG" "Get-ClaudeCommandInventory failed (non-blocking): $_" }
                         $result.Method = "npm_npmmirror"
                         $result.Status = "failed_claude_unusable"
                         Update-CcdiState -Updates @{
@@ -2364,6 +2763,12 @@ function Install-ClaudeCodeAuto {
                             Write-Warning "检测到 claude 命令存在但无法运行（PATH 刷新后）: $($verifyResult2.Error)"
                             Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
                             Write-Log "WARN" "npm mirror PATH retry: claude exists but unusable: $($verifyResult2.Error)"
+                            try {
+                                $inv = Get-ClaudeCommandInventory
+                                if ($inv.ConflictSummary) {
+                                    Write-Log "WARN" "Claude command inventory: $($inv.ConflictSummary)"
+                                }
+                            } catch { Write-Log "DEBUG" "Get-ClaudeCommandInventory failed (non-blocking): $_" }
                             $result.Method = "npm_npmmirror"
                             $result.Status = "failed_claude_unusable"
                             Update-CcdiState -Updates @{
@@ -2522,6 +2927,12 @@ function Install-ClaudeCodeAuto {
         Write-Warning "可能是旧安装、残留 shim、WindowsApps alias 或 PATH 冲突。"
         Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
         Write-Log "WARN" "npm mirror: claude exists but unusable: $($verifyResult.Error)"
+        try {
+            $inv = Get-ClaudeCommandInventory
+            if ($inv.ConflictSummary) {
+                Write-Log "WARN" "Claude command inventory: $($inv.ConflictSummary)"
+            }
+        } catch { Write-Log "DEBUG" "Get-ClaudeCommandInventory failed (non-blocking): $_" }
         $result.Method = "npm_npmmirror"
         $result.Status = "failed_claude_unusable"
         Update-CcdiState -Updates @{
@@ -2551,6 +2962,12 @@ function Install-ClaudeCodeAuto {
             Write-Warning "检测到 claude 命令存在但无法运行（PATH 刷新后）: $($verifyResult2.Error)"
             Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
             Write-Log "WARN" "npm mirror PATH retry: claude exists but unusable: $($verifyResult2.Error)"
+            try {
+                $inv = Get-ClaudeCommandInventory
+                if ($inv.ConflictSummary) {
+                    Write-Log "WARN" "Claude command inventory: $($inv.ConflictSummary)"
+                }
+            } catch { Write-Log "DEBUG" "Get-ClaudeCommandInventory failed (non-blocking): $_" }
             $result.Method = "npm_npmmirror"
             $result.Status = "failed_claude_unusable"
             Update-CcdiState -Updates @{

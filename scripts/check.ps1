@@ -2213,4 +2213,114 @@ if ($tceFuncText -notmatch '\.local\\bin.*claude\.exe') {
 
 Write-Host "[check] P0 fix anti-regression OK"
 
+# ============================================================
+# P1 修复防回归: Claude 命令来源清单 + npm 安装风险 (v1.3.2)
+# ============================================================
+Write-Host "[check] P1 fix anti-regression: Claude command inventory + npm install risks"
+
+$claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+$doctorText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+
+# 1. 必须存在 Get-ClaudeCommandInventory
+if ($claudeInstallText -notmatch 'function Get-ClaudeCommandInventory') {
+    throw "Get-ClaudeCommandInventory function not found in lib/claude-install.ps1"
+}
+
+# 2. Get-ClaudeCommandInventory 必须包含关键内容
+$inventoryPatterns = @(
+    @{ Name = 'Get-Command "claude" -All'; Pattern = 'Get-Command\s+"claude"\s+-All' },
+    @{ Name = 'where.exe claude'; Pattern = 'where\.exe\s+claude' },
+    @{ Name = 'native_local_bin'; Pattern = 'native_local_bin' },
+    @{ Name = 'npm_global'; Pattern = 'npm_global' },
+    @{ Name = 'WindowsApps'; Pattern = 'WindowsApps' },
+    @{ Name = 'HasConflict'; Pattern = 'HasConflict' },
+    @{ Name = 'ConflictSummary'; Pattern = 'ConflictSummary' }
+)
+foreach ($pat in $inventoryPatterns) {
+    if ($claudeInstallText -notmatch $pat.Pattern) {
+        throw "Get-ClaudeCommandInventory must contain: $($pat.Name)"
+    }
+}
+
+# 3. doctor.ps1 必须调用 Get-ClaudeCommandInventory
+if ($doctorText -notmatch 'Get-ClaudeCommandInventory') {
+    throw "doctor.ps1 must call Get-ClaudeCommandInventory"
+}
+
+# 4. doctor.ps1 必须包含关键检测项名称
+$doctorInventoryNames = @("Claude 命令来源", "当前 claude 来源", "Claude 命令冲突")
+foreach ($name in $doctorInventoryNames) {
+    if ($doctorText -notmatch [regex]::Escape($name)) {
+        throw "doctor.ps1 must contain check name: $name"
+    }
+}
+
+# 5. Test-NpmMirrorClaudeCodeNetwork 必须包含平台包检测
+$platformPkgPatterns = @(
+    '@anthropic-ai/claude-code-win32-x64',
+    '@anthropic-ai/claude-code-win32-arm64',
+    'PlatformPackageReachable',
+    'PlatformPackageVersion'
+)
+foreach ($pat in $platformPkgPatterns) {
+    if ($claudeInstallText -notmatch [regex]::Escape($pat)) {
+        throw "Test-NpmMirrorClaudeCodeNetwork must contain: $pat"
+    }
+}
+
+# 6. 必须存在 Get-NpmInstallRiskConfig
+if ($claudeInstallText -notmatch 'function Get-NpmInstallRiskConfig') {
+    throw "Get-NpmInstallRiskConfig function not found in lib/claude-install.ps1"
+}
+
+# 提取 Get-NpmInstallRiskConfig 函数体供后续检查
+$getNpmRiskLines = @($claudeInstallText -split "`n")
+$inFunc = $false; $funcLines = [System.Collections.ArrayList]::new()
+foreach ($l in $getNpmRiskLines) {
+    if ($l -match 'function Get-NpmInstallRiskConfig') { $inFunc = $true }
+    if ($inFunc) {
+        [void]$funcLines.Add($l)
+        if ($l -match '^\}\s*$' -and $funcLines.Count -gt 3) { break }
+    }
+}
+$npmRiskFuncBody = $funcLines -join "`n"
+if (-not $npmRiskFuncBody) { $npmRiskFuncBody = $claudeInstallText }
+
+# 7. Get-NpmInstallRiskConfig 必须检查 optional, omit, ignore-scripts, registry
+# 函数用 foreach ($key in $configKeys) 循环，不会硬编码 "config get optional"，
+# 但必须在 $configKeys 数组中包含这四个键，并在风险分析中引用它们。
+$npmRiskConfigPatterns = @(
+    @{ Name = 'optional literal'; Pattern = '"optional"' },
+    @{ Name = 'omit literal'; Pattern = '"omit"' },
+    @{ Name = 'ignore-scripts literal'; Pattern = '"ignore-scripts"' },
+    @{ Name = 'registry literal'; Pattern = '"registry"' },
+    @{ Name = 'optional risk check'; Pattern = '\$result\.Optional\s+-eq\s+"false"' },
+    @{ Name = 'omit risk check'; Pattern = '\$result\.Omit\s+-match\s+"optional"' },
+    @{ Name = 'ignore-scripts risk check'; Pattern = '\$result\.IgnoreScripts\s+-eq\s+"true"' }
+)
+foreach ($pat in $npmRiskConfigPatterns) {
+    if ($npmRiskFuncBody -notmatch $pat.Pattern) {
+        throw "Get-NpmInstallRiskConfig must contain pattern: $($pat.Name)"
+    }
+}
+
+# 8. doctor.ps1 必须包含 npm 安装风险检测项名称
+$doctorNpmRiskNames = @("npm 安装风险配置", "npm optional", "npm omit",
+    "npm ignore-scripts", "npm registry")
+foreach ($name in $doctorNpmRiskNames) {
+    if ($doctorText -notmatch [regex]::Escape($name)) {
+        throw "doctor.ps1 must contain check name: $name"
+    }
+}
+
+# 9. npm config 检测不得裸用 npm（必须通过 Resolve-NpmCmdPath 或绝对路径）
+if ($npmRiskFuncBody -match 'Invoke-CommandSafe\s+-Command\s+"npm"') {
+    throw "Get-NpmInstallRiskConfig must NOT use bare 'npm' in Invoke-CommandSafe; use Resolve-NpmCmdPath"
+}
+if ($npmRiskFuncBody -notmatch 'Resolve-NpmCmdPath') {
+    throw "Get-NpmInstallRiskConfig must use Resolve-NpmCmdPath to resolve npm.cmd"
+}
+
+Write-Host "[check] P1 fix anti-regression OK"
+
 Write-Host "[check] OK"
