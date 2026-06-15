@@ -2649,6 +2649,25 @@ if ($checkWslStart -ge 0) {
 if ($doctorText -notmatch '未执行深度启动检测') { throw "doctor.ps1 must still contain '未执行深度启动检测'" }
 if ($doctorText -notmatch 'WSL 是高级选项，不影响 Windows 原生安装') { throw "doctor.ps1 must still contain WSL advice text" }
 
+
+# 4.5 Check-Commands 不得调用 Test-WslInstalled（WSL 检测统一在 Check-WSL）
+$checkCmdsStart = -1
+$checkCmdsEnd = -1
+for ($i = 0; $i -lt $doctorLines.Count; $i++) {
+    if ($doctorLines[$i] -match '^function Check-Commands\b') { $checkCmdsStart = $i }
+    if ($checkCmdsStart -ge 0 -and $i -gt $checkCmdsStart -and $doctorLines[$i] -match '^function \w') {
+        $checkCmdsEnd = $i - 1
+        break
+    }
+}
+if ($checkCmdsStart -ge 0) {
+    if ($checkCmdsEnd -lt 0) { $checkCmdsEnd = $doctorLines.Count - 1 }
+    $checkCmdsBody = ($doctorLines[$checkCmdsStart..$checkCmdsEnd] | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    if ($checkCmdsBody -match 'Test-WslInstalled') {
+        throw "Check-Commands must NOT call Test-WslInstalled (WSL detection belongs in Check-WSL)"
+    }
+}
+
 Write-Host "[check] P3.1 anti-regression OK"
 
 Write-Host "[check] OK"

@@ -2621,7 +2621,7 @@ function Install-ClaudeCodeAuto {
                 $nativeResult.RawError
                 $nativeResult.Status
             ) -join "`n"
-            Write-Log "DEBUG" "Native Install lock check raw: $($nativeRawForLockCheck.Substring(0, [Math]::Min(200, $nativeRawForLockCheck.Length)))"
+            Write-Log "DEBUG" "Native Install lock check: HasRawError=$([bool]$nativeResult.RawError), TextLength=$($nativeRawForLockCheck.Length)"
 
             if (Test-IsClaudeNativeFileLockError -Text $nativeRawForLockCheck) {
                 Write-Warning "Claude 官方安装器提示文件被占用。"

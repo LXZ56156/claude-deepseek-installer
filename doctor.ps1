@@ -277,23 +277,7 @@ function Check-Commands {
         Add-CheckResult "VS Code (code)" "WARN" "code 命令不在 PATH 中"
         Add-Suggestion "在 VS Code 中按 Ctrl+Shift+P，搜索并执行 'Shell Command: Install code command in PATH'。"
     }
-
-    $wslInfo = Test-WslInstalled
-    if ($wslInfo.Installed) {
-        $wslDetail = $wslInfo.Version.Split("`n")[0]
-        Add-CheckResult "WSL" "OK" $wslDetail
-
-        $distroList = ($wslInfo.Distributions | ForEach-Object {
-            $marker = if ($_.Default) { "*" } else { " " }
-            $state = if ($_.Running) { "Running" } else { "Stopped" }
-            "$marker $($_.Name) ($state)"
-        }) -join "; "
-        Add-CheckResult "WSL 发行版" "OK" $distroList
-    }
-    else {
-        Add-CheckResult "WSL" "SKIP" "未安装或未启用"
-    }
-
+    # WSL 检测已统一移至 Check-WSL（避免全流程两次 wsl --version 探测），此处不提前调用
     # --- Claude Code CLI + 命令来源（只调用一次 Get-ClaudeCommandInventory）---
     $inventory = $null
     try {
@@ -741,6 +725,15 @@ function Check-WSL {
         return
     }
 
+    $wslVersion = $wslInfo.Version.Split("`n")[0]
+    Add-CheckResult "WSL" "OK" $wslVersion
+
+    $distroList = ($wslInfo.Distributions | ForEach-Object {
+        $marker = if ($_.Default) { "*" } else { " " }
+        $state = if ($_.Running) { "Running" } else { "Stopped" }
+        "$marker $($_.Name) ($state)"
+    }) -join "; "
+    Add-CheckResult "WSL 发行版" "OK" $distroList
     Add-CheckResult "WSL 状态" "OK" "已启用"
 
     $ubuntuInfo = Test-UbuntuInWsl -WslInfo $wslInfo
