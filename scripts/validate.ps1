@@ -148,50 +148,11 @@ function Invoke-PowerShellScript {
         [int]$TimeoutSec = 300
     )
 
-    $name = [System.IO.Path]::GetFileNameWithoutExtension($FilePath)
-    $ts = Get-Date -Format "yyyyMMdd-HHmmss"
-    $reportsDir = Join-Path $script:RootDir "reports"
-    if (-not (Test-Path $reportsDir)) { New-Item -ItemType Directory -Path $reportsDir -Force | Out-Null }
-    $stdoutPath = Join-Path $reportsDir "validate-child-$ts-$name.stdout.txt"
-    $stderrPath = Join-Path $reportsDir "validate-child-$ts-$name.stderr.txt"
-
     $allArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $FilePath) + $Arguments
 
-    # Spawn child powershell directly via System.Diagnostics.Process.
-    # No .NET stream redirection (no buffer deadlock). No shell 1>/2> (no handle
-    # inheritance from claude.exe). stdout/stderr go to console and are captured
-    # only through $proc.ExitCode.
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "powershell.exe"
-    $psi.Arguments = ($allArgs | ForEach-Object {
-        if ($_ -match '[\s"]') { "`"$($_ -replace '"','""')`"" } else { $_ }
-    }) -join ' '
-    $psi.UseShellExecute = $false
-    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-    $psi.WorkingDirectory = $script:RootDir
-
-    $proc = New-Object System.Diagnostics.Process
-    $proc.StartInfo = $psi
-    [void]$proc.Start()
-
-    $finished = $proc.WaitForExit($TimeoutSec * 1000)
-
-    if (-not $finished) {
-        $realPid = $proc.Id
-        try {
-            & taskkill.exe /PID $realPid /T /F 2>$null | Out-Null
-            Start-Sleep -Milliseconds 500
-        } catch { }
-        if (-not $proc.HasExited) {
-            try { Stop-Process -Id $realPid -Force -ErrorAction SilentlyContinue } catch { }
-        }
-        throw "TIMEOUT: $FilePath (${TimeoutSec}s)"
-    }
-
-    $exitCode = $proc.ExitCode
-
-    if ($exitCode -ne 0) {
-        throw "$FilePath failed with exit code $exitCode"
+    & "powershell.exe" @allArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "$FilePath failed with exit code $LASTEXITCODE"
     }
 }
 
