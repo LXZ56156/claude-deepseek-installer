@@ -2668,6 +2668,17 @@ if ($checkCmdsStart -ge 0) {
     }
 }
 
+
+# 4.6 Native Install 日志不得记录 RawError 原文（防止泄露本地路径）
+if ($claudeInstallText -match "Native Install lock check raw") {
+    throw "claude-install.ps1 must NOT log RawError snippet; use HasRawError boolean only"
+}
+
+# 4.7 Native Install 日志必须含 HasRawError（结构化日志）
+if ($claudeInstallText -notmatch "Native Install lock check: HasRawError=") {
+    throw "claude-install.ps1 must log Native Install lock check with HasRawError boolean format"
+}
+
 Write-Host "[check] P3.1 anti-regression OK"
 
 Write-Host "[check] OK"
