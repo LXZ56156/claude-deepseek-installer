@@ -5,12 +5,12 @@
 ## v1.3.2 RC
 
 - Branch: `release/v1.3.2-rc`
-- Artifact source commit: `f048c1e4eb2dbe599390b07184e28b36b4f66fd7` (ZIP artifact source tree)
-- Generating code commit: `faf1c700580fbb437bd78fb9d641134e7a26ea81` (fix(validation): enforce final artifact and shellexecute failure checks)
-- Metadata HEAD: `3a25e47f1cceb60fcd4dc95b92813d860a4f99f1` (release record / check metadata)
+- Artifact source commit: `655d7cb...` (ZIP artifact source tree — rename to 00-点我开始安装)
+- Generating code commit: `655d7cb...` (feat(release): rename to 00-点我开始安装.cmd)
+- Metadata HEAD: `<after-docs-commit>` (release record metadata)
 - ZIP: `ClaudeCode-DeepSeek-本地配置助手-v1.3.2.zip`
-- SHA256: `b6f6915decf161de0182748cb7e29516809020eb935f00e055667dbc19703b61`
-- Size: 190830 bytes (186.4 KB)
+- SHA256: `5a272b54a60d398b3a3620d31cabc3fd5e92ef7c214ce8627fc01201ef55ce29`
+- Size: 191605 bytes (187.1 KB)
 - Entries: 38
 - Validation:
   - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode Smoke`
