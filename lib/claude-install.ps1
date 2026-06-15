@@ -30,6 +30,8 @@ function Test-ClaudeCommandExisting {
         Usable  = $false
         Version = $null
         Error   = ""
+        Path    = $null
+        Source  = ""
     }
 
     # TestSafe / Mock mode: skip real claude --version to avoid process hang
@@ -38,17 +40,17 @@ function Test-ClaudeCommandExisting {
             $mockClaude = if ($env:CCDI_MOCK_CLAUDE) { $env:CCDI_MOCK_CLAUDE } else { "missing" }
             Write-Log "DEBUG" "MOCK: Test-ClaudeCommandExisting -> CCDI_MOCK_CLAUDE=$mockClaude"
             switch ($mockClaude) {
-                "ok" { return @{ Exists = $true; Usable = $true; Version = "1.0.0-mock"; Error = "" } }
-                "broken" { return @{ Exists = $true; Usable = $false; Version = $null; Error = "mock: claude command exists but --version fails (corrupt or residual)" } }
-                default { return @{ Exists = $false; Usable = $false; Version = $null; Error = "mock: claude not found" } }
+                "ok" { return @{ Exists = $true; Usable = $true; Version = "1.0.0-mock"; Error = ""; Path = $null; Source = "" } }
+                "broken" { return @{ Exists = $true; Usable = $false; Version = $null; Error = "mock: claude command exists but --version fails (corrupt or residual)"; Path = $null; Source = "" } }
+                default { return @{ Exists = $false; Usable = $false; Version = $null; Error = "mock: claude not found"; Path = $null; Source = "" } }
             }
         }
         # Non-mock TestSafe: use Get-Command only, skip --version
         $cmd = Get-Command "claude" -ErrorAction SilentlyContinue
         if ($cmd) {
-            return @{ Exists = $true; Usable = $true; Version = "test-safe"; Error = "" }
+            return @{ Exists = $true; Usable = $true; Version = "test-safe"; Error = ""; Path = $null; Source = "" }
         }
-        return @{ Exists = $false; Usable = $false; Version = $null; Error = "test-safe: claude not found" }
+        return @{ Exists = $false; Usable = $false; Version = $null; Error = "test-safe: claude not found"; Path = $null; Source = "" }
     }
 
     # 刷新 PATH 后检测
@@ -56,6 +58,18 @@ function Test-ClaudeCommandExisting {
 
     if (Test-CommandAvailable -CommandName "claude") {
         $result.Exists = $true
+        # 记录找到的 claude 路径和来源
+        try {
+            $cmdInfo = Get-Command "claude" -ErrorAction SilentlyContinue
+            if ($cmdInfo) {
+                $result.Path = if ($cmdInfo.Source) { $cmdInfo.Source } else { $cmdInfo.Definition }
+                $result.Source = if ($cmdInfo.CommandType) { $cmdInfo.CommandType.ToString() } else { "unknown" }
+                Write-Log "DEBUG" "Test-ClaudeCommandExisting: found claude at Path=$($result.Path), Source=$($result.Source)"
+            }
+        }
+        catch {
+            Write-Log "DEBUG" "Test-ClaudeCommandExisting: Get-Command claude details failed: $_"
+        }
         $verResult = Invoke-CommandSafe -Command "claude" -Arguments @("--version") -TimeoutSec 5
         if ($verResult.Success -and -not [string]::IsNullOrWhiteSpace($verResult.Output)) {
             $result.Usable = $true
@@ -65,6 +79,28 @@ function Test-ClaudeCommandExisting {
             $result.Usable = $false
             $result.Error = "claude 命令存在但 --version 失败（残留或损坏）: $($verResult.Error)"
             Write-Log "WARN" $result.Error
+        }
+    }
+    else {
+        # Get-Command 没找到 claude，检查 %USERPROFILE%\.local\bin\claude.exe（Native Install 默认路径）
+        $nativeClaudeExe = Join-Path (Join-Path (Get-UserProfilePath) ".local\bin") "claude.exe"
+        Write-Log "DEBUG" "Test-ClaudeCommandExisting: Get-Command claude not found, checking native path: $nativeClaudeExe"
+        if (Test-Path $nativeClaudeExe) {
+            $result.Exists = $true
+            $result.Path = $nativeClaudeExe
+            $result.Source = "native_local_bin"
+            Write-Log "INFO" "Test-ClaudeCommandExisting: 在 .local\bin 找到 claude.exe，正在测试 --version..."
+            $verResult = Invoke-CommandSafe -Command $nativeClaudeExe -Arguments @("--version") -TimeoutSec 5
+            if ($verResult.Success -and -not [string]::IsNullOrWhiteSpace($verResult.Output)) {
+                $result.Usable = $true
+                $result.Version = $verResult.Output.Trim()
+                Write-Log "INFO" "Test-ClaudeCommandExisting: native_local_bin claude.exe 可用, Version=$($result.Version)"
+            }
+            else {
+                $result.Usable = $false
+                $result.Error = "native_local_bin claude.exe 存在但 --version 失败: $($verResult.Error)"
+                Write-Log "WARN" $result.Error
+            }
         }
     }
 
@@ -2061,8 +2097,8 @@ function Install-ClaudeCodeAuto {
             }
             Refresh-CurrentProcessPath
             $verifyResult = Test-ClaudeCommandExisting
-            if ($verifyResult.Exists) {
-                Write-Success "Claude Code 安装验证通过 (Native Install): $($verifyResult.Version)"
+            if ($verifyResult.Usable) {
+                Write-Success "Claude Code 安装验证通过: $($verifyResult.Version)"
                 # claude doctor is diagnostic-only; not called during install
 
                 $result.Success = $true
@@ -2076,12 +2112,18 @@ function Install-ClaudeCodeAuto {
                 } | Out-Null
                 return $result
             }
+            elseif ($verifyResult.Exists) {
+                Write-Warning "检测到 claude 命令存在但无法运行，可能是旧安装、残留 shim、WindowsApps alias 或 PATH 冲突。"
+                Write-Log "WARN" "Native Install: claude exists but unusable: $($verifyResult.Error)"
+                Write-Info "将尝试 winget / npm 镜像安装作为备用方案..."
+                # 继续 fallback 到 winget / npm mirror
+            }
             else {
                 Write-Warning "安装脚本已执行但 claude 命令未找到，正在刷新 PATH 重试..."
                 Refresh-CurrentProcessPath
                 $verifyResult2 = Test-ClaudeCommandExisting
-                if ($verifyResult2.Exists) {
-                    Write-Success "Claude Code 安装验证通过（PATH 刷新后）: $($verifyResult2.Version)"
+                if ($verifyResult2.Usable) {
+                    Write-Success "Claude Code 安装验证通过: $($verifyResult2.Version)"
                     # claude doctor is diagnostic-only; not called during install
 
                     $result.Success = $true
@@ -2095,8 +2137,15 @@ function Install-ClaudeCodeAuto {
                     } | Out-Null
                     return $result
                 }
-                Write-Warning "Native Install 安装脚本已执行但未检测到 claude 命令。"
-                Write-Warning "将尝试 npmmirror 镜像安装作为备用方案。"
+                elseif ($verifyResult2.Exists) {
+                    Write-Warning "检测到 claude 命令存在但无法运行（PATH 刷新后），可能是旧安装或残留 shim。"
+                    Write-Log "WARN" "Native Install PATH retry: claude exists but unusable: $($verifyResult2.Error)"
+                    Write-Info "将尝试 winget / npm 镜像安装作为备用方案..."
+                }
+                else {
+                    Write-Warning "Native Install 安装脚本已执行但未检测到 claude 命令。"
+                    Write-Warning "将尝试 npmmirror 镜像安装作为备用方案。"
+                }
             }
         }
         else {
@@ -2128,8 +2177,8 @@ function Install-ClaudeCodeAuto {
             Write-Success "winget Claude Code 安装命令已执行。正在验证..."
             Refresh-CurrentProcessPath
             $verifyWingetClaude = Test-ClaudeCommandExisting
-            if ($verifyWingetClaude.Exists) {
-                Write-Success "Claude Code 安装验证通过 (winget): $($verifyWingetClaude.Version)"
+            if ($verifyWingetClaude.Usable) {
+                Write-Success "Claude Code 安装验证通过: $($verifyWingetClaude.Version)"
                 $result.Success = $true
                 $result.Method = "winget_claude_code"
                 $result.Status = "installed"
@@ -2140,6 +2189,11 @@ function Install-ClaudeCodeAuto {
                     claudeInstallStatus       = "installed"
                 } | Out-Null
                 return $result
+            }
+            elseif ($verifyWingetClaude.Exists) {
+                Write-Warning "检测到 claude 命令存在但无法运行，可能是旧安装、残留 shim 或 WindowsApps alias。"
+                Write-Log "WARN" "winget ClaudeCode: claude exists but unusable: $($verifyWingetClaude.Error)"
+                Write-Info "继续尝试 npm 镜像安装..."
             }
             else {
                 Write-Warning "winget 安装已完成但 claude 命令未找到。继续尝试 npm 镜像安装..."
@@ -2243,8 +2297,8 @@ function Install-ClaudeCodeAuto {
                     }
                     Refresh-CurrentProcessPath
                     $verifyResult = Test-ClaudeCommandExisting
-                    if ($verifyResult.Exists) {
-                        Write-Success "Claude Code 安装验证通过 (npm mirror): $($verifyResult.Version)"
+                    if ($verifyResult.Usable) {
+                        Write-Success "Claude Code 安装验证通过: $($verifyResult.Version)"
                         $result.Success = $true
                         $result.Method = "npm_npmmirror"
                         $result.Status = "installed"
@@ -2256,12 +2310,25 @@ function Install-ClaudeCodeAuto {
                         } | Out-Null
                         return $result
                     }
+                    elseif ($verifyResult.Exists) {
+                        Write-Warning "检测到 claude 命令存在但无法运行: $($verifyResult.Error)"
+                        Write-Warning "可能是旧安装、残留 shim、WindowsApps alias 或 PATH 冲突。"
+                        Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
+                        Write-Log "WARN" "npm mirror: claude exists but unusable: $($verifyResult.Error)"
+                        $result.Method = "npm_npmmirror"
+                        $result.Status = "failed_claude_unusable"
+                        Update-CcdiState -Updates @{
+                            claudeInstallMethod = "npm_npmmirror"
+                            claudeInstallStatus = "failed_claude_unusable"
+                        } | Out-Null
+                        return $result
+                    }
                     else {
                         Write-Warning "claude 命令未找到，正在刷新 PATH 并重新检测..."
                         Refresh-CurrentProcessPath
                         $verifyResult2 = Test-ClaudeCommandExisting
-                        if ($verifyResult2.Exists) {
-                            Write-Success "Claude Code 检测成功（PATH 刷新后）: $($verifyResult2.Version)"
+                        if ($verifyResult2.Usable) {
+                            Write-Success "Claude Code 安装验证通过: $($verifyResult2.Version)"
                             $result.Success = $true
                             $result.Method = "npm_npmmirror"
                             $result.Status = "installed"
@@ -2270,6 +2337,18 @@ function Install-ClaudeCodeAuto {
                                 claudeWasAlreadyInstalled = $false
                                 claudeInstallMethod       = "npm_npmmirror"
                                 claudeInstallStatus       = "installed"
+                            } | Out-Null
+                            return $result
+                        }
+                        elseif ($verifyResult2.Exists) {
+                            Write-Warning "检测到 claude 命令存在但无法运行（PATH 刷新后）: $($verifyResult2.Error)"
+                            Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
+                            Write-Log "WARN" "npm mirror PATH retry: claude exists but unusable: $($verifyResult2.Error)"
+                            $result.Method = "npm_npmmirror"
+                            $result.Status = "failed_claude_unusable"
+                            Update-CcdiState -Updates @{
+                                claudeInstallMethod = "npm_npmmirror"
+                                claudeInstallStatus = "failed_claude_unusable"
                             } | Out-Null
                             return $result
                         }
@@ -2403,8 +2482,8 @@ function Install-ClaudeCodeAuto {
     }
     Refresh-CurrentProcessPath
     $verifyResult = Test-ClaudeCommandExisting
-    if ($verifyResult.Exists) {
-        Write-Success "Claude Code 安装验证通过 (npm mirror): $($verifyResult.Version)"
+    if ($verifyResult.Usable) {
+        Write-Success "Claude Code 安装验证通过: $($verifyResult.Version)"
         # claude doctor is diagnostic-only; not called during install
 
         $result.Success = $true
@@ -2418,12 +2497,25 @@ function Install-ClaudeCodeAuto {
         } | Out-Null
         return $result
     }
+    elseif ($verifyResult.Exists) {
+        Write-Warning "检测到 claude 命令存在但无法运行: $($verifyResult.Error)"
+        Write-Warning "可能是旧安装、残留 shim、WindowsApps alias 或 PATH 冲突。"
+        Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
+        Write-Log "WARN" "npm mirror: claude exists but unusable: $($verifyResult.Error)"
+        $result.Method = "npm_npmmirror"
+        $result.Status = "failed_claude_unusable"
+        Update-CcdiState -Updates @{
+            claudeInstallMethod = "npm_npmmirror"
+            claudeInstallStatus = "failed_claude_unusable"
+        } | Out-Null
+        return $result
+    }
     else {
         Write-Warning "claude 命令未找到，正在刷新 PATH 并重新检测..."
         Refresh-CurrentProcessPath
         $verifyResult2 = Test-ClaudeCommandExisting
-        if ($verifyResult2.Exists) {
-            Write-Success "Claude Code 检测成功（PATH 刷新后）: $($verifyResult2.Version)"
+        if ($verifyResult2.Usable) {
+            Write-Success "Claude Code 安装验证通过: $($verifyResult2.Version)"
             $result.Success = $true
             $result.Method = "npm_npmmirror"
             $result.Status = "installed"
@@ -2432,6 +2524,18 @@ function Install-ClaudeCodeAuto {
                 claudeWasAlreadyInstalled = $false
                 claudeInstallMethod       = "npm_npmmirror"
                 claudeInstallStatus       = "installed"
+            } | Out-Null
+            return $result
+        }
+        elseif ($verifyResult2.Exists) {
+            Write-Warning "检测到 claude 命令存在但无法运行（PATH 刷新后）: $($verifyResult2.Error)"
+            Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
+            Write-Log "WARN" "npm mirror PATH retry: claude exists but unusable: $($verifyResult2.Error)"
+            $result.Method = "npm_npmmirror"
+            $result.Status = "failed_claude_unusable"
+            Update-CcdiState -Updates @{
+                claudeInstallMethod = "npm_npmmirror"
+                claudeInstallStatus = "failed_claude_unusable"
             } | Out-Null
             return $result
         }

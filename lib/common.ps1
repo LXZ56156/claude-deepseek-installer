@@ -752,6 +752,11 @@ function Refresh-CurrentProcessPath {
         if ($env:APPDATA) {
             $extraPaths += Join-Path $env:APPDATA "npm"
         }
+        # Native Install 默认路径（Claude 官方安装到 %USERPROFILE%\.local\bin）
+        $nativeClaudeBin = Join-Path (Get-UserProfilePath) ".local\bin"
+        if (Test-Path $nativeClaudeBin) {
+            $extraPaths += $nativeClaudeBin
+        }
         foreach ($p in $extraPaths) {
             if ($p -and (Test-Path $p) -and $p -notin $combined) {
                 $combined += $p
@@ -759,7 +764,7 @@ function Refresh-CurrentProcessPath {
         }
 
         $env:Path = ($combined -join ";") + ";" + $env:Path
-        Write-Log "DEBUG" "PATH 已刷新（合并 Machine + User + 常见 node/npm 路径到当前进程）"
+        Write-Log "DEBUG" "PATH 已刷新（合并 Machine + User + 常见 node/npm + Native Install .local\bin 路径到当前进程）"
     }
     catch {
         Write-Log "WARN" "PATH 刷新失败: $_"

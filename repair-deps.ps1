@@ -264,7 +264,12 @@ function Start-RepairDeps {
     }
     else {
         $npmGlobalPath = ""
-        $npmPrefix = Invoke-CommandSafe -Command "npm" -Arguments @("prefix", "-g") -TimeoutSec 8
+        $npmResolved = Resolve-NpmCmdPath
+        $npmPrefix = if ($npmResolved.Found) {
+            Invoke-CommandSafe -Command $npmResolved.Path -Arguments @("prefix", "-g") -TimeoutSec 8
+        } else {
+            @{ Success = $false; Output = ""; Error = $npmResolved.Error }
+        }
         if ($npmPrefix.Success) {
             $npmGlobalPath = $npmPrefix.Output.Trim()
             if ($env:Path -contains $npmGlobalPath -or $env:Path.ToLowerInvariant().Contains($npmGlobalPath.ToLowerInvariant())) {
@@ -329,21 +334,27 @@ function Start-RepairDeps {
                 Write-Info "正在使用 winget 安装 Node.js LTS，安装进度将直接显示在下方..."
                 $installResult = Install-NodeJsViaWinget -TimeoutSec 900
 
-                if ($installResult.Success) {
-                    Write-Success "Node.js LTS 安装完成！"
-                    Write-Host ""
-                    Write-Warning "============================================================"
-                    Write-Warning "  Node.js 已安装完成。"
-                    Write-Warning "  这是第一阶段完成，不是失败。"
-                    Write-Warning "  请关闭当前窗口，再重新双击 [00-点我开始安装.cmd]。"
-                    Write-Warning "  脚本会继续安装 Claude Code 并配置 DeepSeek。"
-                    Write-Warning "============================================================"
-                    $needsRestart = $true
+                # 无论 Success 是 true/false，先记录日志
+                Write-Log "INFO" "winget Node.js 安装返回: Success=$($installResult.Success), ExitCode=$($installResult.ExitCode), Error=$($installResult.Error)"
+
+                # 立即执行二次验证
+                Write-Info "正在二次验证 Node.js/npm 是否已经可用..."
+                Refresh-CurrentProcessPath
+                $nodeRecheck = Test-NodeJsInstalled
+                $npmRecheck = Test-NpmInstalled
+
+                if ($nodeRecheck.Installed -and $nodeRecheck.IsSupported -and $npmRecheck.Installed) {
+                    Add-CR "Node.js 安装验证" "OK" "Node $($nodeRecheck.Version), npm $($npmRecheck.Version)"
+                    Write-Success "Node.js/npm 已验证可用，继续修复 Claude Code。"
+                    # 更新当前变量，继续后续 Claude Code 修复
+                    $nodeInfo = $nodeRecheck
+                    $npmInfo = $npmRecheck
                 }
                 else {
-                    Write-Error-Msg "Node.js 自动安装失败。"
-                    Write-Info "请手动下载安装: https://nodejs.org (选择 LTS 版本)"
-                    Write-Info "安装完成后重新运行本脚本。"
+                    Add-CR "Node.js 安装验证" "NEEDS_RESTART" "winget 已执行，但当前终端暂未识别 Node/npm"
+                    Write-Warning "Node.js 可能已安装，但当前终端 PATH 尚未刷新。"
+                    Write-Info "请关闭此窗口后重新双击 [00-点我开始安装.cmd]。"
+                    $needsRestart = $true
                 }
             }
         }

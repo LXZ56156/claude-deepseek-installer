@@ -1967,7 +1967,8 @@ try {
     $validStatuses = @("skipped_existing", "skipped_test_safe_existing", "skipped_test_safe_missing",
         "skipped_test_safe_broken", "installed", "installed_needs_restart",
         "node_installed_needs_restart", "failed_missing_node_or_npm",
-        "failed_npmmirror_unreachable", "failed_official_and_mirror", "failed_missing_npm_cmd")
+        "failed_npmmirror_unreachable", "failed_official_and_mirror", "failed_missing_npm_cmd",
+        "failed_claude_unusable")
     Write-Host "[check]     Valid Methods: $($validMethods -join ', ')"
     Write-Host "[check]     Valid Statuses: $($validStatuses -join ', ')"
 
@@ -2086,5 +2087,95 @@ if ($npmPrefixContext.Count -gt 0) {
 }
 
 Write-Host "[check] npm.cmd + winget verify + WSL noise anti-regression OK"
+
+# ============================================================
+# P0 修复防回归: Exists→Usable, .local\bin, repair-deps 二次验证 (v1.3.2)
+# ============================================================
+Write-Host "[check] P0 fix anti-regression: Usable verification, .local\bin, repair-deps secondary verify"
+
+$claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+$commonText = Get-Content -Path (Join-Path $RootDir "lib\common.ps1") -Raw -Encoding UTF8
+$repairDepsText = Get-Content -Path (Join-Path $RootDir "repair-deps.ps1") -Raw -Encoding UTF8
+
+# 1. Test-ClaudeCommandExisting must have Usable, Path, Source fields
+if ($claudeInstallText -notmatch '\bUsable\s*=\s*\$false') {
+    throw "Test-ClaudeCommandExisting must initialize Usable field"
+}
+if ($claudeInstallText -notmatch '\bPath\s*=\s*\$null') {
+    throw "Test-ClaudeCommandExisting must include Path field in result"
+}
+if ($claudeInstallText -notmatch '\bSource\s*=\s*""') {
+    throw "Test-ClaudeCommandExisting must include Source field in result"
+}
+# Must contain native_local_bin source
+if ($claudeInstallText -notmatch 'native_local_bin') {
+    throw "Test-ClaudeCommandExisting must detect claude.exe in .local\bin (native_local_bin)"
+}
+# Must check .local\bin\claude.exe
+if ($claudeInstallText -notmatch '\.local\\bin.*claude\.exe' -and $claudeInstallText -notmatch '\.local/bin.*claude\.exe') {
+    throw "Test-ClaudeCommandExisting must check .local\bin\claude.exe fallback"
+}
+
+# 2. Refresh-CurrentProcessPath must include .local\bin
+if ($commonText -notmatch '\.local\\bin' -and $commonText -notmatch '\.local/bin') {
+    throw "Refresh-CurrentProcessPath must include .local\bin in extraPaths"
+}
+
+# 3. Install-ClaudeCodeAuto: all installation success branches (near result.Success = $true) must use .Usable not .Exists
+# Extract all code blocks around "result.Success = $true" in the function
+$installAutoText = if ($claudeInstallText -match '(?s)function Install-ClaudeCodeAuto\s*\{.*^\}') {
+    $matches[0]
+} else {
+    $claudeInstallText
+}
+# Check that verifyResult.Usable and verifyResult2.Usable and verifyWingetClaude.Usable exist
+if ($installAutoText -notmatch '\$verifyResult\.Usable') {
+    throw "Install-ClaudeCodeAuto must use `$verifyResult.Usable for install verification"
+}
+if ($installAutoText -notmatch '\$verifyResult2\.Usable') {
+    throw "Install-ClaudeCodeAuto must use `$verifyResult2.Usable for PATH retry verification"
+}
+if ($installAutoText -notmatch '\$verifyWingetClaude\.Usable') {
+    throw "Install-ClaudeCodeAuto must use `$verifyWingetClaude.Usable for winget verification"
+}
+# "result.Success = $true" near .Exists but NOT near .Usable → anti-pattern
+# Conservative: check that no "result.Success = `$true" is immediately preceded by .Exists directly
+# (within 3 lines) without also having .Usable nearby
+if ($installAutoText -match '\$verify\w*\.Exists\s*\)\s*\{\s*\r?\n\s*Write-Success[\s\S]{0,200}\$result\.Success\s*=\s*\$true') {
+    throw "Install-ClaudeCodeAuto: install success branch must NOT use only .Exists (must use .Usable)"
+}
+
+# 4. repair-deps.ps1 must NOT use bare "npm" in Invoke-CommandSafe for prefix
+if ($repairDepsText -match 'Invoke-CommandSafe\s+-Command\s+"npm"\s+-Arguments\s+@\("prefix"') {
+    throw "repair-deps.ps1 must NOT use bare 'npm' in Invoke-CommandSafe for prefix; use Resolve-NpmCmdPath"
+}
+if ($repairDepsText -match "Invoke-CommandSafe\s+-Command\s+'npm'\s+-Arguments\s+@\('prefix'") {
+    throw "repair-deps.ps1 must NOT use bare 'npm' in Invoke-CommandSafe for prefix; use Resolve-NpmCmdPath"
+}
+
+# 5. repair-deps.ps1 Node winget install branch must have secondary verification
+if ($repairDepsText -notmatch 'winget Node\.js 安装返回') {
+    throw "repair-deps.ps1 must log 'winget Node.js 安装返回' after Install-NodeJsViaWinget"
+}
+# Must call Refresh-CurrentProcessPath, Test-NodeJsInstalled, Test-NpmInstalled after winget Node install
+# Check that these three appear after Install-NodeJsViaWinget within reasonable proximity
+$repairPostWinget = if ($repairDepsText -match 'Install-NodeJsViaWinget[\s\S]{0,2000}') {
+    $matches[0]
+} else { "" }
+if ($repairPostWinget -notmatch 'Refresh-CurrentProcessPath') {
+    throw "repair-deps.ps1 winget Node branch must call Refresh-CurrentProcessPath for secondary verify"
+}
+if ($repairPostWinget -notmatch 'Test-NodeJsInstalled') {
+    throw "repair-deps.ps1 winget Node branch must call Test-NodeJsInstalled for secondary verify"
+}
+if ($repairPostWinget -notmatch 'Test-NpmInstalled') {
+    throw "repair-deps.ps1 winget Node branch must call Test-NpmInstalled for secondary verify"
+}
+# secondary verification must have NEEDS_RESTART fallback
+if ($repairDepsText -notmatch 'NEEDS_RESTART.*winget 已执行') {
+    throw "repair-deps.ps1 must have NEEDS_RESTART fallback when secondary Node verification fails"
+}
+
+Write-Host "[check] P0 fix anti-regression OK"
 
 Write-Host "[check] OK"
