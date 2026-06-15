@@ -10,8 +10,8 @@
 
 $ErrorActionPreference = "Stop"
 
-$ScriptDir = Split-Path -Parent $PSScriptRoot
-. (Join-Path $ScriptDir "lib\bootstrap.ps1")
+$RootDir = Split-Path -Parent $PSScriptRoot
+. (Join-Path $RootDir "lib\bootstrap.ps1")
 
 Set-StrictMode -Version Latest
 if (-not (Get-Command Initialize-CcdiScript -ErrorAction SilentlyContinue)) { throw "Initialize-CcdiScript not available after loading bootstrap" }
