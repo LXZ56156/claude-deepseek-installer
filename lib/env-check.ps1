@@ -411,6 +411,11 @@ function Test-WslInstalled {
         Distributions  = @()
     }
 
+    # TestSafe mode: skip real wsl commands to avoid process hang
+    if ($env:CCDI_TEST_MODE -eq "1") {
+        return $info
+    }
+
     $result = Invoke-CommandSafe -Command "wsl" -Arguments @("--version") -TimeoutSec 8
     if ($result.Success) {
         $info.Installed = $true
