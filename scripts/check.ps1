@@ -651,6 +651,19 @@ if ($simText -notmatch '一键修复依赖\.cmd.*TestSafe') {
 if ($simText -notmatch 'ShellExecute exited with unexpected code') {
     throw "simulate-user-release.ps1 ShellExecute must throw on non-0/1 exit code (not just WARN)"
 }
+# ShellExecute must track started flag and rethrow in catch when process was started
+if ($simText -notmatch '\$started\s*=\s*\$false') {
+    throw "simulate-user-release.ps1 ShellExecute test must track whether process actually started"
+}
+if ($simText -notmatch '\$started\s*=\s*\$true') {
+    throw "simulate-user-release.ps1 ShellExecute test must set started=true after Process.Start succeeds"
+}
+if ($simText -notmatch 'if\s*\(\s*\$started\s*\)\s*\{\s*throw') {
+    throw "simulate-user-release.ps1 ShellExecute catch must rethrow when process already started"
+}
+if ($simText -notmatch 'ShellExecute failed to start') {
+    throw "simulate-user-release.ps1 ShellExecute SKIP message must be limited to start failure"
+}
 
 # 18d. release-artifacts.md anti-regression checks (v1.3.2 final)
 $releaseArtifactsPath = Join-Path $RootDir "docs\release-artifacts.md"
@@ -675,6 +688,21 @@ if ($releaseArtifactsText -notmatch '(Entries|条目数)') {
 }
 if ($releaseArtifactsText -notmatch 'Mode All.*RequireClean') {
     throw "docs/release-artifacts.md must document Mode All + RequireClean validation command"
+}
+# Commit in release-artifacts.md must match current HEAD or its parent (generating commit)
+# Because docs/release-artifacts.md is part of the commit tree, the docs record
+# the "generating commit" while HEAD may be one commit ahead (docs-only update).
+$currentHeadFull = (git rev-parse HEAD).Trim()
+$currentHeadShort = (git rev-parse --short HEAD).Trim()
+$parentFull = ""
+$parentShort = ""
+try { $parentFull = (git rev-parse HEAD~1).Trim() } catch { }
+try { $parentShort = (git rev-parse --short HEAD~1).Trim() } catch { }
+if ($releaseArtifactsText -notmatch [regex]::Escape($currentHeadFull) -and
+    $releaseArtifactsText -notmatch [regex]::Escape($currentHeadShort) -and
+    ($parentFull -eq "" -or $releaseArtifactsText -notmatch [regex]::Escape($parentFull)) -and
+    ($parentShort -eq "" -or $releaseArtifactsText -notmatch [regex]::Escape($parentShort))) {
+    throw "docs/release-artifacts.md Commit must reference current HEAD ($currentHeadShort) or its parent ($parentShort)"
 }
 
 # 18e. validate.ps1 Invoke-PowerShellScript anti-regression (v1.3.2 final)
@@ -735,6 +763,11 @@ if ($validateText -notmatch 'function ConvertTo-WindowsCommandLineArgument') {
 # ConvertTo-WindowsCommandLineArgument must handle trailing backslashes
 if ($validateText -notmatch '\$backslashes\s*\*\s*2') {
     throw "validate.ps1 ConvertTo-WindowsCommandLineArgument must handle trailing backslashes"
+}
+# Must explicitly set WorkingDirectory (v1.3.2 final)
+if ($validateText -notmatch 'WorkingDirectory\s*=\s*\$RootDir' -and
+    $validateText -notmatch 'WorkingDirectory\s*=\s*\$script:RootDir') {
+    throw "validate.ps1 Invoke-PowerShellScript must explicitly set ProcessStartInfo.WorkingDirectory"
 }
 
 # 17. Start-Job failure must log skip reason with "避免诊断流程卡死"

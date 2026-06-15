@@ -5,10 +5,10 @@
 ## v1.3.2 RC
 
 - Branch: `release/v1.3.2-rc`
-- Commit: `f629fcb` (fix(validation): unblock core sandbox flow)
+- Commit: `<see-below>` (fix(validation): enforce final artifact and shellexecute failure checks)
 - ZIP: `ClaudeCode-DeepSeek-本地配置助手-v1.3.2.zip`
-- SHA256: `d2abc8551cdf5fc8aa8750249e75ade92f58a8f6be962426e4197921d449881d`
-- Size: 190341 bytes (185.9 KB)
+- SHA256: `de65f8610ae2a12c6bb724a5fa7dc2e5d0dfb80dab0312ef845fac71222d3d69`
+- Size: 190671 bytes (186.2 KB)
 - Entries: 38
 - Validation:
   - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode Smoke`

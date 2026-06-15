@@ -634,6 +634,9 @@ try {
             }
 
             Write-Check "ShellExecute: $launcherName"
+
+            $started = $false
+
             try {
                 # Save old env values, set TestSafe env for ShellExecute child process
                 $oldShellEnv = @{}
@@ -653,10 +656,13 @@ try {
                     $psi.CreateNoWindow = $false
 
                     $proc = [System.Diagnostics.Process]::Start($psi)
+
                     if ($null -eq $proc) {
-                        Write-Host "[simulate] WARN: $launcherName failed to start via ShellExecute" -ForegroundColor Yellow
+                        Write-Host "[simulate] SKIP: $launcherName failed to start via ShellExecute" -ForegroundColor Yellow
                         continue
                     }
+
+                    $started = $true
 
                     # Wait briefly for the process to initialize
                     $proc.WaitForExit(8000) | Out-Null
@@ -690,7 +696,11 @@ try {
                 }
             }
             catch {
-                Write-Host "[simulate] SKIP: $launcherName ShellExecute failed: $($_.Exception.Message)" -ForegroundColor Yellow
+                if ($started) {
+                    throw
+                }
+
+                Write-Host "[simulate] SKIP: $launcherName ShellExecute failed to start: $($_.Exception.Message)" -ForegroundColor Yellow
             }
         }
     }

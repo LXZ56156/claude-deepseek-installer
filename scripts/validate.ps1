@@ -230,6 +230,7 @@ function Invoke-PowerShellScript {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "powershell.exe"
     $psi.Arguments = $cliArgs
+    $psi.WorkingDirectory = $RootDir
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.RedirectStandardOutput = $true
