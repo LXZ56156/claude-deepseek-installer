@@ -142,27 +142,22 @@ function Invoke-ToolCheck {
     $tmpErr = Join-Path $env:TEMP ("ccdi_matrix_stderr_{0}_{1}.tmp" -f $PID, (Get-Random))
 
     try {
-        # Use System.Diagnostics.Process with timeout instead of Start-Process -Wait
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = "powershell.exe"
-        $psi.WorkingDirectory = $ScriptDir
-        $psi.UseShellExecute = $false
-        $psi.RedirectStandardOutput = $false
-        $psi.RedirectStandardError = $false
-        $psi.CreateNoWindow = $true
-
-        # Build arguments: keep named params bare, quote values with spaces
-        $allArgs = @()
+        # Build powershell command line
+        $psArgs = @()
         foreach ($a in @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $ToolPath) + $Arguments) {
             if ($a -match '[\s"]') {
-                $allArgs += "`"$($a -replace '"','""')`""
+                $psArgs += "`"$($a -replace '"','""')`""
             } else {
-                $allArgs += $a
+                $psArgs += $a
             }
         }
-        $psi.Arguments = $allArgs -join ' '
-        # Redirect via command-line (not .NET streams, avoids buffer deadlock)
-        $psi.Arguments += " > `"$tmpOut`" 2> `"$tmpErr`""
+        # Use cmd.exe /c for reliable redirection + real PID via Process
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = "cmd.exe"
+        $psi.Arguments = "/c `"`"powershell.exe`" $($psArgs -join ' ') > `"$tmpOut`" 2> `"$tmpErr`"`""
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.WorkingDirectory = $ScriptDir
 
         $proc = New-Object System.Diagnostics.Process
         $proc.StartInfo = $psi
