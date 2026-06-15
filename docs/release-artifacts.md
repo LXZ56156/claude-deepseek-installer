@@ -5,7 +5,7 @@
 ## v1.3.2 RC
 
 - Branch: `release/v1.3.2-rc`
-- Commit: `<see-below>` (fix(validation): enforce final artifact and shellexecute failure checks)
+- Commit: `faf1c700580fbb437bd78fb9d641134e7a26ea81` (fix(validation): enforce final artifact and shellexecute failure checks)
 - ZIP: `ClaudeCode-DeepSeek-本地配置助手-v1.3.2.zip`
 - SHA256: `de65f8610ae2a12c6bb724a5fa7dc2e5d0dfb80dab0312ef845fac71222d3d69`
 - Size: 190671 bytes (186.2 KB)
