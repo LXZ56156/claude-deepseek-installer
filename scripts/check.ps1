@@ -589,21 +589,16 @@ if ($validateText -notmatch '\$proc\.WaitForExit\(\$TimeoutSec') {
 if ($validateText -notmatch 'doctor\.ps1[\s\S]{0,300}-TestSafe') {
     throw "validate.ps1 CoreSandboxFlow must pass -TestSafe to doctor.ps1"
 }
-# Bootstrap exit code: must not rely solely on $LASTEXITCODE; must have try/catch
-if ($validateText -match 'function Invoke-PowerShellScript[\s\S]{0,2500}exit\s+\$LASTEXITCODE[\s\S]{0,100}exit\s+0') {
-    # OK: exit $LASTEXITCODE NOT the only exit path (try/catch has exit 0 / exit 1)
-} elseif ($validateText -match 'function Invoke-PowerShellScript[\s\S]{0,2500}exit\s+\$LASTEXITCODE') {
-    if ($validateText -notmatch 'function Invoke-PowerShellScript[\s\S]{0,2500}t\b.*ry\b[\s\S]{0,500}' + 'c\b.*atch\b') {
-        throw "validate.ps1 bootstrap must NOT rely solely on exit `$LASTEXITCODE; use try/catch with `$?"
-    }
-}
-# Bootstrap must have try/catch wrapping the child script call
+# Bootstrap exit code: must have try/catch, catch must write stderr
 if ($validateText -notmatch 'function Invoke-PowerShellScript[\s\S]{0,2500}try\s*\{[\s\S]{0,500}catch\s*\{') {
     throw "validate.ps1 bootstrap must wrap child call in try/catch"
 }
-# Bootstrap catch must write exception to stderr and exit 1
 if ($validateText -notmatch 'catch[\s\S]{0,200}Add-Content.*stderrPath') {
     throw "validate.ps1 bootstrap catch must write exception to stderr file"
+}
+# Bootstrap must NOT rely solely on $? (unreliable with redirection)
+if ($validateText -match 'function Invoke-PowerShellScript[\s\S]{0,2500}if\s*\(\s*`\`?\$`\?\s*\)') {
+    throw "validate.ps1 bootstrap must NOT use `$? as only success check (unreliable with 1>/2>)"
 }
 
 # 17. Start-Job failure must log skip reason with "避免诊断流程卡死"

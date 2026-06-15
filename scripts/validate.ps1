@@ -38,6 +38,7 @@ $ErrorActionPreference = "Stop"
 Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue
 
 $RootDir = Split-Path -Parent $PSScriptRoot
+$script:RootDir = $RootDir
 Set-Location $RootDir
 
 $script:StepCount = 0
@@ -160,16 +161,23 @@ function Invoke-PowerShellScript {
     # This avoids .NET Process stream redirection entirely (no buffer deadlock possible).
     # Parent Process tracks only PID and exit code.
     $escapedFilePath = $FilePath -replace "'", "''"
-    $bootstrapArgs = @()
+    $bootstrapArgList = @()
     foreach ($a in $Arguments) {
-        $escaped = $a -replace "'", "''"
-        $bootstrapArgs += "'$escaped'"
+        if ($a -match '^-') {
+            # Named parameter (e.g. -Version): keep bare so child script sees it as a switch/param
+            $bootstrapArgList += $a
+        } else {
+            $escaped = $a -replace "'", "''"
+            $bootstrapArgList += "'$escaped'"
+        }
     }
     $bootstrapCmd = @"
 `$ErrorActionPreference = "Continue"
 try {
-    & '$escapedFilePath' $($bootstrapArgs -join ' ') 1> '$stdoutPath' 2> '$stderrPath'
-    if (`$?) { exit 0 } else { exit 1 }
+    & '$escapedFilePath' $($bootstrapArgList -join ' ') 1> '$stdoutPath' 2> '$stderrPath'
+    `$realExit = `$LASTEXITCODE
+    if (`$realExit -ne 0) { exit `$realExit }
+    exit 0
 }
 catch {
     try { (`$_ | Out-String) | Add-Content -Path '$stderrPath' -Encoding UTF8 } catch {}
@@ -177,9 +185,13 @@ catch {
 }
 "@
 
+    # Write bootstrap to a temp .ps1 file to avoid double-quote nesting in -Command
+    $bootstrapPath = Join-Path $reportsDir "validate-child-$ts-$name.bootstrap.ps1"
+    [System.IO.File]::WriteAllText($bootstrapPath, $bootstrapCmd, (New-Object System.Text.UTF8Encoding($true)))
+
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "powershell.exe"
-    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"$bootstrapCmd`""
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$bootstrapPath`""
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.WorkingDirectory = $script:RootDir
@@ -204,6 +216,7 @@ catch {
     }
 
     $exitCode = $proc.ExitCode
+    Remove-Item $bootstrapPath -Force -ErrorAction SilentlyContinue
 
     if ($exitCode -ne 0) {
         throw "$FilePath failed with exit code $exitCode - stderr: $stderrPath - stdout: $stdoutPath"

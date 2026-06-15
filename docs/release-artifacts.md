@@ -7,7 +7,7 @@
 - Branch: `release/v1.3.2-rc`
 - Commit: origin/release/v1.3.2-rc 当前 HEAD
 - ZIP: `ClaudeCode-DeepSeek-本地配置助手-v1.3.2.zip`
-- SHA256: `4c468584177d241dac1fa85cea188419c3d490e8a9498df7646ad076d1fea13a`
+- SHA256: `357d40485323245304b06987e451dd083615bee0731638957b09d43e6f37a8e3`
 - Validation:
   - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode Smoke`
   - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode Full`
