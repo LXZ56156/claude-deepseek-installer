@@ -562,7 +562,7 @@ function Clear-StaleClaudeDoctorProcesses {
             $cmdLine = if ($proc.CommandLine) { $proc.CommandLine } else { "" }
 
             # 只杀命令行包含 "doctor" 的进程
-            if ($cmdLine -notmatch 'doctor') {
+            if (-not ($proc.CommandLine -match 'doctor')) {
                 continue
             }
 
@@ -1076,46 +1076,112 @@ function Invoke-ClaudeDoctorInteractiveSafe {
 
             Start-Sleep -Seconds $WaitSec
 
-            $targets = @()
+            # --- 收集所有进程 ---
+            $allProcs = @()
             try {
-                $allClaude = Get-CimInstance Win32_Process -Filter "Name='claude.exe'" -ErrorAction SilentlyContinue
-                if (-not $allClaude) {
-                    $allClaude = Get-WmiObject Win32_Process -Filter "Name='claude.exe'" -ErrorAction SilentlyContinue
-                }
-                if ($allClaude) {
-                    $targets = @($allClaude | Where-Object {
-                        $_.ParentProcessId -eq $ParentPid -and
-                        ($_.CommandLine -match 'doctor')
-                    })
+                $allProcs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+                if (-not $allProcs -or $allProcs.Count -eq 0) {
+                    $allProcs = @(Get-WmiObject Win32_Process -ErrorAction SilentlyContinue)
                 }
             }
             catch {
-                "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: 查询进程失败: $_" | Out-File $LogPath -Append -Encoding UTF8
+                "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: 查询所有进程失败: $_" | Out-File $LogPath -Append -Encoding UTF8
                 return
             }
 
-            if ($targets.Count -eq 0) {
-                "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: 未找到 claude doctor 子进程（可能已正常退出）" | Out-File $LogPath -Append -Encoding UTF8
+            if (-not $allProcs -or $allProcs.Count -eq 0) {
+                "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: 未查询到任何进程" | Out-File $LogPath -Append -Encoding UTF8
                 return
             }
+
+            # --- 构建 ProcessId → Process 映射 ---
+            $procById = @{}
+            foreach ($p in $allProcs) {
+                try {
+                    $pidKey = [int]$p.ProcessId
+                    if ($pidKey -gt 0 -and -not $procById.ContainsKey($pidKey)) {
+                        $procById[$pidKey] = $p
+                    }
+                }
+                catch { }
+            }
+
+            # --- 进程树后裔检测 ---
+            function Test-IsDescendantProcess {
+                param(
+                    [object]$Proc,
+                    [hashtable]$ProcById,
+                    [int]$RootPid
+                )
+
+                $seen = @{}
+                $current = $Proc
+                while ($current -and $current.ParentProcessId) {
+                    $ppid = [int]$current.ParentProcessId
+                    if ($ppid -eq $RootPid) { return $true }
+                    if ($seen.ContainsKey($ppid)) { return $false }
+                    $seen[$ppid] = $true
+                    if (-not $ProcById.ContainsKey($ppid)) { return $false }
+                    $current = $ProcById[$ppid]
+                }
+                return $false
+            }
+
+            # --- 筛选目标进程：当前 PowerShell 后裔 + doctor + claude 相关 ---
+            $targets = @($allProcs | Where-Object {
+                try {
+                    $name = if ($_.Name) { $_.Name.ToLowerInvariant() } else { "" }
+                    $cmd  = if ($_.CommandLine) { $_.CommandLine.ToLowerInvariant() } else { "" }
+
+                    $isDescendant = Test-IsDescendantProcess -Proc $_ -ProcById $procById -RootPid $ParentPid
+                    $isDoctor = $cmd -match '(^|[\s"''`=])doctor([\s"''`]|$)'
+                    $isClaudeLike =
+                        ($name -in @("claude.exe", "node.exe", "cmd.exe", "powershell.exe", "pwsh.exe")) -and
+                        (
+                            $cmd -match 'claude' -or
+                            $cmd -match 'anthropic' -or
+                            $cmd -match 'claude-code'
+                        )
+
+                    return ($isDescendant -and $isDoctor -and $isClaudeLike)
+                }
+                catch {
+                    return $false
+                }
+            })
+
+            # 按 ProcessId 去重
+            $targets = @($targets | Sort-Object -Property ProcessId -Unique)
+
+            if ($targets.Count -eq 0) {
+                "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: 未找到当前进程树内的 claude doctor 相关子进程（可能已正常退出）" | Out-File $LogPath -Append -Encoding UTF8
+                return
+            }
+
+            "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: 找到 $($targets.Count) 个 claude doctor 相关子进程" | Out-File $LogPath -Append -Encoding UTF8
 
             foreach ($t in $targets) {
                 $pidToKill = $t.ProcessId
-                $cmdLine = if ($t.CommandLine) { $t.CommandLine } else { "(unknown)" }
-                "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: 超时，正在终止 PID=$pidToKill, CommandLine=$cmdLine" | Out-File $LogPath -Append -Encoding UTF8
+                $procName  = if ($t.Name) { $t.Name } else { "(unknown)" }
+                $ppid      = if ($t.ParentProcessId) { $t.ParentProcessId } else { "?" }
+                $cmdLine   = if ($t.CommandLine) { $t.CommandLine } else { "(unknown)" }
+                if ($cmdLine.Length -gt 500) {
+                    $cmdLine = $cmdLine.Substring(0, 500) + "...[截断]"
+                }
+                "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: PID=$pidToKill, Name=$procName, ParentProcessId=$ppid, CommandLine=$cmdLine" | Out-File $LogPath -Append -Encoding UTF8
 
                 try {
                     $killOutput = & taskkill.exe /PID $pidToKill /T /F 2>&1
-                    "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: taskkill 结果: $killOutput" | Out-File $LogPath -Append -Encoding UTF8
+                    "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: taskkill 结果 PID=${pidToKill}: $killOutput" | Out-File $LogPath -Append -Encoding UTF8
                 }
                 catch {
-                    "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: taskkill 异常: $_" | Out-File $LogPath -Append -Encoding UTF8
+                    "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: taskkill 异常 PID=${pidToKill}: $_" | Out-File $LogPath -Append -Encoding UTF8
                     try {
                         Stop-Process -Id $pidToKill -Force -ErrorAction Stop
                         "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: Stop-Process fallback 成功 PID=$pidToKill" | Out-File $LogPath -Append -Encoding UTF8
                     }
                     catch {
-                        "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: Stop-Process 也失败: $_" | Out-File $LogPath -Append -Encoding UTF8
+                        "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] WATCHDOG: Stop-Process 也失败 PID=${pidToKill}: $_" | Out-File $LogPath -Append -Encoding UTF8
                     }
                 }
             }
@@ -1139,90 +1205,47 @@ function Invoke-ClaudeDoctorInteractiveSafe {
         return $result
     }
 
-    # --- 执行 claude doctor（使用 Start-Process 重定向输出）---
+    # --- 执行 claude doctor（cmd.exe 包装 + 临时文件捕获输出）---
+    # 部分 Claude Code 版本在 stdout 为 pipe 时不输出内容（即使 CI=1）。
+    # 改用 cmd.exe /c + shell 重定向写入临时文件，提供更接近真实终端的执行环境。
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $exitCode = -1
 
     try {
-        # 使用 Start-Process 重定向 stdout/stderr，不继承 TTY
-        $procInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $procInfo.FileName = $claudePath
-        $procInfo.Arguments = "doctor"
-        $procInfo.UseShellExecute = $false
-        $procInfo.RedirectStandardOutput = $true
-        $procInfo.RedirectStandardError = $true
-        $procInfo.RedirectStandardInput = $true
-        $procInfo.CreateNoWindow = $true
-        $procInfo.WorkingDirectory = $cwd
+        $tempDir = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
+        $tmpOut = Join-Path $tempDir "ccdi_doctor_stdout_${PID}_$(Get-Random).tmp"
+        $tmpErr = Join-Path $tempDir "ccdi_doctor_stderr_${PID}_$(Get-Random).tmp"
+        $tmpExit = Join-Path $tempDir "ccdi_doctor_exit_${PID}_$(Get-Random).tmp"
 
-        # 设置环境变量防止 TUI/分页
-        $procInfo.EnvironmentVariables["NO_COLOR"] = "1"
-        $procInfo.EnvironmentVariables["CI"] = "1"
-        $procInfo.EnvironmentVariables["TERM"] = "dumb"
-        $procInfo.EnvironmentVariables["FORCE_COLOR"] = "0"
-        $procInfo.EnvironmentVariables["CLAUDE_CODE_TTY"] = "0"
-        $procInfo.EnvironmentVariables["NODE_OPTIONS"] = "--no-warnings"
+        $cmdExe = if ($env:ComSpec) { $env:ComSpec } else { "cmd.exe" }
+        # 通过 cmd.exe 内联 set 设置 CI/TERM/NO_COLOR 环境变量，
+        # stdout/stderr 用 shell 重定向写入临时文件（增量写入，无 pipe 死锁风险）
+        $innerCmd = "set CI=1&& set TERM=dumb&& set NO_COLOR=1&& set FORCE_COLOR=0&& set CLAUDE_CODE_TTY=0&& set NODE_OPTIONS=--no-warnings&& `"$claudePath`" doctor > `"$tmpOut`" 2> `"$tmpErr`" & echo !ERRORLEVEL! > `"$tmpExit`""
 
-        $proc = New-Object System.Diagnostics.Process
-        $proc.StartInfo = $procInfo
+        Write-Log "INFO" "Invoke-ClaudeDoctorInteractiveSafe: 启动 claude doctor (cmd.exe + shell 重定向到临时文件)"
+        Write-Log "DEBUG" "Invoke-ClaudeDoctorInteractiveSafe: tmpOut=$tmpOut, tmpErr=$tmpErr"
 
-        Write-Log "INFO" "Invoke-ClaudeDoctorInteractiveSafe: 启动 claude doctor (Start-Process, stdout/stderr 重定向)"
-        $proc.Start() | Out-Null
+        $proc = Start-Process -FilePath $cmdExe -ArgumentList "/d /v:on /s /c `"$innerCmd`"" -NoNewWindow -PassThru
+        Write-Log "DEBUG" "Invoke-ClaudeDoctorInteractiveSafe: cmd.exe PID=$($proc.Id)"
 
-        # 异步读取 stdout 和 stderr —— 必须在写 stdin 之前启动，
-        # 防止 doctor 输出填满 pipe 缓冲区导致进程阻塞（经典 .NET Process 死锁）。
-        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
-        $stderrTask = $proc.StandardError.ReadToEndAsync()
-
-        # 向 stdin 写入足够的换行防止分页卡住
-        $stdinWriter = $proc.StandardInput
-        try {
-            for ($i = 0; $i -lt 10; $i++) {
-                $stdinWriter.WriteLine()
-            }
-            $stdinWriter.Flush()
-            $stdinWriter.Close()
-        }
-        catch {
-            Write-Log "DEBUG" "stdin 写入异常（可能 doctor 已退出）: $_"
-        }
-
-        # 等待进程完成或超时
         $finished = $proc.WaitForExit($TimeoutSec * 1000)
-
         $stdOut = ""
         $stdErr = ""
-        try {
-            if ($stdoutTask.Wait($TimeoutSec * 1000)) {
-                $stdOut = $stdoutTask.Result
-            }
-        }
-        catch {
-            Write-Log "DEBUG" "stdout 读取任务异常: $_"
-        }
-        try {
-            if ($stderrTask.Wait(5000)) {
-                $stdErr = $stderrTask.Result
-            }
-        }
-        catch {
-            Write-Log "DEBUG" "stderr 读取任务异常: $_"
-        }
 
         if ($finished) {
-            $exitCode = $proc.ExitCode
-            Write-Log "INFO" "claude doctor 完成: ExitCode=$exitCode, DurationMs=$($sw.ElapsedMilliseconds), stdout=$($stdOut.Length) bytes, stderr=$($stdErr.Length) bytes"
+            Write-Log "INFO" "claude doctor 完成, DurationMs=$($sw.ElapsedMilliseconds)"
         }
         else {
-            # 超时：杀进程树
             Write-Log "WARN" "claude doctor 超时 (${TimeoutSec}s)，正在终止进程树 PID=$($proc.Id)"
             try {
                 if (-not $proc.HasExited) {
-                    & taskkill.exe /PID $proc.Id /T /F 2>&1 | Out-Null
+                    $tkResult = & taskkill.exe /PID $proc.Id /T /F 2>&1
+                    Write-Log "INFO" "claude doctor timeout taskkill result PID=$($proc.Id): $tkResult"
                     $proc.WaitForExit(5000) | Out-Null
                 }
             }
             catch {
+                Write-Log "WARN" "taskkill 终止 claude doctor 失败，尝试 proc.Kill(): $_"
                 try {
                     if (-not $proc.HasExited) {
                         $proc.Kill()
@@ -1233,32 +1256,46 @@ function Invoke-ClaudeDoctorInteractiveSafe {
                     Write-Log "ERROR" "无法终止 claude doctor 进程: $_"
                 }
             }
-            # 进程被杀后 pipe 关闭，异步任务应已完成；等待并获取已捕获的部分输出
+            Write-Log "DEBUG" "claude doctor timeout kill completed"
+        }
+
+        # 读取临时文件中的输出（shell 重定向是增量写入的，超时时也能获取已写入内容）
+        if (Test-Path $tmpOut) {
             try {
-                if (-not $stdoutTask.IsCompleted) {
-                    $stdoutTask.Wait(5000) | Out-Null
-                }
-                if ($stdoutTask.IsCompleted) {
-                    $stdOut = $stdoutTask.Result
-                }
+                $stdOut = Get-Content $tmpOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
             }
             catch {
-                Write-Log "DEBUG" "超时后 stdout 任务结果获取异常: $_"
-            }
-            try {
-                if (-not $stderrTask.IsCompleted) {
-                    $stderrTask.Wait(3000) | Out-Null
-                }
-                if ($stderrTask.IsCompleted) {
-                    $stdErr = $stderrTask.Result
-                }
-            }
-            catch {
-                Write-Log "DEBUG" "超时后 stderr 任务结果获取异常: $_"
+                Write-Log "DEBUG" "读取 doctor stdout 临时文件异常: $_"
             }
             if (-not $stdOut) { $stdOut = "" }
+        }
+        if (Test-Path $tmpErr) {
+            try {
+                $stdErr = Get-Content $tmpErr -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+            }
+            catch {
+                Write-Log "DEBUG" "读取 doctor stderr 临时文件异常: $_"
+            }
             if (-not $stdErr) { $stdErr = "" }
         }
+        if (Test-Path $tmpExit) {
+            try {
+                $exitCodeText = (Get-Content $tmpExit -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()
+                if ($exitCodeText -match '^-?\d+') {
+                    $exitCode = [int]$exitCodeText
+                }
+            }
+            catch {
+                Write-Log "DEBUG" "读取 doctor exit code 临时文件异常: $_"
+            }
+        }
+
+        Write-Log "INFO" "claude doctor output captured: stdout=$($stdOut.Length) bytes, stderr=$($stdErr.Length) bytes, exitCode=$exitCode"
+
+        # 清理临时文件
+        Remove-Item $tmpOut -Force -ErrorAction SilentlyContinue
+        Remove-Item $tmpErr -Force -ErrorAction SilentlyContinue
+        Remove-Item $tmpExit -Force -ErrorAction SilentlyContinue
 
         $sw.Stop()
 
@@ -1288,7 +1325,7 @@ function Invoke-ClaudeDoctorInteractiveSafe {
         $sw.Stop()
         $result.DurationMs = $sw.ElapsedMilliseconds
         $result.Error = "claude doctor 执行异常: $_"
-        Write-Log "ERROR" "Invoke-ClaudeDoctorInteractiveSafe: Start-Process 执行异常: $_"
+        Write-Log "ERROR" "Invoke-ClaudeDoctorInteractiveSafe: cmd.exe 执行异常: $_"
     }
 
     # --- 检查 Watchdog 状态 ---

@@ -436,21 +436,17 @@ if ($claudeInstallText -notmatch 'CleanedOutput\s*=\s*""') {
     throw "Invoke-ClaudeDoctorInteractiveSafe must include CleanedOutput field in result"
 }
 
-# 2. doctor.ps1 calls Invoke-ClaudeDoctor (new entry point), not Invoke-CommandSafe for claude doctor
-if ($doctorText -notmatch 'Invoke-ClaudeDoctor\b') {
-    throw "doctor.ps1 must use Invoke-ClaudeDoctor for claude doctor diagnostics"
+# 2. doctor.ps1 skips automatic claude doctor (unreliable with stdout redirect).
+# It must mention claude doctor and suggest manual execution.
+if ($doctorText -notmatch 'claude\s+doctor' -and $doctorText -notmatch 'claude doctor') {
+    throw "doctor.ps1 must reference claude doctor (manual suggestion accepted)"
 }
-if ($doctorText -match 'Invoke-CommandSafe\s+-Command\s+"claude"\s+-Arguments\s+@\("doctor"\)') {
-    throw "doctor.ps1 must NOT use Invoke-CommandSafe to run claude doctor"
+if ($doctorText -notmatch '手动运行\s*claude\s+doctor|手动执行\s*claude\s+doctor|手动.*claude doctor') {
+    throw "doctor.ps1 must suggest manual claude doctor execution"
 }
 
-# 3. doctor.ps1 handles TimedOut separately via Invoke-ClaudeDoctor result
-if ($doctorText -notmatch 'claudeDoctor\.TimedOut') {
-    throw "doctor.ps1 must check claudeDoctor.TimedOut for timeout-specific messaging"
-}
-if ($doctorText -notmatch '官方 doctor 进入交互式流程') {
-    throw "doctor.ps1 must handle interactive prompt timeout specifically"
-}
+# 3. doctor.ps1 no longer calls Invoke-ClaudeDoctor automatically;
+# the related timeout/prompt checks are legacy and no longer required.
 
 # 4. Invoke-CommandSafe uses taskkill /T /F for process tree termination
 if ($commonText -notmatch 'taskkill\.exe\s+/PID') {
@@ -848,13 +844,11 @@ if ($claudeInstallText -notmatch 'skipped_watchdog_unavailable') {
     throw "Invoke-ClaudeDoctorSafe must map watchdog_unavailable_skipped to skipped_watchdog_unavailable status"
 }
 
-# 19. doctor.ps1 must handle watchdog_unavailable_skipped from Invoke-ClaudeDoctor result
-if ($doctorText -notmatch 'DoctorAvailable' -and $doctorText -notmatch 'watchdog_unavailable_skipped') {
-    throw "doctor.ps1 must handle watchdog_skipped state via DoctorAvailable or watchdog_unavailable_skipped"
+# 19. Invoke-ClaudeDoctorSafe must handle watchdog_unavailable; doctor.ps1 no longer calls it directly
+if ($claudeInstallText -notmatch 'skipped_watchdog_unavailable') {
+    throw "Invoke-ClaudeDoctorSafe must map watchdog_unavailable_skipped to skipped_watchdog_unavailable status"
 }
-if ($doctorText -notmatch '超时保护不可用.*Start-Job 被禁用') {
-    throw "doctor.ps1 must clearly explain that Start-Job disabled caused the skip"
-}
+# doctor.ps1 no longer calls Invoke-ClaudeDoctor; these legacy checks are retired.
 
 Write-Host "[check] Claude doctor interactive invocation OK"
 
@@ -934,21 +928,15 @@ if ($claudeInstallText -notmatch 'Severity\s*=\s*"') {
     throw "Invoke-ClaudeDoctor must include Severity field in its result hashtable"
 }
 
-# 40c. doctor.ps1 must use Severity-based switch (not Success-first if/else chain that can mistake TimedOut for OK)
-if ($doctorText -notmatch 'claudeDoctor\.Severity') {
-    throw "doctor.ps1 must use Severity field for claude doctor status (not Success-first checking)"
-}
-# 40d. TimedOut+HasCoreFields must NOT be handled before Severity switch (prevent OK misclassification)
-if ($doctorText -notmatch 'switch\s*\(\$claudeDoctor\.Severity\)') {
-    throw "doctor.ps1 must switch on Severity to prevent TimedOut+HasCoreFields from being classified as OK"
-}
+# 40c. doctor.ps1 no longer calls Invoke-ClaudeDoctor automatically.
+# Severity-based switch was relevant only for the previous auto-invocation path.
 
 # 41. Invoke-ClaudeDoctorInteractiveSafe must set NO_COLOR/CI/TERM env vars
-if ($claudeInstallText -notmatch 'NO_COLOR.*=.*"1"') {
-    throw "Invoke-ClaudeDoctorInteractiveSafe must set NO_COLOR=1"
+if ($claudeInstallText -notmatch 'NO_COLOR.*=\s*["'']?1["'']?') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must set NO_COLOR=1 (env var or set command)"
 }
-if ($claudeInstallText -notmatch 'TERM.*=.*"dumb"') {
-    throw "Invoke-ClaudeDoctorInteractiveSafe must set TERM=dumb"
+if ($claudeInstallText -notmatch 'TERM.*=\s*["'']?dumb["'']?') {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must set TERM=dumb (env var or set command)"
 }
 
 # 42. Test-WslClaudeComprehensive must exist
@@ -977,9 +965,12 @@ if ($doctorText -notmatch 'Console\]::InputEncoding.*UTF8Encoding' -or
     throw "doctor.ps1 must initialize console encoding to UTF-8"
 }
 
-# 46. Invoke-ClaudeDoctorInteractiveSafe must send newlines to stdin
-if ($claudeInstallText -notmatch 'StandardInput' -or $claudeInstallText -notmatch 'WriteLine') {
-    throw "Invoke-ClaudeDoctorInteractiveSafe must write newlines to stdin to prevent pagination"
+# 46. Invoke-ClaudeDoctorInteractiveSafe must use cmd.exe wrapping (shell redirect + set CI=1)
+# or redirect stdin with newlines to prevent pagination.
+$usesCmdExeWrapper = ($claudeInstallText -match 'cmd\.exe.*claude.*doctor' -or $claudeInstallText -match 'cmdExe')
+$usesStdinRedirect = ($claudeInstallText -match 'StandardInput' -and $claudeInstallText -match 'WriteLine')
+if (-not $usesCmdExeWrapper -and -not $usesStdinRedirect) {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must use cmd.exe wrapper or stdin newlines to prevent pagination"
 }
 
 # 47. Test-UbuntuInWsl must return Name field
@@ -1229,15 +1220,20 @@ if ($claudeInstallText -notmatch 'Write-Log\s+"ERROR"\s+"Native Install 失败�
     throw "Native Install failure details must go to Write-Log, not user display"
 }
 
-# 30. Invoke-ClaudeDoctorInteractiveSafe uses Start-Process with ProcessStartInfo (not direct invocation)
-if ($claudeInstallText -notmatch 'System\.Diagnostics\.ProcessStartInfo') {
-    throw "Invoke-ClaudeDoctorInteractiveSafe must use ProcessStartInfo for isolated doctor execution"
+# 30. Invoke-ClaudeDoctorInteractiveSafe uses isolated process execution (cmd.exe wrapping with temp files,
+# or .NET ProcessStartInfo with stdout/stderr redirect). Both ensure no TTY leak.
+$usesCmdExeTempFile = ($claudeInstallText -match 'cmd\.exe' -and $claudeInstallText -match 'ccdi_doctor_stdout.*\.tmp')
+$usesProcessStartInfo = ($claudeInstallText -match 'System\.Diagnostics\.ProcessStartInfo')
+if (-not $usesCmdExeTempFile -and -not $usesProcessStartInfo) {
+    throw "Invoke-ClaudeDoctorInteractiveSafe must use cmd.exe wrapper or ProcessStartInfo for isolated doctor execution"
 }
-if ($claudeInstallText -notmatch 'RedirectStandardOutput\s*=\s*\$true') {
-    throw "Invoke-ClaudeDoctorInteractiveSafe must redirect stdout"
-}
-if ($claudeInstallText -notmatch 'RedirectStandardInput\s*=\s*\$true') {
-    throw "Invoke-ClaudeDoctorInteractiveSafe must redirect stdin (for Enter prevention)"
+if (-not $usesCmdExeTempFile) {
+    if ($claudeInstallText -notmatch 'RedirectStandardOutput\s*=\s*\$true') {
+        throw "Invoke-ClaudeDoctorInteractiveSafe must redirect stdout (cmd.exe shell redirect or .NET pipe)"
+    }
+    if ($claudeInstallText -notmatch 'RedirectStandardInput\s*=\s*\$true') {
+        throw "Invoke-ClaudeDoctorInteractiveSafe must redirect stdin (for Enter prevention)"
+    }
 }
 
 # 31. Invoke-VisibleFileDownload must exist

@@ -275,54 +275,10 @@ function Check-Commands {
     if ($claudeVersion) {
         Add-CheckResult "Claude Code CLI" "OK" $claudeVersion
 
-        # 运行 claude doctor。使用新的 Invoke-ClaudeDoctor 入口，
-        # 不展示原始 TUI 输出，只显示解析后的摘要。
-        if ($script:DoctorTestSafeMode) {
-            Write-Info "测试安全模式：跳过 claude doctor 诊断。"
-            Add-CheckResult "claude doctor" "SKIP" "测试安全模式已跳过"
-        }
-        else {
-            Write-Info "正在运行 Claude Code 官方 doctor 诊断..."
-            $claudeDoctor = Invoke-ClaudeDoctor -TimeoutSec 45
-
-            # 显示 doctor 摘要
-            if ($claudeDoctor.Summary) {
-                Write-Info "Claude Code doctor 摘要: $($claudeDoctor.Summary -replace '\[(OK|WARN|ERROR|SKIP)\]\s*','')"
-            }
-
-            # 按 Severity 字段直接判断（避免 TimedOut+HasCoreFields 时 Success=true 导致误入 OK 分支）
-            switch ($claudeDoctor.Severity) {
-                "OK" {
-                    $versionStr = if ($claudeDoctor.ParsedData['Version']) { $claudeDoctor.ParsedData['Version'] } else { "未知" }
-                    $platformStr = if ($claudeDoctor.ParsedData['Platform']) { $claudeDoctor.ParsedData['Platform'] } else { "未知" }
-                    Add-CheckResult "claude doctor" "OK" "安装状态正常，版本 $versionStr，平台 $platformStr"
-                    Write-Info "Claude Code 后台服务/Remote Control 状态不影响 DeepSeek API 终端使用"
-                }
-                "WARN" {
-                    if ($claudeDoctor.TimedOut -and $claudeDoctor.HasCoreFields) {
-                        Add-CheckResult "claude doctor" "WARN" "官方 doctor 进入交互式流程，已终止；已从部分输出中解析安装状态"
-                    }
-                    else {
-                        Add-CheckResult "claude doctor" "WARN" "未返回有效结果；Claude Code CLI 本身可用 ($claudeVersion)"
-                    }
-                    Add-Suggestion "claude doctor 在脚本中无法完整运行，但 claude --version 正常。请单独在终端手动运行 claude doctor 获取官方诊断输出。"
-                }
-                "ERROR" {
-                    Add-CheckResult "claude doctor" "ERROR" "Claude Code CLI 不可用，无法完成 doctor 诊断"
-                }
-                "SKIP" {
-                    if ($claudeDoctor.DoctorAvailable -eq $false) {
-                        Add-CheckResult "claude doctor" "SKIP" "超时保护不可用（Start-Job 被禁用），已跳过，不影响主诊断"
-                    }
-                    else {
-                        Add-CheckResult "claude doctor" "SKIP" "已跳过"
-                    }
-                }
-                default {
-                    Add-CheckResult "claude doctor" "WARN" "未完成"
-                }
-            }
-        }
+        # claude doctor 在 stdout 重定向环境下不产生输出（Claude Code 自身行为）。
+        # 脚本无法可靠捕获其输出，因此不自动运行；改为提示用户手动执行。
+        Add-CheckResult "claude doctor" "INFO" "未自动运行（Claude Code doctor 在脚本环境中无法可靠捕获输出）"
+        Add-Suggestion "如需 Claude Code 官方诊断，请在终端手动运行 claude doctor。"
     }
     else {
         Add-CheckResult "Claude Code CLI" "ERROR" "claude 命令未找到"
