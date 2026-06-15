@@ -2323,4 +2323,71 @@ if ($npmRiskFuncBody -notmatch 'Resolve-NpmCmdPath') {
 
 Write-Host "[check] P1 fix anti-regression OK"
 
+# ============================================================
+# P1.1 修复防回归: 误报候选/误报冲突修复 (v1.3.2)
+# ============================================================
+Write-Host "[check] P1.1 fix anti-regression: false candidate/conflict fix"
+
+$claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+$doctorText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+
+# 1. Get-ClaudeCommandInventory 必须包含 MissingKnownPaths
+if ($claudeInstallText -notmatch 'MissingKnownPaths') {
+    throw "Get-ClaudeCommandInventory must include MissingKnownPaths field"
+}
+
+# 2. _add 函数中必须有 KnownPath, if (-not $exists), return
+$inventoryFuncText = if ($claudeInstallText -match '(?s)function Get-ClaudeCommandInventory\s*\{.*?\n(?=function Test-HttpEndpointReachable)') {
+    $matches[0]
+} else { "" }
+if (-not $inventoryFuncText) { $inventoryFuncText = $claudeInstallText }
+
+if ($inventoryFuncText -notmatch '\[switch\]\$KnownPath') {
+    throw "Get-ClaudeCommandInventory _add must have -KnownPath switch parameter"
+}
+if ($inventoryFuncText -notmatch 'if\s*\(\s*-not\s+\$exists\s*\)') {
+    throw "Get-ClaudeCommandInventory _add must check if (-not `$exists)"
+}
+if ($inventoryFuncText -notmatch 'KnownPath[\s\S]{0,200}MissingKnownPaths') {
+    throw "Get-ClaudeCommandInventory _add must add known non-existent paths to MissingKnownPaths"
+}
+
+# 3. Candidates 不能包含 Exists=false 的候选（注释验证）
+if ($inventoryFuncText -notmatch '只有存在才进入 Candidates.*不存在路径已在 _add 中过滤') {
+    throw "Get-ClaudeCommandInventory must have comment: 只有存在才进入 Candidates"
+}
+
+# 4. Conflict 判断基于 Candidates.Count（不是 MissingKnownPaths）
+if ($inventoryFuncText -notmatch '\$inventory\.Candidates\.Count\s+-gt\s+1') {
+    throw "Get-ClaudeCommandInventory HasConflict must use `$inventory.Candidates.Count"
+}
+
+# 5. doctor.ps1 Claude Code CLI 检测必须使用 inventory.Active 或 Get-ClaudeCommandInventory
+if ($doctorText -notmatch '\$inventory\.Active.*Usable') {
+    throw "doctor.ps1 Claude Code CLI detection must use `$inventory.Active.Usable"
+}
+if ($doctorText -notmatch 'Get-ClaudeCommandInventory') {
+    throw "doctor.ps1 must call Get-ClaudeCommandInventory"
+}
+
+# 6. doctor.ps1 候选输出必须只来自 $inventory.Candidates
+if ($doctorText -notmatch '\$inventory\.Candidates\[') {
+    throw "doctor.ps1 candidate loop must iterate over `$inventory.Candidates"
+}
+
+# 7. doctor.ps1 不得输出 MissingKnownPaths 到报告分组
+$writeReportChecksText = if ($doctorText -match '(?s)function Write-ReportChecks\s*\{.*?\n(?=function Write-ReportErrors)') {
+    $matches[0]
+} else { "" }
+if ($writeReportChecksText -match 'MissingKnownPaths') {
+    throw "doctor.ps1 Write-ReportChecks must NOT reference MissingKnownPaths"
+}
+
+# 8. doctor.ps1 candidate Error 拼接前必须经过 Sanitize-PathForReport
+if ($doctorText -notmatch '\$errSafe\s*=\s*Sanitize-PathForReport.*\$c\.Error') {
+    throw "doctor.ps1 candidate error detail must be sanitized with Sanitize-PathForReport"
+}
+
+Write-Host "[check] P1.1 fix anti-regression OK"
+
 Write-Host "[check] OK"

@@ -137,10 +137,11 @@ function Get-ClaudeCommandInventory {
         每个 Candidate 包含 Path, Source, Exists, Usable, Version, Risk, Note, Error。
     #>
     $inventory = @{
-        Candidates      = [System.Collections.ArrayList]::new()
-        Active          = $null
-        HasConflict     = $false
-        ConflictSummary = ""
+        Candidates        = [System.Collections.ArrayList]::new()
+        MissingKnownPaths = [System.Collections.ArrayList]::new()
+        Active            = $null
+        HasConflict       = $false
+        ConflictSummary   = ""
     }
 
     $seen = @{}
@@ -154,18 +155,38 @@ function Get-ClaudeCommandInventory {
     }
 
     # --- 辅助函数：加入候选并去重 ---
+    # -KnownPath: 已知固定路径，不存在时记入 MissingKnownPaths 而非 Candidates
     function _add {
-        param([string]$CandidatePath, [string]$SourceHint, [string]$RiskHint, [string]$NoteHint)
+        param([string]$CandidatePath, [string]$SourceHint, [string]$RiskHint, [string]$NoteHint, [switch]$KnownPath)
         if ([string]::IsNullOrWhiteSpace($CandidatePath)) { return }
+
+        $exists = Test-Path $CandidatePath
+
+        # 不存在的路径不进入 Candidates；已知路径记录到 MissingKnownPaths
+        if (-not $exists) {
+            if ($KnownPath) {
+                $n = _normalize $CandidatePath
+                if (-not $seen.ContainsKey($n)) {
+                    $seen[$n] = $true
+                    [void]$inventory.MissingKnownPaths.Add([PSCustomObject]@{
+                        Path   = $CandidatePath
+                        Source = $SourceHint
+                        Note   = "known path not found"
+                    })
+                }
+            }
+            return
+        }
+
+        # 只有存在才进入 Candidates 去重流
         $n = _normalize $CandidatePath
         if ($seen.ContainsKey($n)) { return }
         $seen[$n] = $true
 
-        $exists = Test-Path $CandidatePath
         [void]$tempCandidates.Add([PSCustomObject]@{
             Path    = $CandidatePath
             Source  = $SourceHint
-            Exists  = $exists
+            Exists  = $true
             Usable  = $false
             Version = $null
             Risk    = $RiskHint
@@ -209,7 +230,7 @@ function Get-ClaudeCommandInventory {
     # ============================================================
     $nativeClaudeExe = Join-Path (Join-Path (Get-UserProfilePath) ".local\bin") "claude.exe"
     _add -CandidatePath $nativeClaudeExe -SourceHint "native_local_bin" -RiskHint "OK" `
-        -NoteHint "Claude 官方 Native Install 默认路径"
+        -NoteHint "Claude 官方 Native Install 默认路径" -KnownPath
 
     # ============================================================
     # 4. npm 全局 shim 默认路径 (%APPDATA%\npm\claude.cmd)
@@ -217,7 +238,7 @@ function Get-ClaudeCommandInventory {
     if ($env:APPDATA) {
         $npmClaudeCmd = Join-Path $env:APPDATA "npm\claude.cmd"
         _add -CandidatePath $npmClaudeCmd -SourceHint "npm_global" -RiskHint "INFO" `
-            -NoteHint "npm 全局安装 shim"
+            -NoteHint "npm 全局安装 shim" -KnownPath
     }
 
     # ============================================================
@@ -226,7 +247,7 @@ function Get-ClaudeCommandInventory {
     if ($env:LOCALAPPDATA) {
         $windowsAppsClaude = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\claude.exe"
         _add -CandidatePath $windowsAppsClaude -SourceHint "windowsapps" -RiskHint "WARN" `
-            -NoteHint "可能是 App Execution Alias / Claude Desktop alias，可能抢占真实 CLI"
+            -NoteHint "可能是 App Execution Alias / Claude Desktop alias，可能抢占真实 CLI" -KnownPath
     }
 
     # ============================================================
@@ -296,6 +317,7 @@ function Get-ClaudeCommandInventory {
             }
         }
 
+        # 只有存在才进入 Candidates（不存在路径已在 _add 中过滤）
         [void]$inventory.Candidates.Add($candidate)
     }
 
@@ -364,7 +386,7 @@ function Get-ClaudeCommandInventory {
     $inventory.HasConflict = $hasConflict
     $inventory.ConflictSummary = ($conflictReasons -join " ")
 
-    Write-Log "DEBUG" "Get-ClaudeCommandInventory: Candidates=$($inventory.Candidates.Count), HasConflict=$hasConflict"
+    Write-Log "DEBUG" "Get-ClaudeCommandInventory: Candidates=$($inventory.Candidates.Count), MissingKnownPaths=$($inventory.MissingKnownPaths.Count), HasConflict=$hasConflict"
     if ($inventory.Active) {
         Write-Log "DEBUG" "Get-ClaudeCommandInventory: Active.Path=$($inventory.Active.Path), Active.Source=$($inventory.Active.Source), Active.Usable=$($inventory.Active.Usable)"
     }

@@ -271,24 +271,53 @@ function Check-Commands {
         Add-CheckResult "WSL" "SKIP" "未安装或未启用"
     }
 
-    $claudeVersion = Test-ClaudeInstalled
-    if ($claudeVersion) {
-        Add-CheckResult "Claude Code CLI" "OK" $claudeVersion
+    # --- Claude Code CLI + 命令来源（只调用一次 Get-ClaudeCommandInventory）---
+    $inventory = $null
+    try {
+        $inventory = Get-ClaudeCommandInventory
+    }
+    catch {
+        Write-Log "WARN" "Get-ClaudeCommandInventory 调用失败: $_"
+        # $inventory 保持 $null，后续走 fallback
+    }
 
-        # claude doctor 在 stdout 重定向环境下不产生输出（Claude Code 自身行为）。
-        # 脚本无法可靠捕获其输出，因此不自动运行；改为提示用户手动执行。
+    # Claude Code CLI 判断：优先使用 inventory
+    if ($inventory -and $inventory.Active -and $inventory.Active.Usable) {
+        Add-CheckResult "Claude Code CLI" "OK" $inventory.Active.Version
+
+        # claude doctor 不自动运行
         Add-CheckResult "claude doctor" "INFO" "未自动运行（Claude Code doctor 在脚本/重定向环境中不会稳定输出；请按需手动运行）"
         Add-Suggestion "如需 Claude Code 官方诊断，请打开新的 PowerShell 或 Windows Terminal，手动输入：claude doctor。不要通过脚本、管道或重定向运行。运行后请截图，或复制终端中的完整输出发给售后。"
     }
+    elseif ($inventory -and $inventory.Candidates.Count -gt 0) {
+        $usableCount = @($inventory.Candidates | Where-Object { $_.Usable }).Count
+        if ($usableCount -gt 0) {
+            Add-CheckResult "Claude Code CLI" "WARN" "当前 PATH 命中的 claude 不可用，但检测到其他可用 Claude Code。请查看 Claude 命令来源。"
+
+            Add-CheckResult "claude doctor" "INFO" "未自动运行（Claude Code doctor 在脚本/重定向环境中不会稳定输出；请按需手动运行）"
+        }
+        else {
+            Add-CheckResult "Claude Code CLI" "ERROR" "claude 命令存在但不可用"
+            Add-Suggestion "检测到 claude 文件但无法运行，可能是残留 shim、损坏安装或 PATH 冲突。请运行「一键修复依赖.cmd」或查看 Claude 命令来源。"
+        }
+    }
     else {
-        Add-CheckResult "Claude Code CLI" "ERROR" "claude 命令未找到"
-        Add-Suggestion "未检测到 claude 命令。可能是安装失败，或 npm 全局 bin 路径未加入 PATH。请运行 install.ps1 安装，或关闭重开终端。"
+        # inventory 不可用或没有候选，fallback 到旧检测
+        $claudeVersion = Test-ClaudeInstalled
+        if ($claudeVersion) {
+            Add-CheckResult "Claude Code CLI" "OK" $claudeVersion
+
+            Add-CheckResult "claude doctor" "INFO" "未自动运行（Claude Code doctor 在脚本/重定向环境中不会稳定输出；请按需手动运行）"
+            Add-Suggestion "如需 Claude Code 官方诊断，请打开新的 PowerShell 或 Windows Terminal，手动输入：claude doctor。不要通过脚本、管道或重定向运行。运行后请截图，或复制终端中的完整输出发给售后。"
+        }
+        else {
+            Add-CheckResult "Claude Code CLI" "ERROR" "claude 命令未找到或不可用"
+            Add-Suggestion "未检测到 claude 命令。可能是安装失败，或 npm 全局 bin 路径未加入 PATH。请运行 install.ps1 安装，或关闭重开终端。"
+        }
     }
 
-    # Claude 命令来源检测
-    try {
-        $inventory = Get-ClaudeCommandInventory
-
+    # Claude 命令来源诊断（复用 $inventory）
+    if ($inventory) {
         if ($inventory.Candidates.Count -eq 0) {
             Add-CheckResult "Claude 命令来源" "WARN" "未找到任何 claude 命令候选"
         }
@@ -305,7 +334,7 @@ function Check-Commands {
                 Add-CheckResult "当前 claude 来源" $activeStatus "Source=$($inventory.Active.Source), Usable=$($inventory.Active.Usable), Path=$activePathSafe"
             }
 
-            # 候选列表（最多 8 个）
+            # 候选列表（最多 8 个，只输出 Exists=true 的 Candidates）
             $maxShow = [Math]::Min($inventory.Candidates.Count, 8)
             for ($i = 0; $i -lt $maxShow; $i++) {
                 $c = $inventory.Candidates[$i]
@@ -314,7 +343,10 @@ function Check-Commands {
                 $candidateDetail = "Source=$($c.Source), Risk=$($c.Risk), Usable=$($c.Usable)"
                 if ($c.Version) { $candidateDetail += ", Version=$($c.Version)" }
                 $candidateDetail += ", Path=$pathSafe"
-                if ($c.Error) { $candidateDetail += ", Error=$($c.Error)" }
+                if ($c.Error) {
+                    $errSafe = Sanitize-PathForReport -Text $c.Error
+                    $candidateDetail += ", Error=$errSafe"
+                }
                 Add-CheckResult $candidateName "INFO" $candidateDetail
             }
 
@@ -333,9 +365,9 @@ function Check-Commands {
             }
         }
     }
-    catch {
-        Write-Log "WARN" "Get-ClaudeCommandInventory 调用失败: $_"
-        # 不阻塞诊断流程
+    else {
+        # inventory 调用失败
+        Add-CheckResult "Claude 命令来源" "WARN" "无法收集 Claude 命令来源信息"
     }
 
     # npm 安装风险配置检测
