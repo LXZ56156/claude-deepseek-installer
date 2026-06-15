@@ -2091,7 +2091,12 @@ function Install-ClaudeCodeAuto {
                         Write-Warning "Claude Code 可能已安装，但当前终端还没有刷新 PATH。"
                         Write-Info "请关闭此窗口后重新双击 [00-点我开始安装.cmd]。"
                         Write-Info "如果仍不行，请运行 [一键诊断.cmd] 获取诊断报告。"
-                        $npmPrefixResult = Invoke-CommandSafe -Command "npm.cmd" -Arguments @("prefix", "-g") -TimeoutSec 8
+                        $npmResolvedForPrefix = Resolve-NpmCmdPath
+                        $npmPrefixResult = if ($npmResolvedForPrefix.Found) {
+                            Invoke-CommandSafe -Command $npmResolvedForPrefix.Path -Arguments @("prefix", "-g") -TimeoutSec 8
+                        } else {
+                            @{ Success = $false; Output = ""; Error = "npm.cmd not resolved for prefix check" }
+                        }
                         if ($npmPrefixResult.Success) {
                             Write-Info "npm 全局安装路径: $($npmPrefixResult.Output.Trim())"
                         }
@@ -2250,7 +2255,12 @@ function Install-ClaudeCodeAuto {
         Write-Info "请关闭此窗口后重新双击 [00-点我开始安装.cmd]。"
         Write-Info "如果仍不行，请运行 [一键诊断.cmd] 获取诊断报告。"
 
-        $npmPrefix = Invoke-CommandSafe -Command "npm.cmd" -Arguments @("prefix", "-g") -TimeoutSec 8
+        $npmResolvedForPrefix = Resolve-NpmCmdPath
+        $npmPrefix = if ($npmResolvedForPrefix.Found) {
+            Invoke-CommandSafe -Command $npmResolvedForPrefix.Path -Arguments @("prefix", "-g") -TimeoutSec 8
+        } else {
+            @{ Success = $false; Output = ""; Error = "npm.cmd not resolved" }
+        }
         if ($npmPrefix.Success) {
             Write-Info "npm 全局安装路径: $($npmPrefix.Output.Trim())"
         }

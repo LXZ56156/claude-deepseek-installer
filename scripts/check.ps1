@@ -690,7 +690,7 @@ if ($releaseArtifactsText -notmatch 'Mode All.*RequireClean') {
 # Commit in release-artifacts.md must reference a recent commit in the history.
 # Uses "Artifact source commit" (current HEAD at doc time) and
 # "Generating code commit" (the commit that produced the actual ZIP).
-# Check HEAD through HEAD~3 to cover both fields across doc-only commits.
+# Check HEAD through HEAD~4 to cover both fields across doc-only commits.
 $recentShas = New-Object System.Collections.ArrayList
 [void]$recentShas.Add((git rev-parse HEAD).Trim())
 [void]$recentShas.Add((git rev-parse --short HEAD).Trim())
@@ -700,6 +700,8 @@ try { [void]$recentShas.Add((git rev-parse HEAD~2).Trim()) } catch { }
 try { [void]$recentShas.Add((git rev-parse --short HEAD~2).Trim()) } catch { }
 try { [void]$recentShas.Add((git rev-parse HEAD~3).Trim()) } catch { }
 try { [void]$recentShas.Add((git rev-parse --short HEAD~3).Trim()) } catch { }
+try { [void]$recentShas.Add((git rev-parse HEAD~4).Trim()) } catch { }
+try { [void]$recentShas.Add((git rev-parse --short HEAD~4).Trim()) } catch { }
 $foundCommit = $false
 foreach ($sha in $recentShas) {
     if ($sha -and $releaseArtifactsText -match [regex]::Escape($sha)) {
@@ -1965,11 +1967,22 @@ if ($envCheckText -notmatch 'Resolve-NpmCmdPath') {
 }
 
 # 13. No npm.ps1 reference in install path (only warning/info references allowed)
-$npmPs1ContextLines = $claudeInstallText -split "`n" | Where-Object { $_ -match 'npm\.ps1' }
+$npmPs1ContextLines = @($claudeInstallText -split "`n" | Where-Object { $_ -match 'npm\.ps1' })
 foreach ($line in $npmPs1ContextLines) {
     if ($line -match 'Invoke-VisibleInstallCommand|Start-Process.*FilePath.*npm' -and $line -notmatch '禁止|不能|avoid|不') {
         throw "npm.ps1 must not appear in install execution context: $line"
     }
+}
+
+# 14. Test-NpmInstalled must NOT use bare "npm.cmd" for Invoke-CommandSafe (must use resolved path)
+if ($envCheckText -match 'Test-NpmInstalled[\s\S]{0,2000}Invoke-CommandSafe\s+-Command\s+"npm\.cmd"') {
+    throw "Test-NpmInstalled must use resolved `$npmResolved.Path, not bare 'npm.cmd'"
+}
+
+# 15. npm prefix fallback in claude-install.ps1 must resolve path, not use bare "npm.cmd"
+$npmPrefixContext = @($claudeInstallText -split "`n" | Where-Object { $_ -match 'Invoke-CommandSafe.*"npm\.cmd".*prefix' })
+if ($npmPrefixContext.Count -gt 0) {
+    throw "npm prefix calls must use Resolve-NpmCmdPath + resolved path, not bare 'npm.cmd': $($npmPrefixContext[0])"
 }
 
 Write-Host "[check] npm.cmd + winget verify + WSL noise anti-regression OK"

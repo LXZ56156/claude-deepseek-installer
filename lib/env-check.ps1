@@ -954,7 +954,7 @@ function Test-NpmInstalled {
         return $result
     }
 
-    $npmResult = Invoke-CommandSafe -Command "npm.cmd" -Arguments @("--version") -TimeoutSec 5
+    $npmResult = Invoke-CommandSafe -Command $npmResolved.Path -Arguments @("--version") -TimeoutSec 5
     if ($npmResult.Success) {
         $result.Version = $npmResult.Output.Trim()
         $result.Installed = $true
