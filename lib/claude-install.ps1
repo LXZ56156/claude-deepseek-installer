@@ -22,8 +22,11 @@ function Test-ClaudeCommandExisting {
     .SYNOPSIS
         检测 claude 命令是否存在并可用。
         不能只因为 Get-Command claude 存在就判定可用。
+        如果 PATH 中 claude 不可用，会继续检测 %USERPROFILE%\.local\bin\claude.exe
+        （Native Install 默认路径），防止 WindowsApps alias / Claude Desktop / 旧 shim
+        导致的误判。
     .RETURNS
-        包含 Exists, Usable, Version, Error 的哈希表
+        包含 Exists, Usable, Version, Error, Path, Source 的哈希表
     #>
     $result = @{
         Exists  = $false
@@ -56,51 +59,68 @@ function Test-ClaudeCommandExisting {
     # 刷新 PATH 后检测
     Refresh-CurrentProcessPath
 
-    if (Test-CommandAvailable -CommandName "claude") {
+    # ============================================================
+    # 阶段 1: 检测当前 PATH 中的 claude
+    # ============================================================
+    $cmdInfo = Get-Command "claude" -ErrorAction SilentlyContinue
+    if ($cmdInfo) {
         $result.Exists = $true
-        # 记录找到的 claude 路径和来源
-        try {
-            $cmdInfo = Get-Command "claude" -ErrorAction SilentlyContinue
-            if ($cmdInfo) {
-                $result.Path = if ($cmdInfo.Source) { $cmdInfo.Source } else { $cmdInfo.Definition }
-                $result.Source = if ($cmdInfo.CommandType) { $cmdInfo.CommandType.ToString() } else { "unknown" }
-                Write-Log "DEBUG" "Test-ClaudeCommandExisting: found claude at Path=$($result.Path), Source=$($result.Source)"
-            }
-        }
-        catch {
-            Write-Log "DEBUG" "Test-ClaudeCommandExisting: Get-Command claude details failed: $_"
-        }
+        $result.Path = if ($cmdInfo.Source) { $cmdInfo.Source } else { $cmdInfo.Definition }
+        $result.Source = if ($cmdInfo.CommandType) { $cmdInfo.CommandType.ToString() } else { "path" }
+        Write-Log "DEBUG" "Test-ClaudeCommandExisting: found claude at Path=$($result.Path), Source=$($result.Source)"
+
         $verResult = Invoke-CommandSafe -Command "claude" -Arguments @("--version") -TimeoutSec 5
         if ($verResult.Success -and -not [string]::IsNullOrWhiteSpace($verResult.Output)) {
             $result.Usable = $true
             $result.Version = $verResult.Output.Trim()
+            # PATH 中 claude 可用，直接返回
+            return $result
         }
-        else {
-            $result.Usable = $false
-            $result.Error = "claude 命令存在但 --version 失败（残留或损坏）: $($verResult.Error)"
-            Write-Log "WARN" $result.Error
-        }
+
+        # PATH 中 claude 存在但不可用，记录原因，继续检测 native_local_bin
+        $result.Usable = $false
+        $result.Error = "PATH 中 claude 命令存在但 --version 失败（残留或损坏）: $($verResult.Error)"
+        Write-Log "WARN" $result.Error
     }
-    else {
-        # Get-Command 没找到 claude，检查 %USERPROFILE%\.local\bin\claude.exe（Native Install 默认路径）
-        $nativeClaudeExe = Join-Path (Join-Path (Get-UserProfilePath) ".local\bin") "claude.exe"
-        Write-Log "DEBUG" "Test-ClaudeCommandExisting: Get-Command claude not found, checking native path: $nativeClaudeExe"
-        if (Test-Path $nativeClaudeExe) {
+
+    # ============================================================
+    # 阶段 2: 只要当前不是 Usable=true，就继续检测 Native Install 默认路径
+    # 覆盖场景: PATH 前面有坏 claude（WindowsApps alias / Claude Desktop / 旧 shim / 残留），
+    # 但 %USERPROFILE%\.local\bin\claude.exe 实际可用
+    # ============================================================
+    $nativeClaudeExe = Join-Path (Join-Path (Get-UserProfilePath) ".local\bin") "claude.exe"
+
+    if (Test-Path $nativeClaudeExe) {
+        Write-Log "INFO" "Test-ClaudeCommandExisting: 正在检测 Native Install 默认路径: $nativeClaudeExe"
+        $nativeVer = Invoke-CommandSafe -Command $nativeClaudeExe -Arguments @("--version") -TimeoutSec 5
+
+        if ($nativeVer.Success -and -not [string]::IsNullOrWhiteSpace($nativeVer.Output)) {
+            # PATH 中有坏 claude，但 native_local_bin 可用 → 以 native 为准
+            if ($result.Exists -and -not $result.Usable) {
+                Write-Log "WARN" "PATH 中 claude 不可用，但 native_local_bin claude.exe 可用。可能存在 PATH 优先级冲突。BadPath=$($result.Path)"
+            }
+
             $result.Exists = $true
+            $result.Usable = $true
+            $result.Version = $nativeVer.Output.Trim()
             $result.Path = $nativeClaudeExe
             $result.Source = "native_local_bin"
-            Write-Log "INFO" "Test-ClaudeCommandExisting: 在 .local\bin 找到 claude.exe，正在测试 --version..."
-            $verResult = Invoke-CommandSafe -Command $nativeClaudeExe -Arguments @("--version") -TimeoutSec 5
-            if ($verResult.Success -and -not [string]::IsNullOrWhiteSpace($verResult.Output)) {
-                $result.Usable = $true
-                $result.Version = $verResult.Output.Trim()
-                Write-Log "INFO" "Test-ClaudeCommandExisting: native_local_bin claude.exe 可用, Version=$($result.Version)"
+            return $result
+        }
+        else {
+            # native 路径存在但也不可用
+            if (-not $result.Exists) {
+                # PATH 也没找到，native 是唯一发现
+                $result.Exists = $true
+                $result.Path = $nativeClaudeExe
+                $result.Source = "native_local_bin"
+                $result.Error = "native_local_bin claude.exe 存在但 --version 失败: $($nativeVer.Error)"
             }
             else {
-                $result.Usable = $false
-                $result.Error = "native_local_bin claude.exe 存在但 --version 失败: $($verResult.Error)"
-                Write-Log "WARN" $result.Error
+                # PATH 已记录坏 claude 的错误，追加 native 也不可用的信息
+                $result.Error = "$($result.Error); native_local_bin 也不可用: $($nativeVer.Error)"
             }
+            Write-Log "WARN" $result.Error
         }
     }
 

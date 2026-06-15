@@ -2176,6 +2176,41 @@ if ($repairDepsText -notmatch 'NEEDS_RESTART.*winget 已执行') {
     throw "repair-deps.ps1 must have NEEDS_RESTART fallback when secondary Node verification fails"
 }
 
+# ============================================================
+# P0 补漏: native_local_bin 不能在 Get-Command 的 else 分支里
+# 如果 PATH 前面有坏 claude，必须继续检测 .local\bin\claude.exe
+# ============================================================
+# 6. Test-ClaudeCommandExisting: native_local_bin 检测不能只出现在 Get-Command else 分支
+# 提取函数文本
+$tceFuncText = if ($claudeInstallText -match '(?s)function Test-ClaudeCommandExisting\s*\{.*?\n\}') {
+    $matches[0]
+} else { "" }
+if (-not $tceFuncText) {
+    throw "Test-ClaudeCommandExisting function body not found for structural analysis"
+}
+# 6a. 函数内 native_local_bin 必须至少出现 2 次（Source 赋值 + WARN 日志，证明不只是 mock 用）
+$nativeBinCount = ([regex]::Matches($tceFuncText, 'native_local_bin')).Count
+if ($nativeBinCount -lt 2) {
+    throw "Test-ClaudeCommandExisting: native_local_bin must appear at least twice in function body (found $nativeBinCount)"
+}
+# 6b. 必须包含 PATH 冲突提示（证明 PATH 坏 + native 可用的分支存在）
+if ($tceFuncText -notmatch 'PATH.*优先级冲突|BadPath|PATH 中 claude 不可用，但 native_local_bin') {
+    throw "Test-ClaudeCommandExisting must log PATH conflict when PATH claude is broken but native_local_bin is usable"
+}
+# 6c. 阶段 2 注释必须存在（证明 native 检测是独立阶段，不是 else 分支里的附属逻辑）
+if ($tceFuncText -notmatch '阶段\s*2.*Native Install 默认路径' -and $tceFuncText -notmatch '只要当前不是 Usable.*继续检测 Native') {
+    throw "Test-ClaudeCommandExisting must have phase 2 native check as standalone block (not only in Get-Command else branch)"
+}
+# 6d. 函数返回路径验证：PATH 可用时 return $result 必须在 native 检测之前
+# 用 [\s\S]* 而非 .* 以跨行匹配阶段2注释中的 "native" 和第3行的 "local"
+if ($tceFuncText -notmatch 'return \$result[\s\S]{0,800}阶段\s*2[\s\S]{0,200}native[\s\S]{0,200}local') {
+    throw "Test-ClaudeCommandExisting: PATH usable return must precede phase 2 native check"
+}
+# 6e. 确认 .local\bin 路径构造在函数文本中存在
+if ($tceFuncText -notmatch '\.local\\bin.*claude\.exe') {
+    throw "Test-ClaudeCommandExisting must construct .local\bin\claude.exe path"
+}
+
 Write-Host "[check] P0 fix anti-regression OK"
 
 Write-Host "[check] OK"
