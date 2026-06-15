@@ -142,10 +142,51 @@ function Invoke-ToolCheck {
     $tmpErr = Join-Path $env:TEMP ("ccdi_matrix_stderr_{0}_{1}.tmp" -f $PID, (Get-Random))
 
     try {
-        $allArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $ToolPath) + $Arguments
-        $proc = Start-Process -FilePath "powershell.exe" -ArgumentList $allArgs `
-            -NoNewWindow -PassThru -Wait `
-            -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
+        # Use System.Diagnostics.Process with timeout instead of Start-Process -Wait
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = "powershell.exe"
+        $psi.WorkingDirectory = $ScriptDir
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $false
+        $psi.RedirectStandardError = $false
+        $psi.CreateNoWindow = $true
+
+        # Build arguments: keep named params bare, quote values with spaces
+        $allArgs = @()
+        foreach ($a in @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $ToolPath) + $Arguments) {
+            if ($a -match '[\s"]') {
+                $allArgs += "`"$($a -replace '"','""')`""
+            } else {
+                $allArgs += $a
+            }
+        }
+        $psi.Arguments = $allArgs -join ' '
+        # Redirect via command-line (not .NET streams, avoids buffer deadlock)
+        $psi.Arguments += " > `"$tmpOut`" 2> `"$tmpErr`""
+
+        $proc = New-Object System.Diagnostics.Process
+        $proc.StartInfo = $psi
+        [void]$proc.Start()
+
+        $finished = $proc.WaitForExit($TimeoutSec * 1000)
+
+        if (-not $finished) {
+            $realPid = $proc.Id
+            try {
+                & taskkill.exe /PID $realPid /T /F 2>$null | Out-Null
+                Start-Sleep -Milliseconds 500
+            } catch { }
+            if (-not $proc.HasExited) {
+                try { Stop-Process -Id $realPid -Force -ErrorAction SilentlyContinue } catch { }
+            }
+            return @{
+                Name     = $Name
+                ExitCode = -2
+                Success  = $false
+                Output   = ""
+                Error    = "TIMEOUT: $Name after ${TimeoutSec}s (PID=$realPid)"
+            }
+        }
 
         $exitCode = $proc.ExitCode
         $stdout = if (Test-Path $tmpOut) { Get-Content $tmpOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue } else { "" }

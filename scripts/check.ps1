@@ -589,16 +589,55 @@ if ($validateText -notmatch '\$proc\.WaitForExit\(\$TimeoutSec') {
 if ($validateText -notmatch 'doctor\.ps1[\s\S]{0,300}-TestSafe') {
     throw "validate.ps1 CoreSandboxFlow must pass -TestSafe to doctor.ps1"
 }
-# Bootstrap exit code: must have try/catch, catch must write stderr
-if ($validateText -notmatch 'function Invoke-PowerShellScript[\s\S]{0,2500}try\s*\{[\s\S]{0,500}catch\s*\{') {
-    throw "validate.ps1 bootstrap must wrap child call in try/catch"
+# validate.ps1 must NOT redirect stdout/stderr via .NET (no buffer deadlock possible this way)
+# validate.ps1 must NOT use 1>/2> shell redirection (claude.exe handle inheritance issue)
+# validate.ps1 must spawn child directly and rely on timeout + taskkill as safety net
+if ($validateText -match 'RedirectStandardOutput\s*=\s*\$true') {
+    throw "validate.ps1 Invoke-PowerShellScript must NOT use RedirectStandardOutput (buffer deadlock risk)"
 }
-if ($validateText -notmatch 'catch[\s\S]{0,200}Add-Content.*stderrPath') {
-    throw "validate.ps1 bootstrap catch must write exception to stderr file"
+if ($validateText -match "1>\s*'") {
+    throw "validate.ps1 must NOT use 1>/2> shell redirection (handle inheritance risk)"
 }
-# Bootstrap must NOT rely solely on $? (unreliable with redirection)
-if ($validateText -match 'function Invoke-PowerShellScript[\s\S]{0,2500}if\s*\(\s*`\`?\$`\?\s*\)') {
-    throw "validate.ps1 bootstrap must NOT use `$? as only success check (unreliable with 1>/2>)"
+
+# 18b. windows-scenario-matrix.ps1 regression: Invoke-ToolCheck real timeout
+$wsmText = Get-Content -Path (Join-Path $RootDir "scripts\windows-scenario-matrix.ps1") -Raw -Encoding UTF8
+
+if ($wsmText -match 'Start-Process[\s\S]{0,100}PassThru[\s\S]{0,20}-Wait') {
+    throw "windows-scenario-matrix.ps1 Invoke-ToolCheck must NOT use Start-Process -PassThru -Wait"
+}
+if ($wsmText -notmatch '\$proc\.WaitForExit\(\$TimeoutSec') {
+    throw "windows-scenario-matrix.ps1 Invoke-ToolCheck must use WaitForExit with TimeoutSec"
+}
+if ($wsmText -notmatch 'taskkill\.exe\s+/PID\s+\$realPid\s+/T\s+/F') {
+    throw "windows-scenario-matrix.ps1 Invoke-ToolCheck timeout must call taskkill.exe /PID `$realPid /T /F"
+}
+if ($wsmText -notmatch 'Stop-Process\s+-Id\s+\$realPid\s+-Force') {
+    throw "windows-scenario-matrix.ps1 Invoke-ToolCheck timeout must have Stop-Process fallback"
+}
+if ($wsmText -notmatch 'ExitCode\s*=\s*-2') {
+    throw "windows-scenario-matrix.ps1 timeout must return ExitCode=-2"
+}
+
+# 18c. simulate-user-release.ps1 regression: Invoke-SimCommand process tree kill + ShellExecute env
+$simText = Get-Content -Path (Join-Path $RootDir "scripts\simulate-user-release.ps1") -Raw -Encoding UTF8
+
+if ($simText -notmatch 'taskkill\.exe\s+/PID\s+\$realPid\s+/T\s+/F') {
+    throw "simulate-user-release.ps1 Invoke-SimCommand timeout must call taskkill.exe /PID `$realPid /T /F"
+}
+if ($simText -notmatch 'Stop-Process\s+-Id\s+\$realPid\s+-Force') {
+    throw "simulate-user-release.ps1 Invoke-SimCommand timeout must have Stop-Process fallback"
+}
+if ($simText -match "try\s*\{\s*`$proc\.Kill\(\)") {
+    throw "simulate-user-release.ps1 Invoke-SimCommand timeout must NOT use bare `$proc.Kill()"
+}
+if ($simText -match 'shellEnvBlock\s*=\s*@\{\}') {
+    if ($simText -notmatch 'SetEnvironmentVariable') {
+        throw "simulate-user-release.ps1 ShellExecute must inject TestSafe env vars via SetEnvironmentVariable"
+    }
+}
+# ShellExecute must restore env in finally
+if ($simText -notmatch 'finally\s*\{[\s\S]{0,500}SetEnvironmentVariable') {
+    throw "simulate-user-release.ps1 ShellExecute must restore env vars in finally"
 }
 
 # 17. Start-Job failure must log skip reason with "避免诊断流程卡死"

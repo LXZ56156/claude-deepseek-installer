@@ -157,43 +157,17 @@ function Invoke-PowerShellScript {
 
     $allArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $FilePath) + $Arguments
 
-    # Build bootstrap cmd: let the child powershell write its own stdout/stderr files.
-    # This avoids .NET Process stream redirection entirely (no buffer deadlock possible).
-    # Parent Process tracks only PID and exit code.
-    $escapedFilePath = $FilePath -replace "'", "''"
-    $bootstrapArgList = @()
-    foreach ($a in $Arguments) {
-        if ($a -match '^-') {
-            # Named parameter (e.g. -Version): keep bare so child script sees it as a switch/param
-            $bootstrapArgList += $a
-        } else {
-            $escaped = $a -replace "'", "''"
-            $bootstrapArgList += "'$escaped'"
-        }
-    }
-    $bootstrapCmd = @"
-`$ErrorActionPreference = "Continue"
-try {
-    & '$escapedFilePath' $($bootstrapArgList -join ' ') 1> '$stdoutPath' 2> '$stderrPath'
-    `$realExit = `$LASTEXITCODE
-    if (`$realExit -ne 0) { exit `$realExit }
-    exit 0
-}
-catch {
-    try { (`$_ | Out-String) | Add-Content -Path '$stderrPath' -Encoding UTF8 } catch {}
-    exit 1
-}
-"@
-
-    # Write bootstrap to a temp .ps1 file to avoid double-quote nesting in -Command
-    $bootstrapPath = Join-Path $reportsDir "validate-child-$ts-$name.bootstrap.ps1"
-    [System.IO.File]::WriteAllText($bootstrapPath, $bootstrapCmd, (New-Object System.Text.UTF8Encoding($true)))
-
+    # Spawn child powershell directly via System.Diagnostics.Process.
+    # No .NET stream redirection (no buffer deadlock). No shell 1>/2> (no handle
+    # inheritance from claude.exe). stdout/stderr go to console and are captured
+    # only through $proc.ExitCode.
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "powershell.exe"
-    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$bootstrapPath`""
+    $psi.Arguments = ($allArgs | ForEach-Object {
+        if ($_ -match '[\s"]') { "`"$($_ -replace '"','""')`"" } else { $_ }
+    }) -join ' '
     $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
     $psi.WorkingDirectory = $script:RootDir
 
     $proc = New-Object System.Diagnostics.Process
@@ -203,7 +177,6 @@ catch {
     $finished = $proc.WaitForExit($TimeoutSec * 1000)
 
     if (-not $finished) {
-        # Timeout: kill process tree by real PID, then fallback Stop-Process
         $realPid = $proc.Id
         try {
             & taskkill.exe /PID $realPid /T /F 2>$null | Out-Null
@@ -212,14 +185,13 @@ catch {
         if (-not $proc.HasExited) {
             try { Stop-Process -Id $realPid -Force -ErrorAction SilentlyContinue } catch { }
         }
-        throw "TIMEOUT: $FilePath (${TimeoutSec}s) - stdout: $stdoutPath, stderr: $stderrPath"
+        throw "TIMEOUT: $FilePath (${TimeoutSec}s)"
     }
 
     $exitCode = $proc.ExitCode
-    Remove-Item $bootstrapPath -Force -ErrorAction SilentlyContinue
 
     if ($exitCode -ne 0) {
-        throw "$FilePath failed with exit code $exitCode - stderr: $stderrPath - stdout: $stdoutPath"
+        throw "$FilePath failed with exit code $exitCode"
     }
 }
 
@@ -249,7 +221,7 @@ function Invoke-CoreSandboxFlow {
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "Start-Here.ps1") -Arguments @(
             "-NonInteractive", "-SkipDisclaimer", "-TestSafe"
         ) -TimeoutSec 300
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "repair-deps.ps1") -Arguments @("-TestSafe") -TimeoutSec 300
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "repair-deps.ps1") -Arguments @("-TestSafe") -TimeoutSec 600
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "Start-Here.ps1") -Arguments @("-FixDeps", "-TestSafe") -TimeoutSec 300
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "doctor.ps1") -Arguments @(
             "-ShareSafe", "-SkipApiTest", "-NoOpenReport", "-TestSafe"

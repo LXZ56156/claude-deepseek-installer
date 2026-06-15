@@ -124,8 +124,15 @@ function Invoke-SimCommand {
 
     $finished = $proc.WaitForExit($TimeoutSec * 1000)
     if (-not $finished) {
-        try { $proc.Kill() } catch { }
-        throw "$Name timed out after ${TimeoutSec}s"
+        $realPid = $proc.Id
+        try {
+            & taskkill.exe /PID $realPid /T /F 2>$null | Out-Null
+            Start-Sleep -Milliseconds 500
+        } catch { }
+        if (-not $proc.HasExited) {
+            try { Stop-Process -Id $realPid -Force -ErrorAction SilentlyContinue } catch { }
+        }
+        throw "$Name timed out after ${TimeoutSec}s (PID=$realPid)"
     }
 
     [void]$stdoutTask.Wait(5000)
@@ -624,40 +631,57 @@ try {
 
             Write-Check "ShellExecute: $launcherName"
             try {
-                # Set per-process env vars for this test
-                $shellEnvBlock = @{}
-                foreach ($key in $envVars.Keys) {
-                    $shellEnvBlock[$key] = [string]$envVars[$key]
+                # Save old env values, set TestSafe env for ShellExecute child process
+                $oldShellEnv = @{}
+                foreach ($key in @("CCDI_TEST_MODE","CCDI_TEST_USERPROFILE","CCDI_TEST_DESKTOP","CCDI_API_KEY","CCDI_TEST_API_STATUS")) {
+                    $oldShellEnv[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
                 }
 
-                $psi = New-Object System.Diagnostics.ProcessStartInfo
-                $psi.FileName = $launcherPath
-                $psi.WorkingDirectory = $releaseRoot
-                $psi.UseShellExecute = $true
-                $psi.CreateNoWindow = $false
+                try {
+                    foreach ($key in $envVars.Keys) {
+                        [Environment]::SetEnvironmentVariable($key, [string]$envVars[$key], "Process")
+                    }
 
-                $proc = [System.Diagnostics.Process]::Start($psi)
-                if ($null -eq $proc) {
-                    Write-Host "[simulate] WARN: $launcherName failed to start via ShellExecute" -ForegroundColor Yellow
-                    continue
-                }
+                    $psi = New-Object System.Diagnostics.ProcessStartInfo
+                    $psi.FileName = $launcherPath
+                    $psi.WorkingDirectory = $releaseRoot
+                    $psi.UseShellExecute = $true
+                    $psi.CreateNoWindow = $false
 
-                # Wait briefly for the process to initialize
-                $proc.WaitForExit(8000) | Out-Null
+                    $proc = [System.Diagnostics.Process]::Start($psi)
+                    if ($null -eq $proc) {
+                        Write-Host "[simulate] WARN: $launcherName failed to start via ShellExecute" -ForegroundColor Yellow
+                        continue
+                    }
 
-                if (-not $proc.HasExited) {
-                    # Still running after timeout — kill it, this is normal for interactive launchers
-                    try { $proc.Kill() } catch { }
-                    Write-Host "[simulate]   $launcherName started (running after 8s, killed)" -ForegroundColor Green
-                }
-                else {
-                    $exitCode = $proc.ExitCode
-                    if ($exitCode -eq 0 -or $exitCode -eq 1) {
-                        # exit 0 = clean exit, exit 1 = expected (e.g., non-interactive mode exits)
-                        Write-Host "[simulate]   $launcherName exited cleanly (code=$exitCode)" -ForegroundColor Green
+                    # Wait briefly for the process to initialize
+                    $proc.WaitForExit(8000) | Out-Null
+
+                    if (-not $proc.HasExited) {
+                        $realPid = $proc.Id
+                        try { & taskkill.exe /PID $realPid /T /F 2>$null | Out-Null; Start-Sleep -Milliseconds 500 } catch { }
+                        if (-not $proc.HasExited) { try { Stop-Process -Id $realPid -Force -ErrorAction SilentlyContinue } catch { } }
+                        Write-Host "[simulate]   $launcherName started (running after 8s, killed)" -ForegroundColor Green
                     }
                     else {
-                        Write-Host "[simulate]   $launcherName exited with code $exitCode" -ForegroundColor Yellow
+                        $exitCode = $proc.ExitCode
+                        if ($exitCode -eq 0 -or $exitCode -eq 1) {
+                            Write-Host "[simulate]   $launcherName exited cleanly (code=$exitCode)" -ForegroundColor Green
+                        }
+                        else {
+                            Write-Host "[simulate]   $launcherName exited with code $exitCode" -ForegroundColor Yellow
+                        }
+                    }
+                }
+                finally {
+                    # Restore old env values
+                    foreach ($key in $oldShellEnv.Keys) {
+                        if ($null -ne $oldShellEnv[$key]) {
+                            [Environment]::SetEnvironmentVariable($key, $oldShellEnv[$key], "Process")
+                        }
+                        else {
+                            [Environment]::SetEnvironmentVariable($key, $null, "Process")
+                        }
                     }
                 }
             }
