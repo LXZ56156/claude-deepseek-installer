@@ -814,8 +814,14 @@ function Test-IsClaudeNativeFileLockError {
     return (
         $Text -match "used by another process" -or
         $Text -match "being used by another process" -or
+        $Text -match "The process cannot access the file" -or
+        $Text -match "because it is being used by another process" -or
+        $Text -match "Access to the path" -or
+        $Text -match "\bis denied\b" -or
         $Text -match "文件正由另一进程使用" -or
         $Text -match "无法访问该文件" -or
+        $Text -match "拒绝访问" -or
+        $Text -match "另一个程序正在使用此文件" -or
         $Text -match "\.claude\\downloads" -or
         $Text -match "\.claude/downloads"
     )
@@ -829,16 +835,17 @@ function Install-ClaudeCodeNative {
     .PARAMETER TestSafe
         测试安全模式：不执行实际安装。
     .RETURNS
-        包含 Success, Error 的哈希表
+        包含 Success, Error, RawError 的哈希表
     #>
     param(
         [switch]$TestSafe
     )
 
     $result = @{
-        Success = $false
-        Error   = ""
-        Status  = ""
+        Success   = $false
+        Error     = ""
+        RawError  = ""
+        Status    = ""
     }
 
     if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
@@ -870,6 +877,7 @@ function Install-ClaudeCodeNative {
         if (-not $downloadResult.Success) {
             # 详细错误仅写入日志，主界面只显示友好提示
             $result.Error = "下载官方安装脚本失败: $($downloadResult.Status)"
+            $result.RawError = $downloadResult.Error
             Write-Log "ERROR" "Native Install 下载失败: Url=$($downloadResult.Url), Status=$($downloadResult.Status), Error=$($downloadResult.Error), DurationMs=$($downloadResult.DurationMs)"
             Remove-Item $tempInstallScript -Force -ErrorAction SilentlyContinue
             return $result
@@ -891,11 +899,13 @@ function Install-ClaudeCodeNative {
         else {
             # 只记录详细错误到日志，不向用户展示 PowerShell 堆栈
             $result.Error = "Native Install 安装脚本执行未成功完成"
+            $result.RawError = $installResult.Error
             Write-Log "ERROR" "Native Install 失败详情: ExitCode=$($installResult.ExitCode), Error=$($installResult.Error), DurationMs=$($installResult.DurationMs)"
         }
     }
     catch {
         $result.Error = "Native Install 异常: $($_.Exception.Message)"
+        $result.RawError = $_.Exception.ToString()
         Write-Warning $result.Error
         Write-Log "ERROR" $result.Error
 
@@ -2605,8 +2615,15 @@ function Install-ClaudeCodeAuto {
             Write-Info "这通常是官方下载通道不稳定或被网络拦截，不代表安装失败。"
             Write-Log "WARN" "Native Install 详细错误: $($nativeResult.Error)"
 
-            # 文件占用检测
-            if (Test-IsClaudeNativeFileLockError -Text $nativeResult.Error) {
+            # 文件占用检测（使用 RawError 保留原始错误特征）
+            $nativeRawForLockCheck = @(
+                $nativeResult.Error
+                $nativeResult.RawError
+                $nativeResult.Status
+            ) -join "`n"
+            Write-Log "DEBUG" "Native Install lock check raw: $($nativeRawForLockCheck.Substring(0, [Math]::Min(200, $nativeRawForLockCheck.Length)))"
+
+            if (Test-IsClaudeNativeFileLockError -Text $nativeRawForLockCheck) {
                 Write-Warning "Claude 官方安装器提示文件被占用。"
                 Write-Info "请关闭所有 claude / node / PowerShell / Windows Terminal 窗口。"
                 Write-Info "然后删除 %USERPROFILE%\.claude\downloads 后重新运行安装。"

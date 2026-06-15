@@ -743,7 +743,7 @@ function Check-WSL {
 
     Add-CheckResult "WSL 状态" "OK" "已启用"
 
-    $ubuntuInfo = Test-UbuntuInWsl
+    $ubuntuInfo = Test-UbuntuInWsl -WslInfo $wslInfo
     if (-not $ubuntuInfo.Exists) {
         Add-CheckResult "Ubuntu" "WARN" "未安装 Ubuntu 发行版"
         Add-Suggestion "如需在 WSL 中使用 Claude Code，请运行: wsl --install -d Ubuntu"

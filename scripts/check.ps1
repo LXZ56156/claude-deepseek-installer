@@ -1250,15 +1250,15 @@ if ($claudeInstallText -notmatch 'Install-NodeJsViaWinget[\s\S]{0,800}Invoke-Vis
 if ($claudeInstallText -match 'Install-ClaudeCodeNpmMirror[\s\S]{0,800}Invoke-CommandSafe\s+-Command\s+"npm"') {
     throw "Install-ClaudeCodeNpmMirror must NOT use Invoke-CommandSafe for npm install; use Invoke-VisibleInstallCommand"
 }
-if ($claudeInstallText -notmatch 'Install-ClaudeCodeNpmMirror[\s\S]{0,1500}Invoke-VisibleInstallCommand') {
+if ($claudeInstallText -notmatch 'Install-ClaudeCodeNpmMirror[\s\S]{0,3000}Invoke-VisibleInstallCommand') {
     throw "Install-ClaudeCodeNpmMirror must use Invoke-VisibleInstallCommand for npm install"
 }
 
 # 23. Install-ClaudeCodeNative execution phase must NOT use Invoke-CommandSafe
-if ($claudeInstallText -match 'Install-ClaudeCodeNative[\s\S]{0,1500}Invoke-CommandSafe\s+-Command\s+"powershell"[\s\S]{0,300}-File\s+\$tempInstallScript') {
+if ($claudeInstallText -match 'Install-ClaudeCodeNative[\s\S]{0,3000}Invoke-CommandSafe\s+-Command\s+"powershell"[\s\S]{0,300}-File\s+\$tempInstallScript') {
     throw "Install-ClaudeCodeNative execution must NOT use Invoke-CommandSafe; use Invoke-VisibleInstallCommand"
 }
-if ($claudeInstallText -notmatch 'Install-ClaudeCodeNative[\s\S]{0,1500}Invoke-VisibleInstallCommand') {
+if ($claudeInstallText -notmatch 'Install-ClaudeCodeNative[\s\S]{0,3000}Invoke-VisibleInstallCommand') {
     throw "Install-ClaudeCodeNative must use Invoke-VisibleInstallCommand for script execution"
 }
 
@@ -2587,5 +2587,68 @@ if ($wqsBodyForP13 -match [regex]::Escape('详情见"Claude 命令来源"')) {
 }
 
 Write-Host "[check] P1/P2 environment diagnostics anti-regression OK"
+
+# ============================================================
+# P3.1 防回归检查: RawError 数据流 + 文件占用增强 + WSL 重复查询
+# ============================================================
+Write-Host "[check] P3.1 anti-regression: RawError dataflow, lock keywords, WSL probe reduction"
+
+$claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+
+# 1. Native Install 返回结构必须包含 RawError
+if ($claudeInstallText -notmatch 'RawError') { throw "claude-install.ps1 must contain RawError" }
+# Install-ClaudeCodeNative 中 downloadResult.Error 赋给 RawError
+if ($claudeInstallText -notmatch 'RawError\s*=\s*\$downloadResult\.Error') { throw "Install-ClaudeCodeNative must set RawError from downloadResult.Error" }
+# Install-ClaudeCodeNative 中 installResult.Error 赋给 RawError
+if ($claudeInstallText -notmatch 'RawError\s*=\s*\$installResult\.Error') { throw "Install-ClaudeCodeNative must set RawError from installResult.Error" }
+
+# 2. 文件占用检测必须使用 RawError（原 Error 太泛化）
+$lockCheckArea = if ($claudeInstallText -match '(?s)文件占用检测.*?Write-Warning.*?settings\.json') { $matches[0] } else { "" }
+if ($lockCheckArea -notmatch 'nativeResult\.RawError') { throw "File lock check must use nativeResult.RawError" }
+if ($lockCheckArea -notmatch 'nativeResult\.Error') { throw "File lock check should also include nativeResult.Error" }
+# 不应仅依赖 $nativeResult.Error（太泛化）
+if ($lockCheckArea -match 'Test-IsClaudeNativeFileLockError\s+-Text\s+\$nativeResult\.Error\b' -and $lockCheckArea -notmatch 'nativeResult\.RawError') {
+    throw "File lock check must not rely solely on generic Error"
+}
+
+# 3. 文件占用检测函数必须包含新增关键词
+if ($claudeInstallText -notmatch 'The process cannot access the file') { throw "File lock function must include 'The process cannot access the file'" }
+if ($claudeInstallText -notmatch 'Access to the path') { throw "File lock function must include 'Access to the path'" }
+if ($claudeInstallText -notmatch '\\bis denied\\b') { throw "File lock function must include 'is denied'" }
+if ($claudeInstallText -notmatch '拒绝访问') { throw "File lock function must include '拒绝访问'" }
+
+# 4. WSL 重复查询
+$envCheckText = Get-Content -Path (Join-Path $RootDir "lib\env-check.ps1") -Raw -Encoding UTF8
+if ($envCheckText -notmatch '\$WslInfo') { throw "Test-UbuntuInWsl must have WslInfo parameter" }
+if ($envCheckText -notmatch 'if\s*\(\s*-not\s+\$WslInfo\s*\)\s*\{') {
+    throw "Test-UbuntuInWsl must have if (-not `$WslInfo) fallback"
+}
+
+$doctorText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+if ($doctorText -notmatch 'Test-UbuntuInWsl\s+-WslInfo\s+\$wslInfo') { throw "Check-WSL must call Test-UbuntuInWsl -WslInfo `$wslInfo" }
+
+# Check-WSL 函数体中 Test-WslInstalled 调用次数应为 1
+$doctorLines = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Encoding UTF8
+$checkWslStart = -1
+$checkWslEnd = -1
+for ($i = 0; $i -lt $doctorLines.Count; $i++) {
+    if ($doctorLines[$i] -match '^function Check-WSL\b') { $checkWslStart = $i }
+    if ($checkWslStart -ge 0 -and $i -gt $checkWslStart -and $doctorLines[$i] -match '^function \w') {
+        $checkWslEnd = $i - 1
+        break
+    }
+}
+if ($checkWslStart -ge 0) {
+    if ($checkWslEnd -lt 0) { $checkWslEnd = $doctorLines.Count - 1 }
+    $checkWslBody = ($doctorLines[$checkWslStart..$checkWslEnd] | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    $wslCount = ([regex]::Matches($checkWslBody, 'Test-WslInstalled')).Count
+    if ($wslCount -ne 1) { throw "Check-WSL must call Test-WslInstalled exactly once, found $wslCount" }
+}
+
+# 5. 保持 DeepWslCheck 语义
+if ($doctorText -notmatch '未执行深度启动检测') { throw "doctor.ps1 must still contain '未执行深度启动检测'" }
+if ($doctorText -notmatch 'WSL 是高级选项，不影响 Windows 原生安装') { throw "doctor.ps1 must still contain WSL advice text" }
+
+Write-Host "[check] P3.1 anti-regression OK"
 
 Write-Host "[check] OK"

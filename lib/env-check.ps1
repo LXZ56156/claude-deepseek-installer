@@ -490,10 +490,20 @@ function Test-UbuntuInWsl {
     <#
     .SYNOPSIS
         检测 WSL 中是否存在 Ubuntu 发行版
+    .PARAMETER WslInfo
+        可选，传入已有的 Test-WslInstalled 结果，避免重复查询。
+        不传时自行调用 Test-WslInstalled。
     .RETURNS
         包含 Exists, Running, Default, Name 的哈希表
     #>
-    $wslInfo = Test-WslInstalled
+    param(
+        $WslInfo = $null
+    )
+
+    if (-not $WslInfo) {
+        $WslInfo = Test-WslInstalled
+    }
+
     $result = @{
         Exists  = $false
         Running = $false
@@ -501,7 +511,7 @@ function Test-UbuntuInWsl {
         Name    = $null
     }
 
-    if (-not $wslInfo.Installed) {
+    if (-not $WslInfo.Installed) {
         return $result
     }
 
