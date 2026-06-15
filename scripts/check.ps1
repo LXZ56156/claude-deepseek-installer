@@ -689,9 +689,10 @@ if ($releaseArtifactsText -notmatch '(Entries|条目数)') {
 if ($releaseArtifactsText -notmatch 'Mode All.*RequireClean') {
     throw "docs/release-artifacts.md must document Mode All + RequireClean validation command"
 }
-# Commit in release-artifacts.md must reference a recent commit in the history
-# (HEAD, HEAD~1, or HEAD~2). Because docs/release-artifacts.md is part of the
-# commit tree, it records the generating commit while HEAD may be ahead.
+# Commit in release-artifacts.md must reference a recent commit in the history.
+# Uses "Artifact source commit" (current HEAD at doc time) and
+# "Generating code commit" (the commit that produced the actual ZIP).
+# Check HEAD through HEAD~3 to cover both fields across doc-only commits.
 $recentShas = New-Object System.Collections.ArrayList
 [void]$recentShas.Add((git rev-parse HEAD).Trim())
 [void]$recentShas.Add((git rev-parse --short HEAD).Trim())
@@ -699,6 +700,8 @@ try { [void]$recentShas.Add((git rev-parse HEAD~1).Trim()) } catch { }
 try { [void]$recentShas.Add((git rev-parse --short HEAD~1).Trim()) } catch { }
 try { [void]$recentShas.Add((git rev-parse HEAD~2).Trim()) } catch { }
 try { [void]$recentShas.Add((git rev-parse --short HEAD~2).Trim()) } catch { }
+try { [void]$recentShas.Add((git rev-parse HEAD~3).Trim()) } catch { }
+try { [void]$recentShas.Add((git rev-parse --short HEAD~3).Trim()) } catch { }
 $foundCommit = $false
 foreach ($sha in $recentShas) {
     if ($sha -and $releaseArtifactsText -match [regex]::Escape($sha)) {
@@ -709,6 +712,13 @@ foreach ($sha in $recentShas) {
 if (-not $foundCommit) {
     $headShort = (git rev-parse --short HEAD).Trim()
     throw "docs/release-artifacts.md Commit must reference a recent commit (HEAD=$headShort or parent)"
+}
+# Must include both source and generating commit fields
+if ($releaseArtifactsText -notmatch 'Artifact source commit') {
+    throw "docs/release-artifacts.md must include 'Artifact source commit' field"
+}
+if ($releaseArtifactsText -notmatch 'Generating code commit') {
+    throw "docs/release-artifacts.md must include 'Generating code commit' field"
 }
 
 # 18e. validate.ps1 Invoke-PowerShellScript anti-regression (v1.3.2 final)
