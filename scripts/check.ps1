@@ -439,12 +439,15 @@ if ($claudeInstallText -notmatch 'CleanedOutput\s*=\s*""') {
 }
 
 # 2. doctor.ps1 skips automatic claude doctor (unreliable with stdout redirect).
-# It must mention claude doctor and suggest manual execution.
-if ($doctorText -notmatch 'claude\s+doctor' -and $doctorText -notmatch 'claude doctor') {
-    throw "doctor.ps1 must reference claude doctor (manual suggestion accepted)"
+# 2. doctor.ps1 must suggest manual claude doctor with specific guidance.
+if ($doctorText -notmatch '手动输入：claude doctor|手动输入: claude doctor|手动输入.*claude doctor') {
+    throw "doctor.ps1 must include exact '手动输入：claude doctor' or similar for manual guidance"
 }
-if ($doctorText -notmatch '手动运行\s*claude\s+doctor|手动执行\s*claude\s+doctor|手动.*claude doctor') {
-    throw "doctor.ps1 must suggest manual claude doctor execution"
+if ($doctorText -notmatch '不要通过脚本.*管道.*重定向|不要通过脚本、管道或重定向') {
+    throw "doctor.ps1 must warn: do not run via script/pipe/redirect"
+}
+if ($doctorText -notmatch '截图|复制终端中的完整输出') {
+    throw "doctor.ps1 must suggest screenshot or copy terminal output for support"
 }
 
 # 3. doctor.ps1 no longer calls Invoke-ClaudeDoctor automatically;
@@ -555,8 +558,9 @@ if ($doctorTextFull -notmatch 'function Check-Network[\s\S]{0,200}DoctorTestSafe
 if ($doctorTextFull -notmatch 'function Check-WSL[\s\S]{0,300}DoctorTestSafeMode[\s\S]{0,300}测试安全模式') {
     throw "doctor.ps1 Check-WSL must early-return when DoctorTestSafeMode"
 }
-if ($doctorTextFull -notmatch 'DoctorTestSafeMode[\s\S]{0,300}测试安全模式不调用 WSL') {
-    throw "doctor.ps1 WSL settings.json check must skip when DoctorTestSafeMode"
+# WSL TestSafe skip now in Check-WSL only (Check-Files no longer checks WSL)
+if ($doctorTextFull -notmatch 'DoctorTestSafeMode[\s\S]{0,500}测试安全模式不启动 WSL') {
+    throw "doctor.ps1 Check-WSL must skip WSL when DoctorTestSafeMode (was in Check-Files, now in Check-WSL)"
 }
 
 # 18. validate.ps1 regression: Invoke-PowerShellScript timeout + taskkill
@@ -853,6 +857,80 @@ if ($claudeInstallText -notmatch 'skipped_watchdog_unavailable') {
     throw "Invoke-ClaudeDoctorSafe must map watchdog_unavailable_skipped to skipped_watchdog_unavailable status"
 }
 # doctor.ps1 no longer calls Invoke-ClaudeDoctor; these legacy checks are retired.
+
+# 20b. test-doctor-capture.ps1 must exist with required tests
+$testDoctorCapturePath = Join-Path $ScriptDir "test-doctor-capture.ps1"
+if (-not (Test-Path $testDoctorCapturePath)) {
+    throw "scripts/test-doctor-capture.ps1 must exist"
+}
+$testDoctorCaptureText = Get-Content -Path $testDoctorCapturePath -Raw -Encoding UTF8
+if ($testDoctorCaptureText -notmatch 'fake-test-timeout') {
+    throw "test-doctor-capture.ps1 must contain fake-test-timeout test"
+}
+if ($testDoctorCaptureText -notmatch 'fake-large-output') {
+    throw "test-doctor-capture.ps1 must contain fake-large-output test"
+}
+if ($testDoctorCaptureText -notmatch 'Invoke-ClaudeDoctorInteractiveSafe') {
+    throw "test-doctor-capture.ps1 must call Invoke-ClaudeDoctorInteractiveSafe"
+}
+if ($testDoctorCaptureText -notmatch '\$env:PATH') {
+    throw "test-doctor-capture.ps1 must restore `$env:PATH"
+}
+if ($testDoctorCaptureText -notmatch 'finally') {
+    throw "test-doctor-capture.ps1 must use finally for cleanup"
+}
+Write-Host "[check] test-doctor-capture.ps1 structure OK"
+
+# 20c. Watchdog fired must not rely on JobState alone; must use log-based detection
+$claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+if ($claudeInstallText -match 'else\s*\{\s*\$watchdogFired\s*=\s*\$true') {
+    throw "Watchdog fired must NOT use bare else { watchdogFired=`$true }"
+}
+if ($claudeInstallText -notmatch '\$watchdogLogText') {
+    throw "Watchdog fired detection must use `$watchdogLogText for log-based determination"
+}
+if ($claudeInstallText -notmatch 'taskkill 结果|找到.*个 claude doctor') {
+    throw "Watchdog fired must check for actual 'taskkill 结果' or '找到 N 个 claude doctor' in logs"
+}
+if ($claudeInstallText -notmatch '未实际终止进程，不标记为 fired') {
+    throw "Watchdog must explicitly log when it did NOT actually kill (not marking as fired)"
+}
+Write-Host "[check] Watchdog fired logic OK"
+
+# 20d. Clear-StaleClaudeDoctorProcesses must support scoped descendant cleanup
+if ($claudeInstallText -notmatch 'ParentPid') {
+    throw "Clear-StaleClaudeDoctorProcesses must support -ParentPid parameter"
+}
+if ($claudeInstallText -notmatch 'Test-IsDescendantProcess') {
+    throw "Clear-StaleClaudeDoctorProcesses must include Test-IsDescendantProcess helper"
+}
+if ($claudeInstallText -notmatch 'node\.exe') {
+    throw "Clear-StaleClaudeDoctorProcesses must handle node.exe (npm scenario)"
+}
+if ($claudeInstallText -notmatch 'cmd\.exe') {
+    throw "Clear-StaleClaudeDoctorProcesses must handle cmd.exe (wrapper scenario)"
+}
+if ($claudeInstallText -notmatch 'powershell\.exe') {
+    throw "Clear-StaleClaudeDoctorProcesses must handle powershell.exe"
+}
+if ($claudeInstallText -notmatch 'pwsh\.exe') {
+    throw "Clear-StaleClaudeDoctorProcesses must handle pwsh.exe"
+}
+if ($claudeInstallText -notmatch 'global stale claude\.exe doctor cleanup') {
+    throw "Clear-StaleClaudeDoctorProcesses global mode must log 'global stale claude.exe doctor cleanup'"
+}
+Write-Host "[check] Clear-StaleClaudeDoctorProcesses scoped mode OK"
+
+# 20e. Check-Files must not invoke WSL; WSL settings check belongs in Check-WSL
+$doctorText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+$checkFilesText = if ($doctorText -match '(?s)function Check-Files\s*\{(.*?)function Check-Network\s*\{') { $matches[1] } else { "" }
+if ($checkFilesText -match 'Invoke-CommandSafe\s+-Command\s+"wsl"') {
+    throw "Check-Files must not call Invoke-CommandSafe wsl; WSL settings.json check belongs in Check-WSL"
+}
+if ($checkFilesText -match 'WSL settings\.json') {
+    throw "Check-Files must not reference 'WSL settings.json'; WSL config check belongs in Check-WSL"
+}
+Write-Host "[check] Check-Files WSL separation OK"
 
 Write-Host "[check] Claude doctor interactive invocation OK"
 

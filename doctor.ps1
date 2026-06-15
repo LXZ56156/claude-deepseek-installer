@@ -277,8 +277,8 @@ function Check-Commands {
 
         # claude doctor 在 stdout 重定向环境下不产生输出（Claude Code 自身行为）。
         # 脚本无法可靠捕获其输出，因此不自动运行；改为提示用户手动执行。
-        Add-CheckResult "claude doctor" "INFO" "未自动运行（Claude Code doctor 在脚本环境中无法可靠捕获输出）"
-        Add-Suggestion "如需 Claude Code 官方诊断，请在终端手动运行 claude doctor。"
+        Add-CheckResult "claude doctor" "INFO" "未自动运行（Claude Code doctor 在脚本/重定向环境中不会稳定输出；请按需手动运行）"
+        Add-Suggestion "如需 Claude Code 官方诊断，请打开新的 PowerShell 或 Windows Terminal，手动输入：claude doctor。不要通过脚本、管道或重定向运行。运行后请截图，或复制终端中的完整输出发给售后。"
     }
     else {
         Add-CheckResult "Claude Code CLI" "ERROR" "claude 命令未找到"
@@ -381,38 +381,6 @@ function Check-Files {
         Add-CheckResult "settings.json" "WARN" "配置文件不存在"
         Add-Suggestion "配置文件不存在，请运行 install.ps1 并选择配置 DeepSeek API。"
     }
-
-    # 检查 WSL 配置
-    if ($script:DoctorTestSafeMode) {
-        Add-CheckResult "WSL settings.json" "SKIP" "测试安全模式不调用 WSL"
-    }
-    else {
-        $ubuntuInfo = Test-UbuntuInWsl
-        if ($ubuntuInfo.Exists) {
-            # 尝试检查 WSL 内的配置
-            $wslConfigCheck = Invoke-CommandSafe -Command "wsl" -Arguments @("bash", "-c", "test -f ~/.claude/settings.json && echo 'EXISTS' || echo 'NOT_FOUND'")
-        if ($wslConfigCheck.Success) {
-            if ($wslConfigCheck.Output -match "EXISTS") {
-                Add-CheckResult "WSL settings.json" "OK" "~/.claude/settings.json 存在"
-
-                # 检查 Windows 和 WSL 配置是否一致
-                if ($configInfo.Exists) {
-                    Add-CheckResult "Windows/WSL 一致性" "WARN" "两个环境都有配置，请注意一致性"
-                    Add-Suggestion "Windows 和 WSL 中都有 Claude 配置。如果遇到问题，请确认两个环境的配置一致。"
-                }
-            }
-            else {
-                Add-CheckResult "WSL settings.json" "WARN" "WSL 中无配置"
-                if ($configInfo.Exists) {
-                    Add-Suggestion "Windows 有配置但 WSL 中没有。如果使用 WSL，请运行 install_wsl.sh。"
-                }
-            }
-        }
-        else {
-            Add-CheckResult "WSL settings.json" "SKIP" "无法检查 WSL 内部"
-        }
-    }
-    }  # end if/else DoctorTestSafeMode for WSL settings
 }
 
 # ============================================================

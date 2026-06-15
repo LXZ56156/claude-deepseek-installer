@@ -524,17 +524,21 @@ function Clear-StaleClaudeDoctorProcesses {
     <#
     .SYNOPSIS
         清理残留的 claude doctor 孤儿进程。
-        只杀命令行包含 "claude" 和 "doctor" 的进程，
+        支持两种模式：
+          - 未传 -ParentPid：全局保守模式，只清理陈旧的 claude.exe doctor，避免误杀。
+          - 传了 -ParentPid：限域清理，通过进程树 descendant 匹配，覆盖
+            claude.exe / node.exe / cmd.exe / powershell.exe / pwsh.exe 等 npm 安装场景。
         不杀普通 claude 会话 (--resume / --continue 等)。
-        默认只清理启动超过 60 秒的陈旧进程。
     .PARAMETER MinAgeSec
         进程最小存活时间（秒），短于此时间的不杀。默认 60。
     .PARAMETER Force
         强制清理所有 doctor 进程，不检查存活时间。
     .PARAMETER ParentPid
-        限制只清理指定父进程 ID 下的子进程。不指定则清理全局。
+        限制只清理指定父 PID 的进程树后裔。不指定则全局保守清理（仅 claude.exe）。
     .RETURNS
         包含 KilledCount, Errors 的哈希表
+    .NOTES
+        全局模式不清理 node.exe / cmd.exe / powershell.exe / pwsh.exe，防止误杀。
     #>
     param(
         [int]$MinAgeSec = 60,
@@ -547,105 +551,248 @@ function Clear-StaleClaudeDoctorProcesses {
         Errors      = [System.Collections.ArrayList]::new()
     }
 
+    # --- 进程树后裔检测 ---
+    function Test-IsDescendantProcess {
+        param(
+            [object]$Proc,
+            [hashtable]$ProcById,
+            [int]$RootPid
+        )
+
+        $seen = @{}
+        $current = $Proc
+        while ($current -and $current.ParentProcessId) {
+            $ppid = [int]$current.ParentProcessId
+            if ($ppid -eq $RootPid) { return $true }
+            if ($seen.ContainsKey($ppid)) { return $false }
+            $seen[$ppid] = $true
+            if (-not $ProcById.ContainsKey($ppid)) { return $false }
+            $current = $ProcById[$ppid]
+        }
+        return $false
+    }
+
     try {
-        # 获取所有 claude.exe 进程
-        $claudeProcs = $null
-        try {
-            $claudeProcs = Get-CimInstance Win32_Process -Filter "Name='claude.exe'" -ErrorAction Stop
-        }
-        catch {
-            Write-Log "DEBUG" "Get-CimInstance 获取 claude 进程失败，尝试 Get-WmiObject: $_"
-            try {
-                $claudeProcs = Get-WmiObject Win32_Process -Filter "Name='claude.exe'" -ErrorAction Stop
-            }
-            catch {
-                [void]$result.Errors.Add("无法查询 claude 进程: $_")
-                Write-Log "ERROR" "Clear-StaleClaudeDoctorProcesses: 无法查询进程列表: $_"
-                return $result
-            }
-        }
-
-        if (-not $claudeProcs -or @($claudeProcs).Count -eq 0) {
-            Write-Log "DEBUG" "Clear-StaleClaudeDoctorProcesses: 没有找到 claude.exe 进程"
-            return $result
-        }
-
         $now = Get-Date
         $myPid = $PID
+        $isScoped = ($ParentPid -gt 0)
 
-        foreach ($proc in $claudeProcs) {
-            $procId = $proc.ProcessId
-            $cmdLine = if ($proc.CommandLine) { $proc.CommandLine } else { "" }
+        if ($isScoped) {
+            # ====================================================
+            # 限域模式：进程树 descendant 匹配，覆盖 npm / cmd 场景
+            # ====================================================
+            Write-Log "DEBUG" "Clear-StaleClaudeDoctorProcesses: scoped cleanup ParentPid=$ParentPid"
 
-            # 只杀命令行包含 "doctor" 的进程
-            if (-not ($proc.CommandLine -match 'doctor')) {
-                continue
-            }
-
-            # 不杀自己
-            if ($procId -eq $myPid) {
-                continue
-            }
-
-            # 如果指定了 ParentPid，只清理属于该父进程的子进程
-            if ($ParentPid -gt 0 -and $proc.ParentProcessId -ne $ParentPid) {
-                Write-Log "DEBUG" "跳过非目标父进程 PID=$($proc.ParentProcessId) 的 claude doctor 进程 PID=$procId"
-                continue
-            }
-
-            # 检查存活时间（除非 -Force）
-            if (-not $Force) {
-                $creationDate = $proc.CreationDate
-                if ($creationDate) {
-                    $age = ($now - $creationDate).TotalSeconds
-                    if ($age -lt $MinAgeSec) {
-                        Write-Log "DEBUG" "跳过较新的 claude doctor 进程 PID=$procId (存活 ${age}s < ${MinAgeSec}s)"
-                        continue
-                    }
-                }
-            }
-
-            Write-Log "INFO" "正在清理残留 claude doctor 进程 PID=$procId, CommandLine=$cmdLine"
-
-            # 优先使用 taskkill /T /F 杀进程树
-            $killed = $false
-            $killError = ""
+            $allProcs = @()
             try {
-                $taskkillResult = & taskkill.exe /PID $procId /T /F 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                    $killed = $true
-                    Write-Log "INFO" "已终止 claude doctor 进程树 PID=$($procId): $taskkillResult"
-                }
-                else {
-                    $killError = "taskkill 返回码 $LASTEXITCODE, 输出: $taskkillResult"
+                $allProcs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+                if (-not $allProcs -or $allProcs.Count -eq 0) {
+                    $allProcs = @(Get-WmiObject Win32_Process -ErrorAction SilentlyContinue)
                 }
             }
             catch {
-                $killError = "taskkill 异常: $_"
+                Write-Log "DEBUG" "获取所有进程失败: $_"
             }
 
-            # fallback: Stop-Process
-            if (-not $killed) {
+            if (-not $allProcs -or $allProcs.Count -eq 0) {
+                Write-Log "DEBUG" "Clear-StaleClaudeDoctorProcesses: 没有查询到任何进程"
+                return $result
+            }
+
+            # 构建 ProcessId 映射
+            $procById = @{}
+            foreach ($p in $allProcs) {
                 try {
-                    Stop-Process -Id $procId -Force -ErrorAction Stop
-                    $killed = $true
-                    Write-Log "INFO" "已通过 Stop-Process 终止 claude doctor 进程 PID=$procId"
+                    $pidKey = [int]$p.ProcessId
+                    if ($pidKey -gt 0 -and -not $procById.ContainsKey($pidKey)) {
+                        $procById[$pidKey] = $p
+                    }
+                }
+                catch { }
+            }
+
+            # 筛选条件
+            $candidates = @($allProcs | Where-Object {
+                try {
+                    $procId = $_.ProcessId
+                    if (-not $procId -or $procId -eq $myPid) { return $false }
+
+                    $name = if ($_.Name) { $_.Name.ToLowerInvariant() } else { "" }
+                    $cmd  = if ($_.CommandLine) { $_.CommandLine.ToLowerInvariant() } else { "" }
+
+                    $isDescendant = Test-IsDescendantProcess -Proc $_ -ProcById $procById -RootPid $ParentPid
+                    if (-not $isDescendant) { return $false }
+
+                    $isDoctor = $cmd -match '(^|[\s"''`=])doctor([\s"''`]|$)'
+                    if (-not $isDoctor) { return $false }
+
+                    $isClaudeLike =
+                        ($name -in @("claude.exe", "node.exe", "cmd.exe", "powershell.exe", "pwsh.exe")) -and
+                        (
+                            $cmd -match 'claude' -or
+                            $cmd -match 'anthropic' -or
+                            $cmd -match 'claude-code'
+                        )
+
+                    return $isClaudeLike
                 }
                 catch {
-                    $killError += "; Stop-Process 也失败: $_"
+                    return $false
+                }
+            })
+
+            # ProcessId 去重
+            $candidates = @($candidates | Sort-Object -Property ProcessId -Unique)
+
+            foreach ($proc in $candidates) {
+                $procId = $proc.ProcessId
+                $cmdLine = if ($proc.CommandLine) { $proc.CommandLine } else { "" }
+                $procName = if ($proc.Name) { $proc.Name } else { "(unknown)" }
+
+                # 存活时间过滤
+                if (-not $Force) {
+                    $creationDate = $proc.CreationDate
+                    if ($creationDate) {
+                        $age = ($now - $creationDate).TotalSeconds
+                        if ($age -lt $MinAgeSec) {
+                            Write-Log "DEBUG" "scoped: 跳过较新进程 PID=$procId Name=$procName (存活 ${age}s < ${MinAgeSec}s)"
+                            continue
+                        }
+                    }
+                }
+
+                Write-Log "INFO" "scoped cleanup: 正在清理残留 doctor 进程 PID=$procId, Name=$procName, CommandLine=$cmdLine"
+
+                $killed = $false
+                $killError = ""
+                try {
+                    $taskkillResult = & taskkill.exe /PID $procId /T /F 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        $killed = $true
+                        Write-Log "INFO" "已终止进程树 PID=$($procId): $taskkillResult"
+                    }
+                    else {
+                        $killError = "taskkill 返回码 $LASTEXITCODE, 输出: $taskkillResult"
+                    }
+                }
+                catch {
+                    $killError = "taskkill 异常: $_"
+                }
+
+                if (-not $killed) {
+                    try {
+                        Stop-Process -Id $procId -Force -ErrorAction Stop
+                        $killed = $true
+                        Write-Log "INFO" "已通过 Stop-Process 终止进程 PID=$procId"
+                    }
+                    catch {
+                        $killError += "; Stop-Process 也失败: $_"
+                    }
+                }
+
+                if ($killed) {
+                    $result.KilledCount++
+                }
+                else {
+                    [void]$result.Errors.Add("scoped: 无法终止 PID=$($procId): $killError")
+                    Write-Log "ERROR" "Clear-StaleClaudeDoctorProcesses(scoped): 无法终止 PID=$($procId): $killError"
                 }
             }
 
-            if ($killed) {
-                $result.KilledCount++
-            }
-            else {
-                [void]$result.Errors.Add("无法终止 PID=$($procId): $killError")
-                Write-Log "ERROR" "Clear-StaleClaudeDoctorProcesses: 无法终止 PID=$($procId): $killError"
-            }
+            Write-Log "INFO" "Clear-StaleClaudeDoctorProcesses(scoped): 清理完成，共终止 $($result.KilledCount) 个残留 doctor 进程"
         }
+        else {
+            # ====================================================
+            # 全局保守模式：只清理陈旧的 claude.exe doctor
+            # ====================================================
+            Write-Log "DEBUG" "Clear-StaleClaudeDoctorProcesses: global stale claude.exe doctor cleanup"
 
-        Write-Log "INFO" "Clear-StaleClaudeDoctorProcesses: 清理完成，共终止 $($result.KilledCount) 个残留 doctor 进程"
+            $claudeProcs = $null
+            try {
+                $claudeProcs = Get-CimInstance Win32_Process -Filter "Name='claude.exe'" -ErrorAction Stop
+            }
+            catch {
+                try {
+                    $claudeProcs = Get-WmiObject Win32_Process -Filter "Name='claude.exe'" -ErrorAction Stop
+                }
+                catch {
+                    [void]$result.Errors.Add("无法查询 claude 进程: $_")
+                    Write-Log "ERROR" "Clear-StaleClaudeDoctorProcesses: 无法查询进程列表: $_"
+                    return $result
+                }
+            }
+
+            if (-not $claudeProcs -or @($claudeProcs).Count -eq 0) {
+                Write-Log "DEBUG" "Clear-StaleClaudeDoctorProcesses: 没有找到 claude.exe 进程"
+                return $result
+            }
+
+            foreach ($proc in $claudeProcs) {
+                $procId = $proc.ProcessId
+                $cmdLine = if ($proc.CommandLine) { $proc.CommandLine } else { "" }
+
+                # 只杀命令行包含 "doctor" 的进程
+                if (-not ($proc.CommandLine -match 'doctor')) {
+                    continue
+                }
+
+                # 不杀自己
+                if ($procId -eq $myPid) {
+                    continue
+                }
+
+                # 检查存活时间（除非 -Force）
+                if (-not $Force) {
+                    $creationDate = $proc.CreationDate
+                    if ($creationDate) {
+                        $age = ($now - $creationDate).TotalSeconds
+                        if ($age -lt $MinAgeSec) {
+                            Write-Log "DEBUG" "global: 跳过较新的 claude doctor 进程 PID=$procId (存活 ${age}s < ${MinAgeSec}s)"
+                            continue
+                        }
+                    }
+                }
+
+                Write-Log "INFO" "global cleanup: 正在清理残留 claude doctor 进程 PID=$procId, CommandLine=$cmdLine"
+
+                $killed = $false
+                $killError = ""
+                try {
+                    $taskkillResult = & taskkill.exe /PID $procId /T /F 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        $killed = $true
+                        Write-Log "INFO" "已终止 claude doctor 进程树 PID=$($procId): $taskkillResult"
+                    }
+                    else {
+                        $killError = "taskkill 返回码 $LASTEXITCODE, 输出: $taskkillResult"
+                    }
+                }
+                catch {
+                    $killError = "taskkill 异常: $_"
+                }
+
+                if (-not $killed) {
+                    try {
+                        Stop-Process -Id $procId -Force -ErrorAction Stop
+                        $killed = $true
+                        Write-Log "INFO" "已通过 Stop-Process 终止 claude doctor 进程 PID=$procId"
+                    }
+                    catch {
+                        $killError += "; Stop-Process 也失败: $_"
+                    }
+                }
+
+                if ($killed) {
+                    $result.KilledCount++
+                }
+                else {
+                    [void]$result.Errors.Add("global: 无法终止 PID=$($procId): $killError")
+                    Write-Log "ERROR" "Clear-StaleClaudeDoctorProcesses(global): 无法终止 PID=$($procId): $killError"
+                }
+            }
+
+            Write-Log "INFO" "Clear-StaleClaudeDoctorProcesses(global): 清理完成，共终止 $($result.KilledCount) 个残留 doctor 进程"
+        }
     }
     catch {
         [void]$result.Errors.Add("Clear-StaleClaudeDoctorProcesses 异常: $_")
@@ -664,6 +811,11 @@ function Invoke-ClaudeDoctorSafe {
         测试安全模式：跳过真实 claude doctor 执行。
     .RETURNS
         包含 Success, Output, Status 的哈希表
+    .NOTES
+        当前 Claude Code v2.1.177 的 claude doctor 在 stdout pipe / shell redirect /
+        PowerShell pipeline 下均不稳定输出。因此 doctor.ps1 主流程不再自动调用本函数。
+        本函数仅保留用于 fake claude 捕获机制测试、旧入口兼容，以及未来 Claude Code
+        官方修复 stdout 行为后的备用路径。
     #>
     param(
         [switch]$TestSafe
@@ -870,6 +1022,10 @@ function Invoke-ClaudeDoctor {
     .RETURNS
         包含 Success, Summary, ParsedData, CleanedOutput, HasCoreFields,
         TimedOut, Error, ExitCode, DurationMs, RawOutputForLog 的哈希表
+    .NOTES
+        当前 Claude Code v2.1.177 的 claude doctor 在 stdout pipe / shell redirect /
+        PowerShell pipeline 下均不稳定输出。因此 doctor.ps1 主流程不再自动调用本函数。
+        本函数仅保留用于兼容旧入口或后续如果官方修复 stdout 行为时再启用。
     #>
     param(
         [int]$TimeoutSec = 45,
@@ -992,10 +1148,10 @@ function Invoke-ClaudeDoctor {
 function Invoke-ClaudeDoctorInteractiveSafe {
     <#
     .SYNOPSIS
-        使用 Start-Process 重定向执行 claude doctor，不继承终端 TTY。
-        设置 NO_COLOR=1, CI=1, TERM=dumb 环境变量防止 TUI 输出。
-        向 stdin 自动发送换行防止交互式分页卡住。
-        通过独立 watchdog job 实现超时保护，超时后递归杀进程树。
+        通过 cmd.exe 包装执行 claude doctor，stdout/stderr 写入临时文件后读取。
+        设置 CI=1, TERM=dumb, NO_COLOR=1 环境变量防止 TUI 输出。
+        通过独立 watchdog job 实现超时保护，超时后杀进程树并读取已写入的临时文件。
+        Legacy / fake-test / compatibility only。doctor.ps1 主流程不再自动调用。
     .PARAMETER TimeoutSec
         超时秒数，默认 45。
     .PARAMETER TestSafe
@@ -1003,6 +1159,11 @@ function Invoke-ClaudeDoctorInteractiveSafe {
     .RETURNS
         包含 Success, TimedOut, ExitCode, Error, Command, DurationMs,
         CleanedOutput, ParsedData, HasCoreFields 的哈希表
+    .NOTES
+        当前 Claude Code v2.1.177 的 claude doctor 在 stdout pipe / shell redirect /
+        PowerShell pipeline 下均不稳定输出。因此 doctor.ps1 主流程不再自动调用本函数。
+        本函数仅保留用于 fake claude 捕获机制测试、旧入口兼容，以及未来 Claude Code
+        官方修复 stdout 行为后的备用路径。
     #>
     param(
         [int]$TimeoutSec = 45,
@@ -1345,7 +1506,11 @@ function Invoke-ClaudeDoctorInteractiveSafe {
     }
 
     # --- 检查 Watchdog 状态 ---
+    # 不能仅凭 JobState 判 fired：watchdog 可能醒来后发现目标已退出也结束。
+    # 必须根据日志里是否实际终止了进程来判断。
     $watchdogFired = $false
+    $watchdogLogText = ""
+
     try {
         $jobState = $watchdogJob.State
         Write-Log "DEBUG" "Watchdog job 状态: State=$jobState"
@@ -1355,9 +1520,38 @@ function Invoke-ClaudeDoctorInteractiveSafe {
             Write-Log "DEBUG" "Watchdog 未触发，claude doctor 在超时前完成"
         }
         else {
-            $watchdogFired = $true
-            $watchdogLog = Receive-Job $watchdogJob -ErrorAction SilentlyContinue
-            Write-Log "INFO" "Watchdog 已触发：$watchdogLog"
+            $received = Receive-Job $watchdogJob -ErrorAction SilentlyContinue
+            if ($received) {
+                $watchdogLogText += ($received | Out-String)
+            }
+
+            if (Test-Path $killLogPath) {
+                try {
+                    $fileLog = Get-Content $killLogPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                    if ($fileLog) {
+                        $watchdogLogText += "`n$fileLog"
+                    }
+                }
+                catch {
+                    Write-Log "DEBUG" "读取 watchdog killLog 异常: $_"
+                }
+            }
+
+            if ($watchdogLogText) {
+                Write-Log "INFO" "Watchdog 已结束：$watchdogLogText"
+            }
+
+            # 只有日志确认实际终止了进程时才算 fired
+            $watchdogFired = (
+                $watchdogLogText -match 'WATCHDOG:\s*找到\s+\d+\s+个 claude doctor 相关子进程' -or
+                $watchdogLogText -match 'WATCHDOG:\s*taskkill 结果' -or
+                $watchdogLogText -match 'WATCHDOG:\s*Stop-Process fallback 成功' -or
+                $watchdogLogText -match 'WATCHDOG:\s*超时，正在终止'
+            )
+
+            if (-not $watchdogFired) {
+                Write-Log "DEBUG" "Watchdog 已结束但未实际终止进程，不标记为 fired"
+            }
         }
     }
     catch {
@@ -1366,16 +1560,7 @@ function Invoke-ClaudeDoctorInteractiveSafe {
     finally {
         Remove-Job $watchdogJob -Force -ErrorAction SilentlyContinue
         if (Test-Path $killLogPath) {
-            try {
-                $watchdogContent = Get-Content $killLogPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-                if ($watchdogContent) {
-                    Write-Log "DEBUG" "Watchdog 日志: $watchdogContent"
-                }
-                Remove-Item $killLogPath -Force -ErrorAction SilentlyContinue
-            }
-            catch {
-                Write-Log "DEBUG" "清理 watchdog 日志失败: $_"
-            }
+            Remove-Item $killLogPath -Force -ErrorAction SilentlyContinue
         }
     }
 
