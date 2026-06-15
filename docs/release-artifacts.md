@@ -5,8 +5,9 @@
 ## v1.3.2 RC
 
 - Branch: `release/v1.3.2-rc`
-- Artifact source commit: `f048c1e4eb2dbe599390b07184e28b36b4f66fd7` (当前分支 HEAD)
+- Artifact source commit: `f048c1e4eb2dbe599390b07184e28b36b4f66fd7` (ZIP artifact source tree)
 - Generating code commit: `faf1c700580fbb437bd78fb9d641134e7a26ea81` (fix(validation): enforce final artifact and shellexecute failure checks)
+- Metadata HEAD: `3a25e47f1cceb60fcd4dc95b92813d860a4f99f1` (release record / check metadata)
 - ZIP: `ClaudeCode-DeepSeek-本地配置助手-v1.3.2.zip`
 - SHA256: `b6f6915decf161de0182748cb7e29516809020eb935f00e055667dbc19703b61`
 - Size: 190830 bytes (186.4 KB)
