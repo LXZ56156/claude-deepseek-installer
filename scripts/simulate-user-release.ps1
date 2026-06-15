@@ -463,6 +463,8 @@ try {
     [void]$runs.Add((Invoke-SimCommand -Name "Restore-Config.cmd" -FileName $cmdExe -Arguments @("/c", ".\Restore-Config.cmd") -InputText "4`r`n`r`n" -WorkingDirectory $releaseRoot -Environment $envVars))
     [void]$runs.Add((Invoke-SimCommand -Name "恢复或卸载配置.cmd" -FileName $cmdExe -Arguments @("/c", ".\恢复或卸载配置.cmd") -InputText "4`r`n`r`n" -WorkingDirectory $releaseRoot -Environment $envVars))
 
+    [void]$runs.Add((Invoke-SimCommand -Name "一键修复依赖.cmd TestSafe" -FileName $cmdExe -Arguments @("/c", ".\一键修复依赖.cmd") -InputText "`r`n" -WorkingDirectory $releaseRoot -Environment $envVars -TimeoutSec 180))
+
     $settingsPath = Join-Path $testProfile ".claude\settings.json"
     $customSettings = [PSCustomObject]@{
         permissions = [PSCustomObject]@{
@@ -592,7 +594,8 @@ try {
         "Run-Diagnostics.cmd",
         "一键诊断.cmd",
         "Restore-Config.cmd",
-        "恢复或卸载配置.cmd"
+        "恢复或卸载配置.cmd",
+        "一键修复依赖.cmd"
     )) {
         Copy-Item -Path (Join-Path $releaseRoot $launcher) -Destination (Join-Path $missingDir $launcher) -Force
         $run = Invoke-SimCommand -Name "missing package: $launcher" -FileName $cmdExe -Arguments @("/c", (".\" + $launcher)) -InputText "`r`n" -WorkingDirectory $missingDir -ExpectedExitCode 1 -Environment $envVars
@@ -620,7 +623,8 @@ try {
             "Run-Diagnostics.cmd",
             "一键诊断.cmd",
             "Restore-Config.cmd",
-            "恢复或卸载配置.cmd"
+            "恢复或卸载配置.cmd",
+            "一键修复依赖.cmd"
         )
         foreach ($launcherName in $launcherNames) {
             $launcherPath = Join-Path $releaseRoot $launcherName
@@ -669,7 +673,7 @@ try {
                             Write-Host "[simulate]   $launcherName exited cleanly (code=$exitCode)" -ForegroundColor Green
                         }
                         else {
-                            Write-Host "[simulate]   $launcherName exited with code $exitCode" -ForegroundColor Yellow
+                            throw "$launcherName ShellExecute exited with unexpected code $exitCode"
                         }
                     }
                 }

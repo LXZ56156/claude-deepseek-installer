@@ -141,6 +141,51 @@ function Invoke-ExternalCommand {
     }
 }
 
+function ConvertTo-WindowsCommandLineArgument {
+    param([AllowNull()][string]$Argument)
+
+    if ($null -eq $Argument) {
+        return '""'
+    }
+    if ($Argument.Length -eq 0) {
+        return '""'
+    }
+    if ($Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    $result = New-Object System.Text.StringBuilder
+    [void]$result.Append('"')
+    $backslashes = 0
+
+    foreach ($char in $Argument.ToCharArray()) {
+        if ($char -eq '\') {
+            $backslashes++
+            continue
+        }
+
+        if ($char -eq '"') {
+            [void]$result.Append(('\' * ($backslashes * 2 + 1)))
+            [void]$result.Append('"')
+        }
+        else {
+            if ($backslashes -gt 0) {
+                [void]$result.Append(('\' * $backslashes))
+            }
+            [void]$result.Append($char)
+        }
+
+        $backslashes = 0
+    }
+
+    if ($backslashes -gt 0) {
+        [void]$result.Append(('\' * ($backslashes * 2)))
+    }
+    [void]$result.Append('"')
+
+    return $result.ToString()
+}
+
 function Invoke-PowerShellScript {
     param(
         [Parameter(Mandatory = $true)]
@@ -152,37 +197,91 @@ function Invoke-PowerShellScript {
     )
 
     $safeFilePath = [System.IO.Path]::GetFullPath($FilePath)
-    $escapedArgs = @()
+
+    # Build the powershell.exe argument list using safe argument escaping
+    $psArgsList = New-Object System.Collections.ArrayList
+    [void]$psArgsList.Add("-NoProfile")
+    [void]$psArgsList.Add("-ExecutionPolicy")
+    [void]$psArgsList.Add("Bypass")
+    [void]$psArgsList.Add("-File")
+    [void]$psArgsList.Add($safeFilePath)
+
     foreach ($a in $Arguments) {
-        if ($a -match '[\s"]') {
-            $escapedArgs += "`"$($a -replace '"', '""')`""
-        }
-        else {
-            $escapedArgs += $a
-        }
+        [void]$psArgsList.Add($a)
     }
-    $cliArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$safeFilePath`" $($escapedArgs -join ' ')"
+
+    $quotedParts = @()
+    foreach ($arg in $psArgsList) {
+        $quotedParts += ConvertTo-WindowsCommandLineArgument -Argument $arg
+    }
+    $cliArgs = $quotedParts -join " "
     $displayCommand = if ($Arguments.Count -gt 0) { "$safeFilePath $($Arguments -join ' ')" } else { $safeFilePath }
+
+    # Determine report output paths
+    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $scriptName = [System.IO.Path]::GetFileNameWithoutExtension($safeFilePath)
+    $reportsDir = Join-Path $RootDir "reports"
+    if (-not (Test-Path $reportsDir)) {
+        New-Item -ItemType Directory -Path $reportsDir -Force | Out-Null
+    }
+    $stdoutFile = Join-Path $reportsDir "validate-child-${timestamp}-${scriptName}.stdout.txt"
+    $stderrFile = Join-Path $reportsDir "validate-child-${timestamp}-${scriptName}.stderr.txt"
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "powershell.exe"
     $psi.Arguments = $cliArgs
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
 
     $proc = [System.Diagnostics.Process]::Start($psi)
+
+    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+    $stderrTask = $proc.StandardError.ReadToEndAsync()
+
     $finished = $proc.WaitForExit($TimeoutSec * 1000)
 
     if (-not $finished) {
+        # Timed out: capture partial output, then kill process tree
+        try {
+            $partialStdout = if ($stdoutTask.IsCompleted) { $stdoutTask.Result } else { "" }
+            $partialStderr = if ($stderrTask.IsCompleted) { $stderrTask.Result } else { "" }
+            if ($partialStdout) { [System.IO.File]::WriteAllText($stdoutFile, $partialStdout, (New-Object System.Text.UTF8Encoding($false))) }
+            if ($partialStderr) { [System.IO.File]::WriteAllText($stderrFile, $partialStderr, (New-Object System.Text.UTF8Encoding($false))) }
+        }
+        catch { }
+
         $realPid = $proc.Id
         & taskkill.exe /PID $realPid /T /F 2>$null | Out-Null
         Start-Sleep -Milliseconds 500
         if (-not $proc.HasExited) { Stop-Process -Id $realPid -Force -ErrorAction SilentlyContinue }
-        throw "TIMEOUT: $displayCommand (${TimeoutSec}s)"
+        throw "TIMEOUT: $displayCommand (${TimeoutSec}s)`n  stdout: $stdoutFile`n  stderr: $stderrFile"
     }
 
-    if ($proc.ExitCode -ne 0) {
-        throw "$displayCommand failed with exit code $($proc.ExitCode)"
+    [void]$stdoutTask.Wait(5000)
+    [void]$stderrTask.Wait(5000)
+
+    $stdout = $stdoutTask.Result
+    $stderr = $stderrTask.Result
+    $exitCode = $proc.ExitCode
+
+    # Always save stdout/stderr to files for diagnostics
+    if ($stdout) {
+        [System.IO.File]::WriteAllText($stdoutFile, $stdout, (New-Object System.Text.UTF8Encoding($false)))
+    }
+    if ($stderr) {
+        [System.IO.File]::WriteAllText($stderrFile, $stderr, (New-Object System.Text.UTF8Encoding($false)))
+    }
+
+    # Clean up empty stdout/stderr files when everything passed
+    if ($exitCode -eq 0) {
+        if ((Test-Path $stdoutFile) -and (-not $stdout)) { Remove-Item $stdoutFile -Force -ErrorAction SilentlyContinue }
+        if ((Test-Path $stderrFile) -and (-not $stderr)) { Remove-Item $stderrFile -Force -ErrorAction SilentlyContinue }
+    }
+
+    if ($exitCode -ne 0) {
+        throw "$displayCommand failed with exit code $exitCode`n  stdout: $stdoutFile`n  stderr: $stderrFile"
     }
 }
 

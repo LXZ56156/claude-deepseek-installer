@@ -640,6 +640,103 @@ if ($simText -match 'ShellExecute' -and $simText -notmatch 'SetEnvironmentVariab
     throw "simulate-user-release.ps1 ShellExecute must inject/restore TestSafe env vars"
 }
 
+# 18c-1. simulate-user-release.ps1: 一键修复依赖.cmd coverage (v1.3.2 final)
+if ($simText -notmatch '一键修复依赖\.cmd') {
+    throw "simulate-user-release.ps1 must cover 一键修复依赖.cmd"
+}
+if ($simText -notmatch '一键修复依赖\.cmd.*TestSafe') {
+    throw "simulate-user-release.ps1 must run 一键修复依赖.cmd with TestSafe env"
+}
+# ShellExecute non-0/1 exit code must throw
+if ($simText -notmatch 'ShellExecute exited with unexpected code') {
+    throw "simulate-user-release.ps1 ShellExecute must throw on non-0/1 exit code (not just WARN)"
+}
+
+# 18d. release-artifacts.md anti-regression checks (v1.3.2 final)
+$releaseArtifactsPath = Join-Path $RootDir "docs\release-artifacts.md"
+if (-not (Test-Path $releaseArtifactsPath)) {
+    throw "docs/release-artifacts.md must exist"
+}
+$releaseArtifactsText = Get-Content -Path $releaseArtifactsPath -Raw -Encoding UTF8
+if ($releaseArtifactsText -match '当前 HEAD') {
+    throw "docs/release-artifacts.md must NOT contain '当前 HEAD'; use a specific commit SHA"
+}
+if ($releaseArtifactsText -notmatch '[0-9a-fA-F]{7,}') {
+    throw "docs/release-artifacts.md must contain a specific commit SHA (at least 7 hex chars)"
+}
+if ($releaseArtifactsText -notmatch '[0-9a-fA-F]{64}') {
+    throw "docs/release-artifacts.md must contain SHA256 (64 hex chars)"
+}
+if ($releaseArtifactsText -notmatch '(Size|文件大小|KB|bytes)') {
+    throw "docs/release-artifacts.md must contain Size or file size info"
+}
+if ($releaseArtifactsText -notmatch '(Entries|条目数)') {
+    throw "docs/release-artifacts.md must contain Entries or entry count"
+}
+if ($releaseArtifactsText -notmatch 'Mode All.*RequireClean') {
+    throw "docs/release-artifacts.md must document Mode All + RequireClean validation command"
+}
+
+# 18e. validate.ps1 Invoke-PowerShellScript anti-regression (v1.3.2 final)
+$validateText = Get-Content -Path (Join-Path $RootDir "scripts\validate.ps1") -Raw -Encoding UTF8
+# Must NOT use -Command with bootstrap
+if ($validateText -match '-Command\s+\"\$bootstrapCmd\"') {
+    throw "validate.ps1 must NOT use -Command with bootstrap"
+}
+# Must NOT use Start-Job
+if ($validateText -match 'function Invoke-PowerShellScript[\s\S]{0,2500}\bStart-Job\b') {
+    throw "validate.ps1 Invoke-PowerShellScript must NOT use Start-Job within its function body"
+}
+# Must use System.Diagnostics.ProcessStartInfo
+if ($validateText -notmatch 'System\.Diagnostics\.ProcessStartInfo') {
+    throw "validate.ps1 Invoke-PowerShellScript must use System.Diagnostics.ProcessStartInfo"
+}
+# Must use [System.Diagnostics.Process]::Start($psi)
+if ($validateText -notmatch '\[System\.Diagnostics\.Process\]::Start\(\$psi\)') {
+    throw "validate.ps1 Invoke-PowerShellScript must use [System.Diagnostics.Process]::Start(`$psi)"
+}
+# Must use $proc.WaitForExit with TimeoutSec
+if ($validateText -notmatch '\$proc\.WaitForExit\(\$TimeoutSec\s*\*\s*1000\)') {
+    throw "validate.ps1 Invoke-PowerShellScript must use `$proc.WaitForExit(`$TimeoutSec * 1000)"
+}
+# Must use taskkill /T /F
+if ($validateText -notmatch 'taskkill\.exe\s+/PID\s+\$realPid\s+/T\s+/F') {
+    throw "validate.ps1 Invoke-PowerShellScript must use taskkill.exe /PID `$realPid /T /F"
+}
+# Must have Stop-Process fallback
+if ($validateText -notmatch 'Stop-Process\s+-Id\s+\$realPid\s+-Force') {
+    throw "validate.ps1 Invoke-PowerShellScript must have Stop-Process fallback"
+}
+# CoreSandboxFlow doctor.ps1 must have -TestSafe
+if ($validateText -notmatch 'doctor\.ps1[\s\S]{0,300}-TestSafe') {
+    throw "validate.ps1 CoreSandboxFlow must pass -TestSafe to doctor.ps1"
+}
+# CoreSandboxFlow Start-Here.ps1 FixDeps must have -NonInteractive
+if ($validateText -notmatch 'Start-Here\.ps1[\s\S]{0,300}-FixDeps[\s\S]{0,120}-NonInteractive') {
+    throw "validate.ps1 CoreSandboxFlow FixDeps step must pass -NonInteractive"
+}
+# Must have stdout/stderr file capture
+if ($validateText -notmatch 'RedirectStandardOutput\s*=\s*\$true') {
+    throw "validate.ps1 Invoke-PowerShellScript must use RedirectStandardOutput"
+}
+if ($validateText -notmatch 'RedirectStandardError\s*=\s*\$true') {
+    throw "validate.ps1 Invoke-PowerShellScript must use RedirectStandardError"
+}
+if ($validateText -notmatch 'validate-child-.*\.stdout\.txt') {
+    throw "validate.ps1 Invoke-PowerShellScript must write stdout to validate-child-*.stdout.txt"
+}
+if ($validateText -notmatch 'validate-child-.*\.stderr\.txt') {
+    throw "validate.ps1 Invoke-PowerShellScript must write stderr to validate-child-*.stderr.txt"
+}
+# Must have ConvertTo-WindowsCommandLineArgument
+if ($validateText -notmatch 'function ConvertTo-WindowsCommandLineArgument') {
+    throw "validate.ps1 must define ConvertTo-WindowsCommandLineArgument function"
+}
+# ConvertTo-WindowsCommandLineArgument must handle trailing backslashes
+if ($validateText -notmatch '\$backslashes\s*\*\s*2') {
+    throw "validate.ps1 ConvertTo-WindowsCommandLineArgument must handle trailing backslashes"
+}
+
 # 17. Start-Job failure must log skip reason with "避免诊断流程卡死"
 if ($claudeInstallText -notmatch '已跳过 claude doctor，避免诊断流程卡死') {
     throw "Invoke-ClaudeDoctorInteractiveSafe must log that claude doctor was skipped to avoid hang"
