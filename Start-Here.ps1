@@ -2,7 +2,7 @@
 # Start-Here.ps1 - Claude Code + DeepSeek 一键安装总控入口 (v1.3.2)
 #
 # 用法:
-#   双击 "开始安装.cmd" 或:
+#   双击 "00-点我开始安装.cmd" 或:
 #   powershell -ExecutionPolicy Bypass -File .\Start-Here.ps1
 #
 # 功能:
@@ -155,7 +155,7 @@ function Write-ApiKeySkipGuidance {
     #>
     Write-Host ""
     Write-Info "已跳过 API Key 配置。"
-    Write-Info "可稍后运行：开始安装.cmd → 高级选项 → 仅配置 DeepSeek API。"
+    Write-Info "可稍后运行：00-点我开始安装.cmd → 高级选项 → 仅配置 DeepSeek API。"
     Write-Info "也可以运行 configure-deepseek.ps1 单独配置。"
 }
 
@@ -481,7 +481,7 @@ function Step-InstallClaudeCode {
     if ($installResult.Status -eq "node_installed_needs_restart" -or
         $installResult.Status -eq "installed_needs_restart") {
         Write-Warning "当前需要重开终端后继续，已跳过后续配置步骤。"
-        Write-Info "下一步: 关闭此窗口，重新双击「开始安装.cmd」。"
+        Write-Info "下一步: 关闭此窗口，重新双击「00-点我开始安装.cmd」。"
         return $false
     }
 
@@ -903,7 +903,7 @@ DeepSeek 配置: $(if ($script:ConfigWritten) { "已配置" } else { "未配置"
 API 测试: $apiTestStatus$(if ($script:ApiTestFailed) { " ($script:ApiTestFailReason)" } elseif ($script:ApiTestSkipped) { " - 未验证 API 是否可用" } else { "" })
 整体状态: $overallStatus
 $(if ($script:TestSafeMode) { "测试安全模式流程完成，不代表真实安装/API 已验证。" } else { "" })
-$(if ($script:ClaudeInstallStatus -match "needs_restart") { "NEEDS_RESTART - 需要关闭窗口重新运行「开始安装.cmd」继续安装。" } else { "" })
+$(if ($script:ClaudeInstallStatus -match "needs_restart") { "NEEDS_RESTART - 需要关闭窗口重新运行「00-点我开始安装.cmd」继续安装。" } else { "" })
 
 一、系统信息
 --------------------------------------
@@ -962,7 +962,7 @@ $(if ($script:TestSafeMode) {
 "测试安全模式未执行真实安装，也未验证真实 API。
 本结果只代表沙盒配置流程通过。"
 } elseif ($script:ClaudeInstallStatus -match "needs_restart") {
-"关闭该窗口后重新双击「开始安装.cmd」继续安装流程。
+"关闭该窗口后重新双击「00-点我开始安装.cmd」继续安装流程。
 脚本会继续安装 Claude Code 并配置 DeepSeek。"
 } elseif ($script:ClaudeInstalled -and $script:ConfigWritten) {
 "安装完成不代表 API 永久可用。
@@ -1129,7 +1129,7 @@ function Show-CompletionPage {
         Write-Info "Node.js 已安装完成（或 Claude Code npm 全局安装完成），但"
         Write-Info "当前终端窗口的 PATH 尚未刷新，暂时无法识别新命令。"
         Write-Host ""
-        Write-Info "下一步: 关闭此窗口，重新双击「开始安装.cmd」。"
+        Write-Info "下一步: 关闭此窗口，重新双击「00-点我开始安装.cmd」。"
         Write-Info "脚本会继续安装 Claude Code 并配置 DeepSeek。"
         Write-Host ""
         Write-Info "类比：就像手机安装完 App 后需要点图标打开，"
@@ -1548,7 +1548,7 @@ function Main {
             Write-Warning "当前运行路径疑似在压缩包临时目录中。"
             Write-Warning "请先完整解压 ZIP 到普通文件夹，例如："
             Write-Host "  D:\ClaudeDeepSeek" -ForegroundColor Cyan
-            Write-Warning "然后再双击 [开始安装.cmd]。"
+            Write-Warning "然后再双击 [00-点我开始安装.cmd]。"
             Write-Warning "不要在压缩包预览窗口中直接运行。"
             Write-Host ""
             Write-Info "本次运行日志: $(Get-LogFilePath)"

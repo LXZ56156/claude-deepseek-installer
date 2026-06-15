@@ -54,7 +54,7 @@ Write-Host ""
 Write-Host "[1/5] 验证必要文件..." -ForegroundColor Cyan
 
 $RequiredFiles = @(
-    "开始安装.cmd",
+    "00-点我开始安装.cmd",
     "一键诊断.cmd",
     "恢复或卸载配置.cmd",
     "一键修复依赖.cmd",
@@ -142,7 +142,7 @@ Write-Host ""
 # docs/ 和 examples/ 使用文件级白名单，防止截图/草稿/内部文档误入
 $AllowedEntries = @(
     # === 入口文件（用户双击的 .cmd 文件） ===
-    "开始安装.cmd",
+    "00-点我开始安装.cmd",
     "一键诊断.cmd",
     "恢复或卸载配置.cmd",
     "一键修复依赖.cmd",

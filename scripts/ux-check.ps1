@@ -113,7 +113,7 @@ try {
     Write-CheckHeader "1. 入口文件存在性检查"
 
     $entryFiles = @(
-        "开始安装.cmd",
+        "00-点我开始安装.cmd",
         "一键诊断.cmd",
         "恢复或卸载配置.cmd",
         "Start-Install.cmd",
@@ -202,7 +202,7 @@ try {
     Write-CheckHeader "4. .cmd 与 .ps1 对应关系检查"
 
     $cmdMappings = @{
-        "开始安装.cmd"        = "Start-Here.ps1"
+        "00-点我开始安装.cmd"        = "Start-Here.ps1"
         "一键诊断.cmd"        = "doctor.ps1"
         "恢复或卸载配置.cmd"  = "uninstall-config.ps1"
         "Start-Install.cmd"   = "Start-Here.ps1"
@@ -617,10 +617,10 @@ x-api-key: $TestApiKey
 
     # 统一使用中文箭头 →
     Assert "Start-Here.ps1 使用中文箭头 →" {
-        $startHereText -match [regex]::Escape('开始安装.cmd → 高级选项 → 仅配置 DeepSeek API')
+        $startHereText -match [regex]::Escape('00-点我开始安装.cmd → 高级选项 → 仅配置 DeepSeek API')
     } "缺失中文箭头路径"
     Assert "Start-Here.ps1 不使用 ASCII ->" {
-        $startHereText -notmatch '开始安装\.cmd\s*->\s*高级选项'
+        $startHereText -notmatch '00-点我开始安装\.cmd\s*->\s*高级选项'
     } "仍使用 ASCII 箭头 ->"
 
     # Write-ApiKeySkipGuidance 函数

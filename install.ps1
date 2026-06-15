@@ -5,7 +5,7 @@
 #   powershell -ExecutionPolicy Bypass -File .\install.ps1
 #
 # 注意:
-#   此入口已废弃，请直接使用 Start-Here.ps1 / 开始安装.cmd。
+#   此入口已废弃，请直接使用 Start-Here.ps1 / 00-点我开始安装.cmd。
 #   本脚本会自动转发到对应新版入口，不会进入旧独立流程。
 #
 # 合规声明:
@@ -62,7 +62,7 @@ $forwardMessage = switch ($Mode) {
 Write-Host ""
 Write-Host "==============================================================" -ForegroundColor Yellow
 Write-Host "  [INFO] 检测到你运行的是旧入口 install.ps1。" -ForegroundColor Yellow
-Write-Host "  当前推荐入口是 Start-Here.ps1 / 开始安装.cmd。" -ForegroundColor Yellow
+Write-Host "  当前推荐入口是 Start-Here.ps1 / 00-点我开始安装.cmd。" -ForegroundColor Yellow
 Write-Host "  $forwardMessage" -ForegroundColor Yellow
 Write-Host "==============================================================" -ForegroundColor Yellow
 Write-Host ""

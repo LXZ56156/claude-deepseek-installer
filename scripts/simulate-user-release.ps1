@@ -427,7 +427,7 @@ try {
     [void]$runs.Add($startFlowRun)
 
     [void]$runs.Add((Invoke-SimCommand -Name "Start-Install.cmd cancel" -FileName $cmdExe -Arguments @("/d", "/c", "echo N| .\Start-Install.cmd") -WorkingDirectory $releaseRoot -Environment $envVars))
-    [void]$runs.Add((Invoke-SimCommand -Name "开始安装.cmd cancel" -FileName $cmdExe -Arguments @("/d", "/c", "echo N| .\开始安装.cmd") -WorkingDirectory $releaseRoot -Environment $envVars))
+    [void]$runs.Add((Invoke-SimCommand -Name "00-点我开始安装.cmd cancel" -FileName $cmdExe -Arguments @("/d", "/c", "echo N| .\00-点我开始安装.cmd") -WorkingDirectory $releaseRoot -Environment $envVars))
 
     $startHereLogs = Get-ChildItem -Path (Join-Path $releaseRoot "logs") -Filter "start-here-*.log" -ErrorAction SilentlyContinue
     $startHereLogText = ($startHereLogs | ForEach-Object { Get-Content -Path $_.FullName -Raw -Encoding UTF8 }) -join "`n"
@@ -590,7 +590,7 @@ try {
     New-Item -ItemType Directory -Path $missingDir -Force | Out-Null
     foreach ($launcher in @(
         "Start-Install.cmd",
-        "开始安装.cmd",
+        "00-点我开始安装.cmd",
         "Run-Diagnostics.cmd",
         "一键诊断.cmd",
         "Restore-Config.cmd",
@@ -619,7 +619,7 @@ try {
     if ($shellExecuteCapable) {
         $launcherNames = @(
             "Start-Install.cmd",
-            "开始安装.cmd",
+            "00-点我开始安装.cmd",
             "Run-Diagnostics.cmd",
             "一键诊断.cmd",
             "Restore-Config.cmd",

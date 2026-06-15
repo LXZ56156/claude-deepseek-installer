@@ -35,7 +35,7 @@ powershell -ExecutionPolicy Bypass -File .\repair-deps.ps1 -TestSafe
 
 | 入口 | 用途 |
 |------|------|
-| `开始安装.cmd` / `Start-Install.cmd` | 懒人安装（双击） |
+| `00-点我开始安装.cmd` / `Start-Install.cmd` | 懒人安装（双击） |
 | `一键诊断.cmd` / `Run-Diagnostics.cmd` | 诊断报告（双击） |
 | `一键修复依赖.cmd` | 修复缺失的 Node.js/npm/Claude（双击） |
 | `恢复或卸载配置.cmd` / `Restore-Config.cmd` | 配置管理（双击） |
@@ -92,7 +92,7 @@ bootstrap.ps1
 
 | 文件 | 职责 |
 |------|------|
-| `开始安装.cmd` / `Start-Install.cmd` | 双击启动懒人安装（纯 ASCII，无 BOM，含文件存在性检查） |
+| `00-点我开始安装.cmd` / `Start-Install.cmd` | 双击启动懒人安装（纯 ASCII，无 BOM，含文件存在性检查） |
 | `一键诊断.cmd` / `Run-Diagnostics.cmd` | 双击启动诊断（同上编码约束） |
 | `恢复或卸载配置.cmd` / `Restore-Config.cmd` | 双击启动配置管理（同上编码约束） |
 | `一键修复依赖.cmd` | 双击启动依赖修复：检测并修复缺失的 Node.js/npm/Claude（不会修改 Key/配置） |

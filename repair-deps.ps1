@@ -123,7 +123,7 @@ function Invoke-ClaudeRepair {
             Write-Info "如需自动安装 Claude Code，请使用 -AllowInstall 参数。"
         }
         else {
-            Add-CR "Claude Code 修复" "SKIP" "用户取消安装，可稍后运行开始安装.cmd"
+            Add-CR "Claude Code 修复" "SKIP" "用户取消安装，可稍后运行00-点我开始安装.cmd"
         }
         return
     }
@@ -320,7 +320,7 @@ function Start-RepairDeps {
                         Write-Info "已取消。请手动安装 Node.js 后重新运行。"
                         Write-Info "下载地址: https://nodejs.org (选择 LTS 版本)"
                         Write-Host ""
-                        Write-Info "安装完成后关闭此窗口，重新双击 [开始安装.cmd]。"
+                        Write-Info "安装完成后关闭此窗口，重新双击 [00-点我开始安装.cmd]。"
                         Generate-Report
                         return
                     }
@@ -335,7 +335,7 @@ function Start-RepairDeps {
                     Write-Warning "============================================================"
                     Write-Warning "  Node.js 已安装完成。"
                     Write-Warning "  这是第一阶段完成，不是失败。"
-                    Write-Warning "  请关闭当前窗口，再重新双击 [开始安装.cmd]。"
+                    Write-Warning "  请关闭当前窗口，再重新双击 [00-点我开始安装.cmd]。"
                     Write-Warning "  脚本会继续安装 Claude Code 并配置 DeepSeek。"
                     Write-Warning "============================================================"
                     $needsRestart = $true
@@ -350,7 +350,7 @@ function Start-RepairDeps {
         else {
             Write-Info "未检测到 winget。请手动安装 Node.js："
             Write-Info "下载地址: https://nodejs.org (选择 LTS 版本)"
-            Write-Info "安装完成后关闭此窗口，重新双击 [开始安装.cmd]。"
+            Write-Info "安装完成后关闭此窗口，重新双击 [00-点我开始安装.cmd]。"
         }
     }
 
@@ -419,7 +419,7 @@ function Generate-Report {
 
     if ($needsRestart) {
         Add-RL ""
-        Add-RL "  状态: NEEDS_RESTART - 需要关闭窗口重新打开 [开始安装.cmd]。"
+        Add-RL "  状态: NEEDS_RESTART - 需要关闭窗口重新打开 [00-点我开始安装.cmd]。"
     }
     elseif ($nodeInfo.IsSupported -and $npmInfo.Installed -and $claudeVer) {
         Add-RL ""
@@ -453,13 +453,13 @@ function Generate-Report {
 
     if ($needsRestart) {
         Add-RL "  1. 关闭当前窗口"
-        Add-RL "  2. 重新双击 [开始安装.cmd]"
+        Add-RL "  2. 重新双击 [00-点我开始安装.cmd]"
         Add-RL "  3. 脚本会继续安装 Claude Code 并配置 DeepSeek"
     }
     elseif (-not $nodeInfo.IsSupported) {
         Add-RL "  1. 安装 Node.js LTS: https://nodejs.org"
         Add-RL "  2. 或运行本工具自动安装（需要 winget）"
-        Add-RL "  3. 安装完成后重新运行 [开始安装.cmd]"
+        Add-RL "  3. 安装完成后重新运行 [00-点我开始安装.cmd]"
     }
     elseif (-not $npmInfo.Installed) {
         Add-RL "  1. 关闭当前窗口重新打开（PATH 可能未刷新）"
@@ -467,7 +467,7 @@ function Generate-Report {
     }
     elseif (-not $claudeVer) {
         Add-RL "  1. 如果 Node.js 和 npm 已正常，重新运行本工具可安装 Claude Code"
-        Add-RL "  2. 或运行 [开始安装.cmd] 自动安装 Claude Code"
+        Add-RL "  2. 或运行 [00-点我开始安装.cmd] 自动安装 Claude Code"
     }
     else {
         Add-RL "  所有依赖已就绪，无需进一步操作。"

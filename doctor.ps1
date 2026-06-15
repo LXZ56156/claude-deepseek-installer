@@ -839,10 +839,10 @@ function Write-QuickSummary {
         Add-ReportLine "    - 运行「一键修复依赖.cmd」安装 Node.js"
     }
     if (-not $claudeVer) {
-        Add-ReportLine "    - 运行「开始安装.cmd」安装 Claude Code"
+        Add-ReportLine "    - 运行「00-点我开始安装.cmd」安装 Claude Code"
     }
     if (-not $configInfo.Exists -or -not $configInfo.IsValid) {
-        Add-ReportLine "    - 运行「开始安装.cmd」配置 DeepSeek API Key"
+        Add-ReportLine "    - 运行「00-点我开始安装.cmd」配置 DeepSeek API Key"
     }
     if ($coreErrorCount -gt 0) {
         Add-ReportLine "    - 检查下方 [ERROR] 项目并逐项解决"

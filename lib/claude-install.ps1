@@ -2009,7 +2009,7 @@ function Install-ClaudeCodeAuto {
         }
 
         Write-Warning "Claude Code 可能已安装，但当前终端还没有刷新 PATH。"
-        Write-Info "请关闭此窗口后重新双击 [开始安装.cmd]。"
+        Write-Info "请关闭此窗口后重新双击 [00-点我开始安装.cmd]。"
         Write-Info "如果仍不行，请运行 [一键诊断.cmd] 获取诊断报告。"
 
         $npmPrefix = Invoke-CommandSafe -Command "npm" -Arguments @("prefix", "-g") -TimeoutSec 8

@@ -249,7 +249,7 @@ function Test-UserPathRisk {
         $result.RiskLevel = "BLOCK"
         $result.IsBlocked = $true
         [void]$result.RiskItems.Add("ZIP临时目录: $($zipCheck.Reason)")
-        [void]$result.Suggestions.Add("请先完整解压 ZIP 到普通文件夹，例如 D:\ClaudeDeepSeek，然后再双击开始安装.cmd。不要在压缩包预览窗口中直接运行。")
+        [void]$result.Suggestions.Add("请先完整解压 ZIP 到普通文件夹，例如 D:\ClaudeDeepSeek，然后再双击00-点我开始安装.cmd。不要在压缩包预览窗口中直接运行。")
         return $result
     }
 

@@ -786,6 +786,58 @@ if ($validateText -notmatch 'WorkingDirectory\s*=\s*\$RootDir' -and
     throw "validate.ps1 Invoke-PowerShellScript must explicitly set ProcessStartInfo.WorkingDirectory"
 }
 
+# 18f. 00-点我开始安装.cmd rename anti-regression (v1.3.2 final)
+$primaryLauncher = Join-Path $RootDir "00-点我开始安装.cmd"
+if (-not (Test-Path $primaryLauncher)) {
+    throw "Primary user launcher 00-点我开始安装.cmd must exist after rename"
+}
+$oldChineseLauncher = Join-Path $RootDir "开始安装.cmd"
+if (Test-Path $oldChineseLauncher) {
+    throw "Old launcher 开始安装.cmd must not remain after rename to 00-点我开始安装.cmd"
+}
+# Content checks for the new primary launcher
+$primaryLauncherText = Get-Content -Path $primaryLauncher -Raw -Encoding ASCII
+if ($primaryLauncherText -notmatch 'Start-Here\.ps1') {
+    throw "00-点我开始安装.cmd must call Start-Here.ps1"
+}
+if ($primaryLauncherText -notmatch 'Please extract the full ZIP package first') {
+    throw "00-点我开始安装.cmd must show full ZIP extraction guidance"
+}
+if ($primaryLauncherText -notmatch 'exit /b') {
+    throw "00-点我开始安装.cmd must propagate exit code with exit /b"
+}
+$launcherBytes = [System.IO.File]::ReadAllBytes($primaryLauncher)
+foreach ($b in $launcherBytes) {
+    if ($b -gt 0x7F) {
+        throw "00-点我开始安装.cmd must be ASCII-only"
+    }
+}
+# build-release.ps1 whitelist must include new name, keep English, drop old name
+$buildReleaseText = Get-Content -Path (Join-Path $RootDir "scripts\build-release.ps1") -Raw -Encoding UTF8
+if ($buildReleaseText -notmatch '00-点我开始安装\.cmd') {
+    throw "build-release.ps1 must include 00-点我开始安装.cmd in release whitelist"
+}
+if ($buildReleaseText -notmatch 'Start-Install\.cmd') {
+    throw "build-release.ps1 must keep Start-Install.cmd in release whitelist"
+}
+if ($buildReleaseText -match '(?<!00-点我)开始安装\.cmd') {
+    throw "build-release.ps1 must not include old 开始安装.cmd (use 00-点我开始安装.cmd)"
+}
+# simulate-user-release.ps1 must cover the renamed launcher
+$simTextCheck = Get-Content -Path (Join-Path $RootDir "scripts\simulate-user-release.ps1") -Raw -Encoding UTF8
+if ($simTextCheck -notmatch '00-点我开始安装\.cmd') {
+    throw "simulate-user-release.ps1 must cover 00-点我开始安装.cmd"
+}
+if ($simTextCheck -match '(?<!00-点我)开始安装\.cmd') {
+    throw "simulate-user-release.ps1 must not reference old 开始安装.cmd"
+}
+if ($simTextCheck -notmatch '00-点我开始安装\.cmd cancel') {
+    throw "simulate-user-release.ps1 must run 00-点我开始安装.cmd cancel flow"
+}
+if ($simTextCheck -notmatch 'ShellExecute[\s\S]{0,800}00-点我开始安装\.cmd') {
+    throw "simulate-user-release.ps1 must include 00-点我开始安装.cmd in ShellExecute launcher list"
+}
+
 # 17. Start-Job failure must log skip reason with "避免诊断流程卡死"
 if ($claudeInstallText -notmatch '已跳过 claude doctor，避免诊断流程卡死') {
     throw "Invoke-ClaudeDoctorInteractiveSafe must log that claude doctor was skipped to avoid hang"
@@ -1241,7 +1293,7 @@ if ($uninstallText -match 'Sort-Object\s+LastWriteTime') {
 
 Write-Host "[check] .cmd launcher encoding"
 $cmdFiles = @(
-    (Join-Path $RootDir "开始安装.cmd"),
+    (Join-Path $RootDir "00-点我开始安装.cmd"),
     (Join-Path $RootDir "一键诊断.cmd"),
     (Join-Path $RootDir "恢复或卸载配置.cmd"),
     (Join-Path $RootDir "Start-Install.cmd"),
@@ -1435,10 +1487,10 @@ if ($startHereText -notmatch "已取消 API Key 输入。") {
 }
 
 # 8. 统一使用中文箭头 →
-if ($startHereText -match '开始安装\.cmd\s*->\s*高级选项') {
+if ($startHereText -match '00-点我开始安装\.cmd\s*->\s*高级选项') {
     throw "Start-Here.ps1 must use Chinese arrow '→' not ASCII '->' for skip guidance"
 }
-if ($startHereText -notmatch [regex]::Escape('开始安装.cmd → 高级选项 → 仅配置 DeepSeek API')) {
+if ($startHereText -notmatch [regex]::Escape('00-点我开始安装.cmd → 高级选项 → 仅配置 DeepSeek API')) {
     throw "Start-Here.ps1 must use '→' arrow in skip guidance path"
 }
 

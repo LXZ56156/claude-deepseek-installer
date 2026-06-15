@@ -22,9 +22,9 @@
 > - 不要解压到桌面、下载目录、OneDrive 或微信/QQ 文件接收目录
 > - 如果系统自带解压后中文文件名显示乱码，请用 **7-Zip** 或 **WinRAR** 解压
 
-### 2. 双击「开始安装.cmd」
+### 2. 双击「00-点我开始安装.cmd」
 
-双击项目目录中的 **`开始安装.cmd`**，按提示操作。
+双击项目目录中的 **`00-点我开始安装.cmd`**，按提示操作。
 
 > 如果中文文件名显示异常，请双击 **`Start-Install.cmd`**（英文备用入口）。
 
@@ -106,7 +106,7 @@
 
 | 文件 | 用途 | 怎么用 |
 |------|------|--------|
-| `开始安装.cmd` | 一键安装 | 双击运行 |
+| `00-点我开始安装.cmd` | 一键安装 | 双击运行 |
 | `一键诊断.cmd` | 环境诊断 | 有问题时双击 |
 | `一键修复依赖.cmd` | 修复 Node.js/npm/Claude 缺失（不会修改 Key/配置） | 缺依赖时双击 |
 | `恢复或卸载配置.cmd` | 配置管理 | 换 Key / 恢复备份时双击 |
@@ -161,7 +161,7 @@
 
 ```
 claude-deepseek-installer/
-|-- 开始安装.cmd                  # 一键安装入口（双击）
+|-- 00-点我开始安装.cmd                  # 一键安装入口（双击）
 |-- Start-Install.cmd             # 英文备用安装入口（双击）
 |-- 一键诊断.cmd                  # 一键诊断入口（双击）
 |-- Run-Diagnostics.cmd           # 英文备用诊断入口（双击）
@@ -283,7 +283,7 @@ powershell -ExecutionPolicy Bypass -File .\doctor.ps1 -ShareSafe
 双击 **`一键修复依赖.cmd`** — 检测并修复缺失的 Node.js、npm、Claude Code。
 - 不会修改已配置的 DeepSeek API Key
 - 不会删除已有 Claude 配置
-- 如果提示 NEEDS_RESTART，关闭窗口后重新双击「开始安装.cmd」
+- 如果提示 NEEDS_RESTART，关闭窗口后重新双击「00-点我开始安装.cmd」
 
 ### 第 1 步：双击「一键诊断.cmd」
 
@@ -330,7 +330,7 @@ A: 可以。Claude Code CLI 是核心交付，可以在 PowerShell/CMD 中直接
 
 ### Q: Windows 和 WSL 有什么区别？
 A: Windows 和 WSL 是**两套独立环境**。Claude Code 的配置不共享。
-- 如果你在 Windows PowerShell/CMD 中使用 `claude`，请用 `开始安装.cmd`。
+- 如果你在 Windows PowerShell/CMD 中使用 `claude`，请用 `00-点我开始安装.cmd`。
 - 如果你在 WSL Ubuntu 终端中使用 `claude`，请用 `install_wsl.sh`。
 - 两边的 `settings.json` 不是同一个文件。
 - 不要在 WSL 中运行 Windows 脚本，也不要在 Windows 中运行 WSL 脚本。
