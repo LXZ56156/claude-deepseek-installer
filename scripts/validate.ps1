@@ -221,7 +221,6 @@ function Invoke-CoreSandboxFlow {
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "Start-Here.ps1") -Arguments @(
             "-NonInteractive", "-SkipDisclaimer", "-TestSafe"
         ) -TimeoutSec 300
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "repair-deps.ps1") -Arguments @("-TestSafe") -TimeoutSec 600
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "Start-Here.ps1") -Arguments @("-FixDeps", "-TestSafe") -TimeoutSec 300
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "doctor.ps1") -Arguments @(
             "-ShareSafe", "-SkipApiTest", "-NoOpenReport", "-TestSafe"
