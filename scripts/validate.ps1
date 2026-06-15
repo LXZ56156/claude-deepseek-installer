@@ -44,6 +44,9 @@ Set-Location $RootDir
 $script:StepCount = 0
 $script:Failures = New-Object System.Collections.ArrayList
 
+# 全局 TestSafe 模式：validate.ps1 只做验收，绝不真实安装/联网/WSL
+$env:CCDI_TEST_MODE = "1"
+
 # git 可用性检查
 $gitAvailable = $null -ne (Get-Command "git" -ErrorAction SilentlyContinue)
 if (-not $gitAvailable) {
