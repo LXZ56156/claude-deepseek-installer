@@ -165,11 +165,17 @@ function Invoke-PowerShellScript {
         $escaped = $a -replace "'", "''"
         $bootstrapArgs += "'$escaped'"
     }
-    $bootstrapCmd = (
-        '$ErrorActionPreference="Continue";' +
-        "& '$escapedFilePath' $($bootstrapArgs -join ' ') 1> '$stdoutPath' 2> '$stderrPath';" +
-        'exit $LASTEXITCODE'
-    )
+    $bootstrapCmd = @"
+`$ErrorActionPreference = "Continue"
+try {
+    & '$escapedFilePath' $($bootstrapArgs -join ' ') 1> '$stdoutPath' 2> '$stderrPath'
+    if (`$?) { exit 0 } else { exit 1 }
+}
+catch {
+    try { (`$_ | Out-String) | Add-Content -Path '$stderrPath' -Encoding UTF8 } catch {}
+    exit 1
+}
+"@
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "powershell.exe"

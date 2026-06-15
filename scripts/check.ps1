@@ -567,8 +567,9 @@ $validateText = Get-Content -Path (Join-Path $RootDir "scripts\validate.ps1") -R
 if ($validateText -notmatch '\[int\]\$TimeoutSec') {
     throw "validate.ps1 Invoke-PowerShellScript must have TimeoutSec parameter"
 }
-if ($validateText -match 'Start-Job[\s\S]{0,300}Invoke-PowerShellScript') {
-    throw "validate.ps1 Invoke-PowerShellScript must NOT use Start-Job for child execution"
+# Check Start-Job within the Invoke-PowerShellScript function scope (function name comes first, then body)
+if ($validateText -match 'function Invoke-PowerShellScript[\s\S]{0,2500}\bStart-Job\b') {
+    throw "validate.ps1 Invoke-PowerShellScript must NOT use Start-Job within its function body"
 }
 if ($validateText -notmatch 'System\.Diagnostics\.ProcessStartInfo') {
     throw "validate.ps1 must use System.Diagnostics.ProcessStartInfo for child process"
@@ -587,6 +588,22 @@ if ($validateText -notmatch '\$proc\.WaitForExit\(\$TimeoutSec') {
 }
 if ($validateText -notmatch 'doctor\.ps1[\s\S]{0,300}-TestSafe') {
     throw "validate.ps1 CoreSandboxFlow must pass -TestSafe to doctor.ps1"
+}
+# Bootstrap exit code: must not rely solely on $LASTEXITCODE; must have try/catch
+if ($validateText -match 'function Invoke-PowerShellScript[\s\S]{0,2500}exit\s+\$LASTEXITCODE[\s\S]{0,100}exit\s+0') {
+    # OK: exit $LASTEXITCODE NOT the only exit path (try/catch has exit 0 / exit 1)
+} elseif ($validateText -match 'function Invoke-PowerShellScript[\s\S]{0,2500}exit\s+\$LASTEXITCODE') {
+    if ($validateText -notmatch 'function Invoke-PowerShellScript[\s\S]{0,2500}t\b.*ry\b[\s\S]{0,500}' + 'c\b.*atch\b') {
+        throw "validate.ps1 bootstrap must NOT rely solely on exit `$LASTEXITCODE; use try/catch with `$?"
+    }
+}
+# Bootstrap must have try/catch wrapping the child script call
+if ($validateText -notmatch 'function Invoke-PowerShellScript[\s\S]{0,2500}try\s*\{[\s\S]{0,500}catch\s*\{') {
+    throw "validate.ps1 bootstrap must wrap child call in try/catch"
+}
+# Bootstrap catch must write exception to stderr and exit 1
+if ($validateText -notmatch 'catch[\s\S]{0,200}Add-Content.*stderrPath') {
+    throw "validate.ps1 bootstrap catch must write exception to stderr file"
 }
 
 # 17. Start-Job failure must log skip reason with "避免诊断流程卡死"
