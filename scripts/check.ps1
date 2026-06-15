@@ -2390,4 +2390,59 @@ if ($doctorText -notmatch '\$errSafe\s*=\s*Sanitize-PathForReport.*\$c\.Error') 
 
 Write-Host "[check] P1.1 fix anti-regression OK"
 
+# ============================================================
+# P1.2 修复防回归: Write-QuickSummary 与 inventory 一致性 (v1.3.2)
+# ============================================================
+Write-Host "[check] P1.2 fix anti-regression: Write-QuickSummary consistency with claude inventory"
+
+$doctorText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+
+# 提取 Write-QuickSummary 函数体
+$wqsFuncText = if ($doctorText -match '(?s)function Write-QuickSummary\s*\{.*?\n\}') {
+    $matches[0]
+} else { "" }
+if (-not $wqsFuncText) {
+    throw "Write-QuickSummary function body not found"
+}
+
+# 1. Write-QuickSummary 不得直接以 Test-ClaudeInstalled 作为主判断
+#    必须通过 CheckResults 中的 Claude Code CLI / 当前 claude 来源 读取
+if ($wqsFuncText -notmatch 'Claude Code CLI') {
+    throw "Write-QuickSummary must reference 'Claude Code CLI' from CheckResults"
+}
+if ($wqsFuncText -notmatch '当前 claude 来源') {
+    throw "Write-QuickSummary must reference '当前 claude 来源' from CheckResults"
+}
+if ($wqsFuncText -notmatch 'DoctorState\.CheckResults') {
+    throw "Write-QuickSummary must read from DoctorState.CheckResults"
+}
+
+# 2. 如果 Write-QuickSummary 中出现 Test-ClaudeInstalled，必须附近有 fallback/兜底/UNKNOWN
+if ($wqsFuncText -match 'Test-ClaudeInstalled') {
+    if ($wqsFuncText -notmatch 'fallback|兜底|UNKNOWN') {
+        throw "Write-QuickSummary Test-ClaudeInstalled usage must be surrounded by fallback/兜底/UNKNOWN context"
+    }
+}
+
+# 3. Write-QuickSummary 必须包含新的提示文本
+$wqsRequiredTexts = @(
+    "检测到可用安装，但 PATH 可能存在冲突",
+    "未安装或不可用"
+)
+foreach ($t in $wqsRequiredTexts) {
+    if ($wqsFuncText -notmatch [regex]::Escape($t)) {
+        throw "Write-QuickSummary must contain text: $t"
+    }
+}
+
+# 4. Check-Commands 中 Claude Code CLI OK 时 Detail 应为版本号
+$checkCommandsText = if ($doctorText -match '(?s)function Check-Commands\s*\{.*?\n(?=function Check-Files)') {
+    $matches[0]
+} else { "" }
+if ($checkCommandsText -notmatch '\$inventory\.Active\.Version') {
+    throw "Check-Commands Claude Code CLI OK must use `$inventory.Active.Version as Detail"
+}
+
+Write-Host "[check] P1.2 fix anti-regression OK"
+
 Write-Host "[check] OK"

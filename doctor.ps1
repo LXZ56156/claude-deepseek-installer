@@ -799,32 +799,73 @@ function Write-QuickSummary {
     <#
     .SYNOPSIS
         生成「总体结论」区，面向普通用户的清晰诊断结论。
+        优先使用 Check-Commands 已写入的 CheckResults，与 Claude 命令来源检测保持一致。
     #>
     Add-ReportLine ""
     Add-ReportLine "【总体结论】"
     Add-ReportLine ""
 
-    $claudeVer = Test-ClaudeInstalled
+    # 从 CheckResults 读取 Claude Code CLI 状态（由 Check-Commands 写入）
+    $claudeCliCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "Claude Code CLI" } | Select-Object -First 1
+    $activeClaudeCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "当前 claude 来源" } | Select-Object -First 1
+    $claudeSourceCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "Claude 命令来源" } | Select-Object -First 1
+
+    $claudeStatus = if ($claudeCliCheck) { $claudeCliCheck.Status } else { "UNKNOWN" }
+    $claudeDetail = if ($claudeCliCheck) { $claudeCliCheck.Detail } else { "" }
+
+    $claudeVer = $null
+    if ($claudeDetail -match '(\d+\.\d+\.\d+[^\s,]*)') {
+        $claudeVer = $matches[1]
+    }
+
     $nodeInfo = Test-NodeJsInstalled
     $configInfo = Test-ClaudeConfigExists
     $hasApiErrors = ($script:DoctorState.Errors.Count -gt 0)
     $coreErrorCount = @($script:DoctorState.Errors | Where-Object { $_ -notmatch "VS Code" }).Count
 
     # --- Windows 原生是否可用 ---
-    if ($claudeVer -and $nodeInfo.IsSupported) {
-        $configCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -match "ANTHROPIC_AUTH_TOKEN" }
-        if ($configCheck -and $configCheck.Status -eq "OK") {
-            Add-ReportLine "  Windows 原生 Claude Code: 可用 ($claudeVer)"
+    if ($claudeStatus -eq "OK") {
+        if ($nodeInfo.IsSupported) {
+            $configCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -match "ANTHROPIC_AUTH_TOKEN" }
+            if ($configCheck -and $configCheck.Status -eq "OK") {
+                Add-ReportLine "  Windows 原生 Claude Code: 可用 ($claudeVer)"
+            }
+            else {
+                Add-ReportLine "  Windows 原生 Claude Code: CLI 可用 ($claudeVer)，待配置 API Key"
+            }
         }
         else {
-            Add-ReportLine "  Windows 原生 Claude Code: CLI 可用 ($claudeVer)，待配置 API Key"
+            Add-ReportLine "  Windows 原生 Claude Code: CLI 可用 ($claudeVer)，Node.js 需升级"
         }
     }
-    elseif ($claudeVer -and -not $nodeInfo.IsSupported) {
-        Add-ReportLine "  Windows 原生 Claude Code: CLI 可用 ($claudeVer)，Node.js 需升级"
+    elseif ($claudeStatus -eq "WARN") {
+        $claudeVer = "可用（PATH 冲突）"
+        Add-ReportLine "  Windows 原生 Claude Code: 检测到可用安装，但 PATH 可能存在冲突"
+        if ($activeClaudeCheck -and $activeClaudeCheck.Detail) {
+            Add-ReportLine "    详情见"Claude 命令来源""
+        }
     }
-    elseif (-not $claudeVer) {
-        Add-ReportLine "  Windows 原生 Claude Code: 未安装"
+    elseif ($claudeStatus -eq "ERROR") {
+        Add-ReportLine "  Windows 原生 Claude Code: 未安装或不可用"
+    }
+    else {
+        # UNKNOWN — fallback 到旧检测（仅兜底）
+        $claudeVer = Test-ClaudeInstalled
+        if ($claudeVer -and $nodeInfo.IsSupported) {
+            $configCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -match "ANTHROPIC_AUTH_TOKEN" }
+            if ($configCheck -and $configCheck.Status -eq "OK") {
+                Add-ReportLine "  Windows 原生 Claude Code: 可用 ($claudeVer)"
+            }
+            else {
+                Add-ReportLine "  Windows 原生 Claude Code: CLI 可用 ($claudeVer)，待配置 API Key"
+            }
+        }
+        elseif ($claudeVer -and -not $nodeInfo.IsSupported) {
+            Add-ReportLine "  Windows 原生 Claude Code: CLI 可用 ($claudeVer)，Node.js 需升级"
+        }
+        else {
+            Add-ReportLine "  Windows 原生 Claude Code: 未安装"
+        }
     }
 
     # --- DeepSeek API 是否可用 ---
