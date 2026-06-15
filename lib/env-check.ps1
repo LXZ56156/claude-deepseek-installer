@@ -416,15 +416,15 @@ function Test-WslInstalled {
         return $info
     }
 
-    $result = Invoke-CommandSafe -Command "wsl" -Arguments @("--version") -TimeoutSec 8
+    $result = Invoke-CommandSafe -Command "wsl" -Arguments @("--version") -TimeoutSec 8 -LogTimeoutAsWarn
     if ($result.Success) {
         $info.Installed = $true
         $rawVersion = ($result.Output -replace "`0", "").Trim()
         $info.Version = Get-WslVersionClean -RawVersion $rawVersion
     }
 
-    # 获取发行版列表
-    $listResult = Invoke-CommandSafe -Command "wsl" -Arguments @("-l", "-v") -TimeoutSec 8
+    # 获取发行版列表（WSL 未启用时可能超时，使用 WARN 级别避免日志噪音）
+    $listResult = Invoke-CommandSafe -Command "wsl" -Arguments @("-l", "-v") -TimeoutSec 8 -LogTimeoutAsWarn
     if ($listResult.Success) {
         $info.Installed = $true
         if (-not $info.Version) {
@@ -902,8 +902,8 @@ function Test-NpmInstalled {
 
     # TestSafe mode: skip real node/npm version checks to avoid process hang
     if ($env:CCDI_TEST_MODE -eq "1") {
-        $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
-        if ($npmCmd) {
+        $npmResolved = Resolve-NpmCmdPath
+        if ($npmResolved.Found) {
             $result.Installed = $true
             $result.Version = "10.0.0 (test-safe)"
             $result.Status = "ok"
@@ -946,15 +946,15 @@ function Test-NpmInstalled {
         }
     }
 
-    # 检测 npm 命令
-    $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
-    if (-not $npmCmd) {
+    # 检测 npm 命令（优先 npm.cmd，避免 npm.ps1）
+    $npmResolved = Resolve-NpmCmdPath
+    if (-not $npmResolved.Found) {
         $result.Status = "failed_missing_npm"
-        $result.ErrorMessage = "检测到 Node.js 存在，但 npm 不可用。这通常表示 Node.js 安装不完整，或当前终端 PATH 未刷新。请先关闭此窗口重新打开后再试。如果仍失败，请重新安装 Node.js LTS。"
+        $result.ErrorMessage = "检测到 Node.js 存在，但 npm.cmd 不可用。这通常表示 Node.js 安装不完整，或当前终端 PATH 未刷新。请先关闭此窗口重新打开后再试。如果仍失败，请重新安装 Node.js LTS。"
         return $result
     }
 
-    $npmResult = Invoke-CommandSafe -Command "npm" -Arguments @("--version") -TimeoutSec 5
+    $npmResult = Invoke-CommandSafe -Command "npm.cmd" -Arguments @("--version") -TimeoutSec 5
     if ($npmResult.Success) {
         $result.Version = $npmResult.Output.Trim()
         $result.Installed = $true

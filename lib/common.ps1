@@ -731,6 +731,7 @@ function Refresh-CurrentProcessPath {
     <#
     .SYNOPSIS
         将 Machine 和 User 级别的 PATH 环境变量合并到当前进程。
+        同时加入常见 node/npm 路径，防止 winget 安装后 PATH 未即时生效。
         用于 Native Install / npm / winget 安装后刷新 PATH。
     #>
     try {
@@ -739,8 +740,26 @@ function Refresh-CurrentProcessPath {
         $combined = @()
         if ($userPath) { $combined += $userPath }
         if ($machinePath) { $combined += $machinePath }
+
+        # 追加常见 node/npm 路径（winget 安装后可能尚未在注册表 PATH 中）
+        $extraPaths = @()
+        if ($env:ProgramFiles) {
+            $extraPaths += Join-Path $env:ProgramFiles "nodejs"
+        }
+        if (${env:ProgramFiles(x86)}) {
+            $extraPaths += Join-Path ${env:ProgramFiles(x86)} "nodejs"
+        }
+        if ($env:APPDATA) {
+            $extraPaths += Join-Path $env:APPDATA "npm"
+        }
+        foreach ($p in $extraPaths) {
+            if ($p -and (Test-Path $p) -and $p -notin $combined) {
+                $combined += $p
+            }
+        }
+
         $env:Path = ($combined -join ";") + ";" + $env:Path
-        Write-Log "INFO" "PATH 已刷新（合并 Machine + User 到当前进程）"
+        Write-Log "DEBUG" "PATH 已刷新（合并 Machine + User + 常见 node/npm 路径到当前进程）"
     }
     catch {
         Write-Log "WARN" "PATH 刷新失败: $_"
@@ -748,8 +767,97 @@ function Refresh-CurrentProcessPath {
 }
 
 # ============================================================
-# 命令检测函数
+# npm.cmd 路径解析
 # ============================================================
+
+function Resolve-NpmCmdPath {
+    <#
+    .SYNOPSIS
+        Windows 下强制解析 npm.cmd，避免 Get-Command npm 命中 npm.ps1。
+        在 PowerShell 中 Get-Command npm 可能返回 npm.ps1（由 npm 包自身安装），
+        .ps1 文件不能直接被 Start-Process 执行，会导致 "%1 is not a valid Win32 application"。
+    .RETURNS
+        包含 Found, Path, Source, Error 的 hashtable
+    #>
+    $result = @{
+        Found  = $false
+        Path   = $null
+        Source = ""
+        Error  = ""
+    }
+
+    # 1. 优先 Get-Command npm.cmd
+    $npmCmd = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if ($npmCmd) {
+        $resolved = if ($npmCmd.Source) { $npmCmd.Source } else { $npmCmd.Definition }
+        if ($resolved -and (Test-Path $resolved)) {
+            $result.Found = $true
+            $result.Path = $resolved
+            $result.Source = "Get-Command npm.cmd"
+            Write-Log "DEBUG" "Resolve-NpmCmdPath: 通过 Get-Command npm.cmd 找到: $resolved"
+            return $result
+        }
+    }
+
+    # 2. 检查常见安装路径
+    $commonPaths = @()
+    if ($env:ProgramFiles) {
+        $commonPaths += Join-Path $env:ProgramFiles "nodejs\npm.cmd"
+    }
+    if (${env:ProgramFiles(x86)}) {
+        $commonPaths += Join-Path ${env:ProgramFiles(x86)} "nodejs\npm.cmd"
+    }
+    if ($env:APPDATA) {
+        $commonPaths += Join-Path $env:APPDATA "npm\npm.cmd"
+    }
+
+    foreach ($candidate in $commonPaths) {
+        if ($candidate -and (Test-Path $candidate)) {
+            $result.Found = $true
+            $result.Path = $candidate
+            $result.Source = "常见路径"
+            Write-Log "DEBUG" "Resolve-NpmCmdPath: 通过常见路径找到: $candidate"
+            return $result
+        }
+    }
+
+    # 3. where.exe npm.cmd
+    try {
+        $whereResult = & where.exe npm.cmd 2>&1
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($whereResult)) {
+            $firstLine = ($whereResult | Select-Object -First 1).Trim()
+            if ($firstLine -match '\.cmd$' -and (Test-Path $firstLine)) {
+                $result.Found = $true
+                $result.Path = $firstLine
+                $result.Source = "where.exe"
+                Write-Log "DEBUG" "Resolve-NpmCmdPath: 通过 where.exe 找到: $firstLine"
+                return $result
+            }
+        }
+    }
+    catch {
+        Write-Log "DEBUG" "Resolve-NpmCmdPath: where.exe npm.cmd 失败: $_"
+    }
+
+    # 4. 最后尝试 Get-Command npm（仅记录 npm.ps1 诊断信息，不返回 .ps1）
+    $npmAny = Get-Command npm -ErrorAction SilentlyContinue
+    if ($npmAny) {
+        $anyPath = if ($npmAny.Source) { $npmAny.Source } else { $npmAny.Definition }
+        if ($anyPath -match '\.ps1$') {
+            Write-Log "INFO" "检测到 npm.ps1 ($anyPath)，但安装阶段不能直接执行 npm.ps1，将继续查找 npm.cmd。"
+            $result.Error = "仅找到 npm.ps1 ($anyPath)，无法用于安装。Node.js 安装可能不完整或 PATH 未刷新。"
+        }
+        else {
+            $result.Error = "未找到 npm.cmd，Get-Command npm 返回: $anyPath"
+        }
+    }
+    else {
+        $result.Error = "未找到 npm.cmd 或 npm 命令。请确认 Node.js 安装完整，且当前终端 PATH 已刷新。"
+    }
+
+    Write-Log "WARN" "Resolve-NpmCmdPath: $($result.Error)"
+    return $result
+}
 
 function Test-CommandAvailable {
     <#
@@ -782,6 +890,8 @@ function Invoke-CommandSafe {
         命令（如 "claude"）
     .PARAMETER Arguments
         命令参数数组
+    .PARAMETER LogTimeoutAsWarn
+        超时时使用 WARN 日志级别而非 ERROR。用于可选命令（如 WSL 检测），避免日志噪音。
     .RETURNS
         包含 Success, ExitCode, Output, Error 的哈希表
     #>
@@ -791,7 +901,8 @@ function Invoke-CommandSafe {
         [string[]]$Arguments = @(),
         [int]$TimeoutSec = 60,
         [string]$ProgressMessage = "",
-        [int]$ProgressIntervalSec = 20
+        [int]$ProgressIntervalSec = 20,
+        [switch]$LogTimeoutAsWarn
     )
 
     $result = @{
@@ -866,7 +977,12 @@ function Invoke-CommandSafe {
 
         if (-not $finished) {
             # 超时：先读取临时文件内容用于诊断，再杀进程树，最后清理
-            Write-Log "ERROR" "命令超时 (${TimeoutSec}s): $Command $argumentLine"
+            if ($LogTimeoutAsWarn) {
+                Write-Log "WARN" "命令超时 (${TimeoutSec}s): $Command $argumentLine"
+            }
+            else {
+                Write-Log "ERROR" "命令超时 (${TimeoutSec}s): $Command $argumentLine"
+            }
 
             # 超时后先保存临时文件内容，再清理
             if (Test-Path $tmpOut) {

@@ -98,7 +98,9 @@ $requiredCommands = @(
     "Normalize-ExternalCommandOutput",
     "Convert-ToSafeReportText",
     "Test-WslClaudeComprehensive",
-    "Get-WslVersionClean"
+    "Get-WslVersionClean",
+    "Resolve-NpmCmdPath",
+    "Install-ClaudeCodeViaWinget"
 )
 
 foreach ($cmd in $requiredCommands) {
@@ -1859,11 +1861,11 @@ try {
 
     # All valid Method values
     $validMethods = @("existing", "official_native", "npm_npmmirror", "none",
-        "node-via-winget")
+        "node-via-winget", "winget_claude_code")
     $validStatuses = @("skipped_existing", "skipped_test_safe_existing", "skipped_test_safe_missing",
         "skipped_test_safe_broken", "installed", "installed_needs_restart",
         "node_installed_needs_restart", "failed_missing_node_or_npm",
-        "failed_npmmirror_unreachable", "failed_official_and_mirror")
+        "failed_npmmirror_unreachable", "failed_official_and_mirror", "failed_missing_npm_cmd")
     Write-Host "[check]     Valid Methods: $($validMethods -join ', ')"
     Write-Host "[check]     Valid Statuses: $($validStatuses -join ', ')"
 
@@ -1886,5 +1888,90 @@ finally {
     if (Test-Path $testUserProfile) { Remove-Item $testUserProfile -Recurse -Force -ErrorAction SilentlyContinue }
     if (Test-Path $testDesktop) { Remove-Item $testDesktop -Recurse -Force -ErrorAction SilentlyContinue }
 }
+
+# ============================================================
+# npm.cmd + winget Node.js verify + WSL noise anti-regression (v1.3.2)
+# ============================================================
+Write-Host "[check] npm.cmd + winget verify + WSL noise anti-regression"
+
+$claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+$commonText = Get-Content -Path (Join-Path $RootDir "lib\common.ps1") -Raw -Encoding UTF8
+$envCheckText = Get-Content -Path (Join-Path $RootDir "lib\env-check.ps1") -Raw -Encoding UTF8
+$startHereText = Get-Content -Path (Join-Path $RootDir "Start-Here.ps1") -Raw -Encoding UTF8
+
+# 1. Resolve-NpmCmdPath exists in common.ps1
+if ($commonText -notmatch 'function Resolve-NpmCmdPath') {
+    throw "common.ps1 must define Resolve-NpmCmdPath function"
+}
+
+# 2. Install-ClaudeCodeNpmMirror must NOT use Get-Command npm directly for Invoke-VisibleInstallCommand
+if ($claudeInstallText -match 'Get-Command npm[\s\S]{0,300}Invoke-VisibleInstallCommand\s+-FilePath\s+\$npmPath') {
+    throw "Install-ClaudeCodeNpmMirror must NOT pass `$npmPath from Get-Command npm directly to Invoke-VisibleInstallCommand"
+}
+
+# 3. Install-ClaudeCodeNpmMirror must use Resolve-NpmCmdPath
+if ($claudeInstallText -notmatch 'Install-ClaudeCodeNpmMirror[\s\S]{0,800}Resolve-NpmCmdPath') {
+    throw "Install-ClaudeCodeNpmMirror must use Resolve-NpmCmdPath"
+}
+
+# 4. npm.cmd must appear in Install-ClaudeCodeNpmMirror
+if ($claudeInstallText -notmatch 'npm\.cmd') {
+    throw "Install-ClaudeCodeNpmMirror must reference npm.cmd"
+}
+
+# 5. cmd.exe or $env:ComSpec must appear in Install-ClaudeCodeNpmMirror
+if ($claudeInstallText -notmatch 'Install-ClaudeCodeNpmMirror[\s\S]{0,1200}(cmd\.exe|\$env:ComSpec|\$cmdExe)') {
+    throw "Install-ClaudeCodeNpmMirror must use cmd.exe or `$env:ComSpec wrapper"
+}
+
+# 6. Node.js winget install branch must include secondary verification (not just installResult.Success)
+if ($claudeInstallText -notmatch '二[次次]验证') {
+    throw "Install-ClaudeCodeAuto must include secondary verification (二次验证) after winget Node install"
+}
+if ($claudeInstallText -notmatch 'Test-NodeJsInstalled[\s\S]{0,200}Test-NpmInstalled') {
+    throw "Install-ClaudeCodeAuto winget branch must call both Test-NodeJsInstalled and Test-NpmInstalled for secondary verify"
+}
+
+# 7. Winget Node install branch must call Refresh-CurrentProcessPath near secondary verify
+if ($claudeInstallText -notmatch 'Refresh-CurrentProcessPath[\s\S]{0,500}二次验证' -and
+    $claudeInstallText -notmatch '二次验证[\s\S]{0,500}Refresh-CurrentProcessPath') {
+    throw "Install-ClaudeCodeAuto must call Refresh-CurrentProcessPath near secondary verification"
+}
+
+# 8. WSL display text must include "不影响 Windows 原生安装" or "不影响主流程"
+$wslDisplayText = $startHereText + $claudeInstallText + $envCheckText
+if ($wslDisplayText -notmatch '不影响 Windows 原生安装' -and $wslDisplayText -notmatch '不影响主流程') {
+    throw "WSL skip message must include '不影响 Windows 原生安装' or '不影响主流程'"
+}
+
+# 9. Install-ClaudeCodeViaWinget function must exist
+if ($claudeInstallText -notmatch 'function Install-ClaudeCodeViaWinget') {
+    throw "claude-install.ps1 must define Install-ClaudeCodeViaWinget function"
+}
+
+# 10. Test-WslInstalled must use -LogTimeoutAsWarn
+if ($envCheckText -notmatch 'Test-WslInstalled[\s\S]{0,800}LogTimeoutAsWarn') {
+    throw "Test-WslInstalled must use -LogTimeoutAsWarn to suppress WSL timeout ERROR noise"
+}
+
+# 11. Test-NpmMirrorClaudeCodeNetwork must use Resolve-NpmCmdPath (not raw "npm")
+if ($claudeInstallText -notmatch 'Test-NpmMirrorClaudeCodeNetwork[\s\S]{0,3000}Resolve-NpmCmdPath') {
+    throw "Test-NpmMirrorClaudeCodeNetwork must use Resolve-NpmCmdPath instead of raw npm"
+}
+
+# 12. Test-NpmInstalled must use Resolve-NpmCmdPath (not Get-Command npm)
+if ($envCheckText -notmatch 'Resolve-NpmCmdPath') {
+    throw "env-check.ps1 must use Resolve-NpmCmdPath"
+}
+
+# 13. No npm.ps1 reference in install path (only warning/info references allowed)
+$npmPs1ContextLines = $claudeInstallText -split "`n" | Where-Object { $_ -match 'npm\.ps1' }
+foreach ($line in $npmPs1ContextLines) {
+    if ($line -match 'Invoke-VisibleInstallCommand|Start-Process.*FilePath.*npm' -and $line -notmatch '禁止|不能|avoid|不') {
+        throw "npm.ps1 must not appear in install execution context: $line"
+    }
+}
+
+Write-Host "[check] npm.cmd + winget verify + WSL noise anti-regression OK"
 
 Write-Host "[check] OK"

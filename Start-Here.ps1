@@ -405,7 +405,7 @@ function Step-CheckEnvironment {
         }
     }
     else {
-        Write-ResultLine "WSL" "SKIP" "未启用（高级选项）"
+        Write-ResultLine "WSL" "SKIP" "未启用或不可用（高级选项，不影响 Windows 原生安装）"
     }
 
     # 配置文件
@@ -454,15 +454,16 @@ function Step-CheckEnvironment {
 # 策略（由 lib/claude-install.ps1 实现）:
 #   1. claude 已存在 → 跳过（不覆盖、不重装、不自动更新）
 #   2. 官方 Native Install 可用 → 优先使用
-#   3. 官方不可用或安装失败 → 自动切换 npmmirror npm 镜像
-#   4. npm 镜像需要 Node.js >= 18 + npm
+#   3. 官方不可用或安装失败 → 尝试 winget install Anthropic.ClaudeCode
+#   4. winget 不可用或失败 → 自动切换 npmmirror npm 镜像
+#   5. npm 镜像需要 Node.js >= 18 + npm（通过 npm.cmd 执行）
 # ============================================================
 
 function Step-InstallClaudeCode {
     Write-Step "Step 2/7：安装 Claude Code"
 
     # 显示安装策略说明
-    Write-Info "安装策略: 优先 Claude 官方 Native Install → 不可用时自动切换 npmmirror 镜像"
+    Write-Info "安装策略: 官方 Native Install → winget → npmmirror 镜像（自动降级）"
     Write-Info "npm 镜像使用 Anthropic 官方发布的 @anthropic-ai/claude-code 包"
     Write-Info "镜像只提高 Claude Code 下载成功率，不保证登录、鉴权、模型调用一定可用"
     Write-Host ""
