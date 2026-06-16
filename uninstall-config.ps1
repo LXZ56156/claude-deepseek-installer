@@ -222,24 +222,28 @@ function Show-StateAndCurrentConfig {
     if ($state) {
         $installMethod = Get-CcdiStateValue -State $state -Name "claudeInstallMethod" -Default "(未知)"
         $installStatus = Get-CcdiStateValue -State $state -Name "claudeInstallStatus" -Default "(未知)"
-        $installedAt = Get-CcdiStateValue -State $state -Name "installedAt" -Default "(未记录)"
+        $firstRunAt = Get-CcdiStateValue -State $state -Name "firstRunAt" -Default "(未记录)"
+        $installCompletedAt = Get-CcdiStateValue -State $state -Name "claudeInstallCompletedAt" -Default ""
         $wasAlreadyInstalled = Get-CcdiStateValue -State $state -Name "claudeWasAlreadyInstalled" -Default $null
 
         $wasAlreadyInstalledText = if ($wasAlreadyInstalled -eq $true) {
-            "是"
+            "是（本工具未安装，Claude Code 此前已存在）"
         }
         elseif ($wasAlreadyInstalled -eq $false) {
-            "否"
+            "否（由本工具完成安装）"
         }
         else {
             "(未记录)"
         }
 
         Write-Info "本工具记录的安装信息:"
+        Write-Info "  首次运行时间: $firstRunAt"
+        if ($installCompletedAt) {
+            Write-Info "  安装完成时间: $installCompletedAt"
+        }
         Write-Info "  安装方式: $installMethod"
         Write-Info "  Claude Code 原本已安装: $wasAlreadyInstalledText"
         Write-Info "  安装状态: $installStatus"
-        Write-Info "  安装时间: $installedAt"
         Write-Host ""
     }
 

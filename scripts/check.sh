@@ -184,4 +184,27 @@ if "$script:DoctorState" not in doctor or "$Suggestions +=" in doctor:
     raise SystemExit("doctor state management is not centralized")
 PY
 
+# P4: install_wsl.sh JSON one-liner safety
+echo "[check] install_wsl.sh JSON env-var safety"
+if grep -q "JSON.parse(require('fs').readFileSync('\$config_file'" install_wsl.sh 2>/dev/null; then
+    echo "ERROR: validate_settings_json must not embed \$config_file directly in JS one-liner"
+    exit 1
+fi
+if grep -q "console.log((c.env || {})\['\$key'\]" install_wsl.sh 2>/dev/null; then
+    echo "ERROR: read_config_value must not embed \$key directly in JS one-liner"
+    exit 1
+fi
+if ! grep -q "CCDI_CONFIG_FILE" install_wsl.sh 2>/dev/null; then
+    echo "ERROR: install_wsl.sh must use CCDI_CONFIG_FILE env var for JSON config path"
+    exit 1
+fi
+if ! grep -q "CCDI_CONFIG_KEY" install_wsl.sh 2>/dev/null; then
+    echo "ERROR: install_wsl.sh must use CCDI_CONFIG_KEY env var for JSON key"
+    exit 1
+fi
+if ! grep -q "CCDI_CONFIG_DEFAULT" install_wsl.sh 2>/dev/null; then
+    echo "ERROR: install_wsl.sh must use CCDI_CONFIG_DEFAULT env var for JSON default"
+    exit 1
+fi
+
 echo "[check] OK"

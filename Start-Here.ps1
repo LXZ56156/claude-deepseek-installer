@@ -396,7 +396,7 @@ function Step-CheckEnvironment {
     Write-CheckProgress -Current 9 -Total 10 -Name "WSL"
     $wslInfo = Test-WslInstalled
     if ($wslInfo.Installed) {
-        $ubuntuInfo = Test-UbuntuInWsl
+        $ubuntuInfo = Test-UbuntuInWsl -WslInfo $wslInfo
         if ($ubuntuInfo.Exists) {
             Write-ResultLine "WSL Ubuntu" "OK" "已安装"
         }
@@ -1383,7 +1383,7 @@ function Start-WslSetup {
         return
     }
 
-    $ubuntuInfo = Test-UbuntuInWsl
+    $ubuntuInfo = Test-UbuntuInWsl -WslInfo $wslInfo
     if (-not $ubuntuInfo.Exists) {
         Write-Warning "WSL 已启用但未检测到 Ubuntu 发行版。"
         Write-Info "请在 Microsoft Store 搜索 Ubuntu 安装，或运行:"

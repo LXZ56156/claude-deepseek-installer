@@ -472,11 +472,12 @@ else:print("CONFIG_OK")
 # 用可用的 JSON 处理器验证 settings.json
 validate_settings_json() {
     local config_file="$1"
+    export CCDI_CONFIG_FILE="$config_file"
     if command -v node &> /dev/null; then
-        node -e "JSON.parse(require('fs').readFileSync('$config_file','utf-8').replace(/^\uFEFF/,'')); console.log('VALID');" 2>/dev/null
+        node -e "var f=process.env.CCDI_CONFIG_FILE; JSON.parse(require('fs').readFileSync(f,'utf-8').replace(/^\uFEFF/,'')); console.log('VALID');" 2>/dev/null
         return $?
     elif command -v python3 &> /dev/null; then
-        python3 -c "import json; json.load(open('$config_file', encoding='utf-8-sig')); print('VALID')" 2>/dev/null
+        python3 -c "import json,os; f=os.environ['CCDI_CONFIG_FILE']; json.load(open(f, encoding='utf-8-sig')); print('VALID')" 2>/dev/null
         return $?
     else
         return 1
@@ -488,25 +489,33 @@ read_config_value() {
     local config_file="$1"
     local key="$2"
     local default="$3"
+    export CCDI_CONFIG_FILE="$config_file"
+    export CCDI_CONFIG_KEY="$key"
+    export CCDI_CONFIG_DEFAULT="$default"
     if command -v node &> /dev/null; then
         node -e "
-const fs = require('fs');
-const os = require('os');
-const f = '$config_file'.replace(/^~/, os.homedir());
+var fs = require('fs');
+var os = require('os');
+var f = (process.env.CCDI_CONFIG_FILE || '').replace(/^~/, os.homedir());
+var key = process.env.CCDI_CONFIG_KEY || '';
+var def = process.env.CCDI_CONFIG_DEFAULT || '';
 try {
-    const c = JSON.parse(fs.readFileSync(f, 'utf-8').replace(/^\uFEFF/,''));
-    console.log((c.env || {})['$key'] || '$default');
-} catch(e) { console.log('$default'); }
+    var c = JSON.parse(fs.readFileSync(f, 'utf-8').replace(/^\uFEFF/,''));
+    console.log((c.env || {})[key] || def);
+} catch(e) { console.log(def); }
 " 2>/dev/null
     elif command -v python3 &> /dev/null; then
         python3 -c "
 import json, os
+f = os.path.expanduser(os.environ.get('CCDI_CONFIG_FILE', ''))
+key = os.environ.get('CCDI_CONFIG_KEY', '')
+def_ = os.environ.get('CCDI_CONFIG_DEFAULT', '')
 try:
-    with open(os.path.expanduser('$config_file'), encoding='utf-8-sig') as f:
-        c = json.load(f)
-    print(c.get('env', {}).get('$key', '$default'))
+    with open(f, encoding='utf-8-sig') as fh:
+        c = json.load(fh)
+    print(c.get('env', {}).get(key, def_))
 except:
-    print('$default')
+    print(def_)
 " 2>/dev/null
     else
         echo "$default"

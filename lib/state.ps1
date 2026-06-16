@@ -50,6 +50,7 @@ function Get-CcdiStateValue {
     <#
     .SYNOPSIS
         安全读取 CCDI 状态字段，兼容旧版或残缺 state.json。
+        兼容旧字段 installedAt -> firstRunAt 的迁移。
     #>
     param(
         [Parameter(Mandatory = $false)]
@@ -73,6 +74,12 @@ function Get-CcdiStateValue {
     $names = @($State.PSObject.Properties | ForEach-Object { $_.Name })
     if ($names -contains $Name) {
         return $State.$Name
+    }
+
+    # Backward compat: if asking for firstRunAt but only old installedAt exists
+    if ($Name -eq "firstRunAt" -and $names -contains "installedAt") {
+        Write-Log "INFO" "使用旧版字段 installedAt 作为首次运行时间（旧版本记录）"
+        return $State.installedAt
     }
 
     return $Default
@@ -164,6 +171,8 @@ function Initialize-CcdiState {
     .SYNOPSIS
         初始化 CCDI 状态（如果不存在），返回当前状态。
         每次运行入口脚本时调用，记录 lastRunAt。
+        firstRunAt 记录用户首次运行本工具的时间（不表示安装完成）。
+        claudeInstallCompletedAt 仅在实际安装成功后写入。
     .PARAMETER ScriptVersion
         当前脚本版本号
     #>
@@ -176,19 +185,31 @@ function Initialize-CcdiState {
 
     if ($null -eq $existing) {
         $initialState = [PSCustomObject]@{
-            scriptVersion            = $ScriptVersion
-            installedAt              = $now
-            lastRunAt                = $now
-            claudeInstallMethod      = ""
+            scriptVersion             = $ScriptVersion
+            firstRunAt                = $now
+            lastRunAt                 = $now
+            claudeInstallCompletedAt  = ""
+            claudeInstallMethod       = ""
             claudeWasAlreadyInstalled = $false
-            claudeInstallStatus      = ""
-            configPath               = ""
-            lastBackupPath           = ""
-            lastApiTest              = ""
+            claudeInstallStatus       = ""
+            configPath                = ""
+            lastBackupPath            = ""
+            lastApiTest               = ""
         }
         Write-CcdiState -State $initialState | Out-Null
         Write-Log "INFO" "CCDI 状态文件已初始化"
         return $initialState
+    }
+
+    # Migrate old state: if installedAt exists but firstRunAt doesn't, copy it
+    $existingNames = @($existing.PSObject.Properties | ForEach-Object { $_.Name })
+    if ($existingNames -contains "installedAt" -and $existingNames -notcontains "firstRunAt") {
+        $existing | Add-Member -NotePropertyName "firstRunAt" -NotePropertyValue $existing.installedAt -Force
+        Write-Log "INFO" "Migrated old installedAt -> firstRunAt"
+    }
+    # Ensure claudeInstallCompletedAt exists (backward compat: if missing, add empty)
+    if ($existingNames -notcontains "claudeInstallCompletedAt") {
+        $existing | Add-Member -NotePropertyName "claudeInstallCompletedAt" -NotePropertyValue "" -Force
     }
 
     # 更新 lastRunAt

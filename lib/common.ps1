@@ -974,7 +974,7 @@ function Invoke-CommandSafe {
 
         $proc = Start-Process -FilePath $cmdExe -ArgumentList $argumentLine -NoNewWindow -PassThru
 
-        Write-Log "DEBUG" "Invoke-CommandSafe: resolved=$startFile, cwd=$(Get-Location), args=$argumentLine, cmdPid=$($proc.Id)"
+        Write-Log "DEBUG" "Invoke-CommandSafe: resolved=$startFile, cwd=$(Get-Location), args=$(ConvertTo-SafeLogText -Text $argumentLine), cmdPid=$($proc.Id)"
 
         # 等待进程完成，设置超时；长命令可选择性输出心跳提示。
         $finished = $false
@@ -1001,10 +1001,10 @@ function Invoke-CommandSafe {
         if (-not $finished) {
             # 超时：先读取临时文件内容用于诊断，再杀进程树，最后清理
             if ($LogTimeoutAsWarn) {
-                Write-Log "WARN" "命令超时 (${TimeoutSec}s): $Command $argumentLine"
+                Write-Log "WARN" "命令超时 (${TimeoutSec}s): $Command $(ConvertTo-SafeLogText -Text $argumentLine)"
             }
             else {
-                Write-Log "ERROR" "命令超时 (${TimeoutSec}s): $Command $argumentLine"
+                Write-Log "ERROR" "命令超时 (${TimeoutSec}s): $Command $(ConvertTo-SafeLogText -Text $argumentLine)"
             }
 
             # 超时后先保存临时文件内容，再清理
@@ -1016,7 +1016,7 @@ function Invoke-CommandSafe {
                         $result.Output = if ($partialOut.Length -gt $maxPartialLen) {
                             $partialOut.Substring(0, $maxPartialLen) + "`n...[截断]"
                         } else { $partialOut }
-                        Write-Log "INFO" "超时部分 stdout ($($partialOut.Length) bytes): $(if ($partialOut.Length -gt 500) { $partialOut.Substring(0, 500) + '...' } else { $partialOut })"
+                        Write-Log "INFO" "超时部分 stdout ($($partialOut.Length) bytes): $(if ($partialOut.Length -gt 500) { ConvertTo-SafeLogText -Text ($partialOut.Substring(0, 500)) + '...' } else { ConvertTo-SafeLogText -Text $partialOut })"
                     }
                 }
                 catch { Write-Log "WARN" "读取超时 stdout 失败: $_" }
@@ -1029,7 +1029,7 @@ function Invoke-CommandSafe {
                         $result.Error = if ($partialErr.Length -gt $maxPartialLen) {
                             $partialErr.Substring(0, $maxPartialLen) + "`n...[截断]"
                         } else { $partialErr }
-                        Write-Log "INFO" "超时部分 stderr ($($partialErr.Length) bytes): $(if ($partialErr.Length -gt 500) { $partialErr.Substring(0, 500) + '...' } else { $partialErr })"
+                        Write-Log "INFO" "超时部分 stderr ($($partialErr.Length) bytes): $(if ($partialErr.Length -gt 500) { ConvertTo-SafeLogText -Text ($partialErr.Substring(0, 500)) + '...' } else { ConvertTo-SafeLogText -Text $partialErr })"
                     }
                 }
                 catch { Write-Log "WARN" "读取超时 stderr 失败: $_" }
@@ -1348,6 +1348,28 @@ function Sanitize-ProxyUrl {
     # socks5://user:pass@host:port -> socks5://<AUTH>@host:port
     $result = $result -replace '(?i)(socks5?h?://)[^/@\s:]+:[^/@\s]+@', '$1<AUTH>@'
 
+    return $result
+}
+
+function ConvertTo-SafeLogText {
+    <#
+    .SYNOPSIS
+        对日志输出文本进行脱敏：API Key + 代理密码。
+        调用方仍可获取原始值用于逻辑判断，仅日志写入时调用此函数。
+    .PARAMETER Text
+        原始文本
+    .RETURNS
+        脱敏后文本
+    #>
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $Text
+    }
+
+    $result = $Text
+    $result = Sanitize-SecretLikeText -Text $result
+    $result = Sanitize-ProxyUrl -Text $result
     return $result
 }
 

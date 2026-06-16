@@ -2538,9 +2538,10 @@ function Install-ClaudeCodeAuto {
                 $result.Status = "installed"
                 $result.Version = "1.0.0-mock"
                 Update-CcdiState -Updates @{
-                    claudeWasAlreadyInstalled = $false
-                    claudeInstallMethod       = "official_native"
-                    claudeInstallStatus       = "installed"
+                    claudeWasAlreadyInstalled  = $false
+                    claudeInstallMethod        = "official_native"
+                    claudeInstallStatus        = "installed"
+                    claudeInstallCompletedAt   = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
                 } | Out-Null
                 Write-Success "Claude Code 安装完成 (mock Native Install)"
                 return $result

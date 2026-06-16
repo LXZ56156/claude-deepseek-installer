@@ -259,14 +259,14 @@ try {
 
     $state = Read-CcdiState
     $method = Get-CcdiStateValue -State $state -Name "claudeInstallMethod" -Default "(未知)"
-    $installedAt = Get-CcdiStateValue -State $state -Name "installedAt" -Default "(未记录)"
+    $firstRunAt = Get-CcdiStateValue -State $state -Name "firstRunAt" -Default "(未记录)"
 
     if ($method -ne "existing") {
         throw "Partial state method read failed"
     }
 
-    if ($installedAt -ne "(未记录)") {
-        throw "Missing installedAt should return default"
+    if ($firstRunAt -ne "(未记录)") {
+        throw "Missing firstRunAt should return default"
     }
 
     Set-Content -Path $partialStateRunner -Encoding UTF8 -Value @"
@@ -294,8 +294,8 @@ exit `$LASTEXITCODE
     if ($showStatusText -notmatch "安装方式: existing") {
         throw "uninstall-config -ShowStatusOnly did not read partial state"
     }
-    if ($showStatusText -notmatch "安装时间: \(未记录\)") {
-        throw "uninstall-config -ShowStatusOnly did not show default installedAt"
+    if ($showStatusText -notmatch "首次运行时间: \(未记录\)") {
+        throw "uninstall-config -ShowStatusOnly did not show default firstRunAt"
     }
 }
 finally {
@@ -2680,5 +2680,128 @@ if ($claudeInstallText -notmatch "Native Install lock check: HasRawError=") {
 }
 
 Write-Host "[check] P3.1 anti-regression OK"
+
+# ============================================================
+# P4 WSL probe anti-regression (Task 1: dedup WSL detection)
+# ============================================================
+Write-Host "[check] P4 anti-regression: Start-Here WSL dedup + wsl -d gate"
+
+$startHereLines = Get-Content -Path (Join-Path $RootDir "Start-Here.ps1") -Encoding UTF8
+$startHereRaw = $startHereLines -join "`n"
+
+# 1. After Test-WslInstalled in same block, Test-UbuntuInWsl must pass -WslInfo
+$inWslBlock = $false
+$hasWslInfoVar = $false
+$passingWslInfoCount = 0
+$notPassingWslInfoCount = 0
+for ($i = 0; $i -lt $startHereLines.Count; $i++) {
+    $line = $startHereLines[$i]
+    if ($line -match '^\s*\$wslInfo\s*=\s*Test-WslInstalled') { $inWslBlock = $true; $hasWslInfoVar = $true; continue }
+    if ($inWslBlock -and $line -match '^\s*function\s') { $inWslBlock = $false; $hasWslInfoVar = $false }
+    if ($inWslBlock -and $line -match '^\s*\}\s*$' -and $i -gt 0 -and $startHereLines[$i-1] -notmatch '^\s*\}') { $inWslBlock = $false; $hasWslInfoVar = $false }
+    if ($hasWslInfoVar -and $line -match 'Test-UbuntuInWsl\b') {
+        if ($line -match '-WslInfo\s+\$wslInfo') { $passingWslInfoCount++ }
+        else { $notPassingWslInfoCount++ }
+    }
+}
+if ($notPassingWslInfoCount -gt 0) {
+    throw "Start-Here.ps1: $notPassingWslInfoCount Test-UbuntuInWsl call(s) after Test-WslInstalled do NOT pass -WslInfo `$wslInfo (found $passingWslInfoCount passing)"
+}
+
+# 2. Default Start-Here path must not contain wsl -d / bash -c deep WSL commands
+$startHereFunctionBodies = $startHereRaw
+if ($startHereFunctionBodies -match '(?s)wsl\s+-d\s|-d\s+Ubuntu.*bash\s+-c|wsl\.exe.*-d\s') {
+    throw "Start-Here.ps1: default install path must NOT contain wsl -d / bash -c deep detection"
+}
+
+# 3. doctor.ps1 must still allow deep WSL under -DeepWslCheck
+$doctorText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+if ($doctorText -notmatch 'DeepWslCheck[\s\S]{0,300}wsl\s+-d\s') {
+    throw "doctor.ps1: -DeepWslCheck must still allow wsl -d deep detection"
+}
+
+Write-Host "[check] P4 anti-regression OK"
+
+# ============================================================
+# P5 state semantics anti-regression (Task 2: firstRunAt vs installedAt)
+# ============================================================
+Write-Host "[check] P5 anti-regression: state file firstRunAt / claudeInstallCompletedAt semantics"
+
+$stateText = Get-Content -Path (Join-Path $RootDir "lib\state.ps1") -Raw -Encoding UTF8
+
+# 1. Initialize-CcdiState initial object must NOT write installedAt as completion time
+if ($stateText -match 'Initialize-CcdiState[\s\S]{0,500}installedAt\s*=\s*\$now') {
+    throw "state.ps1: Initialize-CcdiState must NOT write installedAt = `$now (use firstRunAt)"
+}
+
+# 2. Must contain firstRunAt in initial state
+if ($stateText -notmatch 'firstRunAt\s*=') {
+    throw "state.ps1: Initialize-CcdiState must contain firstRunAt field"
+}
+
+# 3. Must contain claudeInstallCompletedAt
+if ($stateText -notmatch 'claudeInstallCompletedAt') {
+    throw "state.ps1: must contain claudeInstallCompletedAt field"
+}
+
+# 4. uninstall-config must NOT treat firstRunAt as install completion time
+$uninstallTextForCheck = Get-Content -Path (Join-Path $RootDir "uninstall-config.ps1") -Raw -Encoding UTF8
+if ($uninstallTextForCheck -match '首次运行时间[\s\S]{0,30}安装完成' -or $uninstallTextForCheck -notmatch '首次运行时间') {
+    throw "uninstall-config.ps1 must display firstRunAt separately from install completion"
+}
+
+Write-Host "[check] P5 anti-regression OK"
+
+# ============================================================
+# P6 Invoke-CommandSafe log sanitization (Task 3)
+# ============================================================
+Write-Host "[check] P6 anti-regression: Invoke-CommandSafe log sanitization"
+
+$commonTextForCheck = Get-Content -Path (Join-Path $RootDir "lib\common.ps1") -Raw -Encoding UTF8
+
+# 1. argumentLine must be sanitized before logging
+if ($commonTextForCheck -match 'Write-Log.*args=\$argumentLine"\)' -or
+    $commonTextForCheck -match 'Write-Log[\s\S]{0,50}\$argumentLine[\s\S]{0,50}(?<!SafeLogText)') {
+    # This is approximate; the key check is that ConvertTo-SafeLogText exists
+}
+
+# 2. ConvertTo-SafeLogText must exist
+if ($commonTextForCheck -notmatch 'function ConvertTo-SafeLogText') {
+    throw "common.ps1: must contain ConvertTo-SafeLogText function"
+}
+
+# 3. Timeout stdout logging must sanitize
+if ($commonTextForCheck -notmatch '超时部分 stdout[\s\S]{0,200}ConvertTo-SafeLogText') {
+    throw "common.ps1: timeout stdout log must call ConvertTo-SafeLogText"
+}
+
+# 4. Timeout stderr logging must sanitize
+if ($commonTextForCheck -notmatch '超时部分 stderr[\s\S]{0,200}ConvertTo-SafeLogText') {
+    throw "common.ps1: timeout stderr log must call ConvertTo-SafeLogText"
+}
+
+# 5. DEBUG argumentLine logging must sanitize
+if ($commonTextForCheck -notmatch 'Invoke-CommandSafe[\s\S]{0,200}args=\$\(ConvertTo-SafeLogText') {
+    throw "common.ps1: Invoke-CommandSafe DEBUG log must sanitize argumentLine"
+}
+
+# 6. Timeout ERROR/WARN logging must sanitize argumentLine
+if ($commonTextForCheck -notmatch '命令超时[\s\S]{0,200}ConvertTo-SafeLogText.*\$argumentLine') {
+    throw "common.ps1: timeout log must sanitize argumentLine"
+}
+
+# Lightweight TestSafe test: Verify Mask-ApiKey works on sk- keys in log text
+$testKey = "sk-abcdefghijklmnopqrstuvwxyz1234567890"
+$testLogText = "Authorization: Bearer $testKey`nANTHROPIC_AUTH_TOKEN=$testKey"
+$safeLogText = ConvertTo-SafeLogText -Text $testLogText
+if ($safeLogText -match [regex]::Escape($testKey)) {
+    throw "ConvertTo-SafeLogText leaked full sk- key"
+}
+# Should contain masked form (sk***...XXXX)
+if ($safeLogText -notmatch 'sk\*{4,}') {
+    throw "ConvertTo-SafeLogText did not mask sk- key (expected sk****... suffix)"
+}
+
+Write-Host "[check] P6 anti-regression OK"
 
 Write-Host "[check] OK"

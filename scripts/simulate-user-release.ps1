@@ -452,8 +452,8 @@ try {
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
     $partialStateLogText = if ($partialStateLog) { Get-Content -Path $partialStateLog.FullName -Raw -Encoding UTF8 } else { "" }
-    if ($partialStateLogText -notmatch "安装时间: \(未记录\)") {
-        throw "partial state ShowStatusOnly did not show missing installedAt default"
+    if ($partialStateLogText -notmatch "首次运行时间: \(未记录\)") {
+        throw "partial state ShowStatusOnly did not show missing firstRunAt default"
     }
     [void]$runs.Add($partialStateRun)
 
