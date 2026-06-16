@@ -1156,9 +1156,15 @@ x-api-key: $TestApiKey
         $startHereText -notmatch 'Test-Path\s+\$nativeClaudeExe\s+-or'
     } "Start-Here.ps1 仍包含错误的 Test-Path `$nativeClaudeExe -or 语法"
 
-    Assert "P0-1: Start-Here.ps1 含 (Test-Path `$nativeClaudeExe) -or `$script:ClaudeInstalled" {
-        $startHereText -match '\(Test-Path\s+\$nativeClaudeExe\)\s+-or\s+\$script:ClaudeInstalled'
-    } "Start-Here.ps1 缺失正确的 (Test-Path `$nativeClaudeExe) -or `$script:ClaudeInstalled"
+    # P0-1 补充：Show-CompletionMenu [1] 已迁移到 P1-1 (Start-ClaudeTestTerminal)，
+    # 不再需要 (Test-Path $nativeClaudeExe) -or 模式。改为验证迁移完成。
+    # 由于 $startHereText 在当前作用域已定义，直接用其验证 Show-CompletionMenu 不再使用旧逻辑。
+    if ($startHereText -match '(?s)function Show-CompletionMenu\s*\{(.*?)^\s*\}') {
+        $cmBlock = $matches[1]
+    } else { $cmBlock = "" }
+    Assert "P0-1: Show-CompletionMenu 已迁移到 Start-ClaudeTestTerminal（不再使用旧 fresh shell 模式）" {
+        $cmBlock -notmatch 'Test-ClaudeCommandInFreshShell'
+    } "Show-CompletionMenu 仍包含旧的 fresh shell 检测，迁移未完成"
 
     # --- P0-2: Fresh Shell 重写 ---
     # 提取 Test-ClaudeCommandInFreshShell 函数体（从函数声明到下一个函数声明）
@@ -1308,6 +1314,142 @@ x-api-key: $TestApiKey
     Assert "P0: Start-Here.ps1 不再使用 -match needs_restart（精确匹配 status）" {
         $startHereText -notmatch '-match\s+"needs_restart"'
     } "Start-Here.ps1 仍使用 -match needs_restart 通配，installed_needs_restart_or_path_fix 可能被误判"
+
+    Write-Host ""
+
+    # ============================================================
+    # 26. v1.3.3 P1-1 检查：完成页 [1] 自动启动 Claude Code 测试终端
+    # ============================================================
+    Write-CheckHeader "26. v1.3.3 P1-1: 完成页 [1] 自动启动 Claude Code 测试终端"
+
+    $startHerePath = Join-Path $ScriptRoot "Start-Here.ps1"
+    $startHereText = Get-Content $startHerePath -Raw -Encoding UTF8
+
+    # --- P1-1a: 完成页 [1] 菜单文案已改 ---
+    Assert 'P1-1a: 完成页 [1] 标题包含启动 Claude Code 测试（推荐）' {
+        $startHereText -match [regex]::Escape('启动 Claude Code 测试（推荐）')
+    } 'Start-Here.ps1 完成页 [1] 标题必须改为启动 Claude Code 测试（推荐）'
+
+    Assert 'P1-1a: 完成页 [1] 副标题包含自动打开测试项目终端并直接运行 claude' {
+        $startHereText -match [regex]::Escape('自动打开测试项目终端，并直接运行 claude')
+    } 'Start-Here.ps1 完成页 [1] 副标题必须改为自动打开测试项目终端并直接运行 claude'
+
+    # --- P1-1b: Start-ClaudeTestTerminal 函数存在 ---
+    Assert "P1-1b: Start-ClaudeTestTerminal 函数存在" {
+        $startHereText -match 'function Start-ClaudeTestTerminal'
+    } "Start-Here.ps1 必须新增 function Start-ClaudeTestTerminal"
+
+    # --- P1-1c: Start-ClaudeTestTerminal 使用 -EncodedCommand + Unicode ---
+    Assert "P1-1c: Start-ClaudeTestTerminal 使用 -EncodedCommand" {
+        $startHereText -match 'function Start-ClaudeTestTerminal[\s\S]{0,15000}-EncodedCommand'
+    } "Start-ClaudeTestTerminal 必须使用 -EncodedCommand"
+
+    Assert "P1-1c: Start-ClaudeTestTerminal 使用 [Text.Encoding]::Unicode.GetBytes" {
+        $startHereText -match 'function Start-ClaudeTestTerminal[\s\S]{0,15000}\[Text\.Encoding\]::Unicode\.GetBytes'
+    } "Start-ClaudeTestTerminal 必须使用 [Text.Encoding]::Unicode.GetBytes 编码"
+
+    Assert "P1-1c: Start-ClaudeTestTerminal 使用 [Convert]::ToBase64String" {
+        $startHereText -match 'function Start-ClaudeTestTerminal[\s\S]{0,15000}\[Convert\]::ToBase64String'
+    } "Start-ClaudeTestTerminal 必须使用 [Convert]::ToBase64String"
+
+    # --- P1-1d: Start-ClaudeTestTerminal 使用 Start-Process + WorkingDirectory ---
+    Assert "P1-1d: Start-ClaudeTestTerminal 使用 Start-Process" {
+        $startHereText -match 'function Start-ClaudeTestTerminal[\s\S]{0,15000}Start-Process'
+    } "Start-ClaudeTestTerminal 必须使用 Start-Process"
+
+    Assert "P1-1d: Start-ClaudeTestTerminal 使用 -WorkingDirectory" {
+        $startHereText -match 'function Start-ClaudeTestTerminal[\s\S]{0,15000}-WorkingDirectory'
+    } "Start-ClaudeTestTerminal 必须使用 -WorkingDirectory `$ProjectPath"
+
+    # --- P1-1e: launchScript 包含 Set-Location -LiteralPath ---
+    Assert "P1-1e: launchScript 包含 Set-Location -LiteralPath" {
+        $startHereText -match 'function Start-ClaudeTestTerminal[\s\S]{0,15000}Set-Location\s+-LiteralPath'
+    } "Start-ClaudeTestTerminal 的 launchScript 必须包含 Set-Location -LiteralPath"
+
+    # --- P1-1f: launchScript 包含 Get-Command claude ---
+    Assert "P1-1f: launchScript 包含 Get-Command claude" {
+        $startHereText -match 'function Start-ClaudeTestTerminal[\s\S]{0,15000}Get-Command\s+claude'
+    } "Start-ClaudeTestTerminal 的 launchScript 必须包含 Get-Command claude 检测"
+
+    # --- P1-1g: launchScript 包含 & claude ---
+    Assert "P1-1g: launchScript 包含 & claude" {
+        $startHereText -match 'function Start-ClaudeTestTerminal[\s\S]{0,15000}&\s+claude'
+    } "Start-ClaudeTestTerminal 的 launchScript 必须包含 & claude 启动"
+
+    # --- P1-1h: Show-CompletionMenu [1] 不再调用 Test-ClaudeCommandInFreshShell ---
+    # 提取 Show-CompletionMenu 函数体（从 function 声明到下一个顶层 function 或文件末尾）
+    $cmStartIdx = $startHereText.IndexOf('function Show-CompletionMenu')
+    $cmBody = if ($cmStartIdx -ge 0) {
+        $afterCm = $startHereText.Substring($cmStartIdx + 30)
+        $nextFuncMatch = [regex]::Match($afterCm, '(?m)^function \w')
+        if ($nextFuncMatch.Success) { $afterCm.Substring(0, $nextFuncMatch.Index) } else { $afterCm }
+    } else { "" }
+
+    $completionMenuText = $cmBody
+
+    Assert "P1-1h: Show-CompletionMenu [1] 中不再调用 Test-ClaudeCommandInFreshShell" {
+        $completionMenuText -notmatch 'Test-ClaudeCommandInFreshShell'
+    } "Show-CompletionMenu 的 [1] 分支不得再调用 Test-ClaudeCommandInFreshShell"
+
+    # --- P1-1i: Show-CompletionMenu [1] 调用 Start-ClaudeTestTerminal ---
+    Assert "P1-1i: Show-CompletionMenu [1] 调用 Start-ClaudeTestTerminal" {
+        $completionMenuText -match 'Start-ClaudeTestTerminal'
+    } "Show-CompletionMenu 的 [1] 分支必须调用 Start-ClaudeTestTerminal"
+
+    # --- P1-1j: [2] 仍只打开文件夹，不启动 claude ---
+    Assert "P1-1j: [2] 分支允许 explorer.exe" {
+        $completionMenuText -match '"2"\s*\{[\s\S]{0,500}explorer\.exe'
+    } "Show-CompletionMenu 的 [2] 分支必须保留 explorer.exe 打开文件夹"
+
+    Assert "P1-1j: [2] 分支不调用 Start-ClaudeTestTerminal" {
+        $completionMenuText -notmatch '"2"\s*\{[\s\S]{0,500}Start-ClaudeTestTerminal'
+    } "Show-CompletionMenu 的 [2] 分支不得调用 Start-ClaudeTestTerminal"
+
+    Assert "P1-1j: [2] 分支不直接调用 claude" {
+        $completionMenuText -notmatch '"2"\s*\{[\s\S]{0,500}&\s+claude'
+    } "Show-CompletionMenu 的 [2] 分支不得调用 claude"
+
+    # --- P1-1k: Show-CompletionPage 不直接调用 Start-ClaudeTestTerminal ---
+    $cpStartIdx = $startHereText.IndexOf('function Show-CompletionPage')
+    $cpBody = if ($cpStartIdx -ge 0) {
+        $afterCp = $startHereText.Substring($cpStartIdx + 31)
+        $nextFuncCp = [regex]::Match($afterCp, '(?m)^function \w')
+        if ($nextFuncCp.Success) { $afterCp.Substring(0, $nextFuncCp.Index) } else { $afterCp }
+    } else { "" }
+
+    $completionPageText = $cpBody
+
+    Assert "P1-1k: Show-CompletionPage 不直接调用 Start-ClaudeTestTerminal" {
+        $completionPageText -notmatch 'Start-ClaudeTestTerminal'
+    } "Show-CompletionPage 不得直接调用 Start-ClaudeTestTerminal（只有 Show-CompletionMenu [1] 可调用）"
+
+    # --- P1-1l: 新终端失败指引包含关键修复建议 ---
+    $stctStartIdx = $startHereText.IndexOf('function Start-ClaudeTestTerminal')
+    $launchBlock = if ($stctStartIdx -ge 0) {
+        $afterStct = $startHereText.Substring($stctStartIdx)
+        $nextFuncStct = [regex]::Match($afterStct.Substring(31), '(?m)^function \w')
+        if ($nextFuncStct.Success) { $afterStct.Substring(0, 31 + $nextFuncStct.Index) } else { $afterStct }
+    } else { "" }
+    Assert 'P1-1l: launchScript 包含一键诊断失败指引' {
+        $launchBlock -match '一键诊断'
+    } 'launchScript 失败时必须包含一键诊断指引'
+
+    Assert 'P1-1l: launchScript 包含一键修复依赖失败指引' {
+        $launchBlock -match '一键修复依赖'
+    } 'launchScript 失败时必须包含一键修复依赖指引'
+
+    Assert 'P1-1l: launchScript 包含 claude --version 指引' {
+        $launchBlock -match 'claude --version'
+    } 'launchScript 失败时必须包含 claude --version 指引'
+
+    # --- P1-1m: launchScript 不包含 API Key / settings.json / logs 等敏感内容 ---
+    # 复用 P1-1l 定义的 $launchBlock
+    Assert "P1-1m: launchScript 不含 settings.json" {
+        $launchBlock -notmatch 'settings\.json'
+    } "launchScript 不得包含 settings.json"
+    Assert "P1-1m: launchScript 不含完整 API Key 输出" {
+        $launchBlock -notmatch 'ANTHROPIC_AUTH_TOKEN'
+    } "launchScript 不得输出 API Key 相关变量"
 
     Write-Host ""
 

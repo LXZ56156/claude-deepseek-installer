@@ -3126,9 +3126,15 @@ if ($startHereText -match 'Test-Path\s+\$nativeClaudeExe\s+-or') {
     throw "Start-Here.ps1 still contains broken syntax: Test-Path `$nativeClaudeExe -or"
 }
 
-# 2. Start-Here.ps1 must contain correct parenthesized form
-if ($startHereText -notmatch '\(Test-Path\s+\$nativeClaudeExe\)\s+-or') {
-    throw "Start-Here.ps1 missing correct syntax: (Test-Path `$nativeClaudeExe) -or"
+# 2. P1-1: Show-CompletionMenu [1] must call Start-ClaudeTestTerminal instead of fresh shell check
+# The old (Test-Path $nativeClaudeExe) -or pattern was in Show-CompletionMenu [1] which is now migrated to Start-ClaudeTestTerminal.
+# We still verify the broken form doesn't exist (check #1 above).
+# We now verify that Start-ClaudeTestTerminal function exists.
+if ($startHereText -notmatch 'function Start-ClaudeTestTerminal') {
+    throw "Start-Here.ps1 missing Start-ClaudeTestTerminal function (P1-1)"
+}
+if ($startHereText -match 'Show-CompletionMenu[\s\S]{0,2000}Test-ClaudeCommandInFreshShell') {
+    throw "Show-CompletionMenu still calls Test-ClaudeCommandInFreshShell (P1-1 regression)"
 }
 
 # 3. Test-ClaudeCommandInFreshShell must NOT use Invoke-CommandSafe

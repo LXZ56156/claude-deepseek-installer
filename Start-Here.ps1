@@ -1194,6 +1194,150 @@ API Key 始终只保存在您的本机，不会上传或分享。
 }
 
 # ============================================================
+# P1-1: 自动启动 Claude Code 测试终端
+# ============================================================
+
+function Start-ClaudeTestTerminal {
+    <#
+    .SYNOPSIS
+        v1.3.3 P1-1: 自动新开 PowerShell 终端，工作目录进入测试项目，直接运行 claude。
+        仅在用户主动选择完成页 [1] 后调用。
+    .PARAMETER ProjectPath
+        测试项目的完整路径。
+    .RETURNS
+        成功启动新终端返回 $true，否则返回 $false。
+    #>
+    param(
+        [string]$ProjectPath
+    )
+
+    # 校验 ProjectPath
+    if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
+        Write-Warning "测试项目路径为空，无法启动。"
+        return $false
+    }
+
+    if (-not (Test-Path $ProjectPath)) {
+        Write-Warning "测试项目目录不存在。"
+        return $false
+    }
+
+    # 解析 powershell.exe 路径
+    $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    if (-not (Test-Path $psExe)) {
+        $psExe = "powershell.exe"
+    }
+
+    # 构造新终端中执行的脚本
+    # 单引号内中文路径安全转义
+    $projectPathLiteral = $ProjectPath.Replace("'", "''")
+
+    $launchScript = @"
+`$ErrorActionPreference = 'Continue'
+try {
+    `$Host.UI.RawUI.WindowTitle = 'Claude Code 测试 - DeepSeek 配置助手'
+} catch {}
+
+Write-Host ''
+Write-Host '==============================================================' -ForegroundColor Cyan
+Write-Host '  Claude Code 测试终端' -ForegroundColor Cyan
+Write-Host '==============================================================' -ForegroundColor Cyan
+Write-Host ''
+
+try {
+    `$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    `$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    `$pathParts = @()
+    if (`$userPath) { `$pathParts += `$userPath }
+    if (`$machinePath) { `$pathParts += `$machinePath }
+    `$env:Path = (`$pathParts -join ';')
+} catch {
+    Write-Host '[提示] PATH 刷新失败，将继续尝试启动 claude。' -ForegroundColor Yellow
+}
+
+try {
+    Set-Location -LiteralPath '$projectPathLiteral'
+} catch {
+    Write-Host '[错误] 无法进入测试项目目录：$projectPathLiteral' -ForegroundColor Red
+    Write-Host '请回到安装助手选择 [4] 一键诊断。' -ForegroundColor Yellow
+    Write-Host ''
+    Read-Host '按回车键关闭窗口'
+    exit 1
+}
+
+Write-Host '[信息] 当前测试项目目录：' -ForegroundColor Gray
+Write-Host "  `$PWD" -ForegroundColor Green
+Write-Host ''
+Write-Host '[信息] 正在启动 Claude Code...' -ForegroundColor Gray
+Write-Host ''
+
+Write-Host '--------------------------------------------------------------' -ForegroundColor Yellow
+Write-Host '  [提示] 如果下方出现英文选择界面：' -ForegroundColor Yellow
+Write-Host '' -ForegroundColor Yellow
+Write-Host '  "Claude Code will be able to read, edit, and execute files here."' -ForegroundColor Gray
+Write-Host '' -ForegroundColor Yellow
+Write-Host '  这是 Claude Code 在问你：是否信任当前文件夹？' -ForegroundColor Yellow
+Write-Host '  这个测试项目是你自己创建的，完全安全。' -ForegroundColor Green
+Write-Host '  直接按回车即可继续。' -ForegroundColor Green
+Write-Host '--------------------------------------------------------------' -ForegroundColor Yellow
+Write-Host ''
+
+`$cmd = Get-Command claude -ErrorAction SilentlyContinue
+if (-not `$cmd) {
+    Write-Host '[错误] 当前终端未识别 claude 命令。' -ForegroundColor Red
+    Write-Host ''
+    Write-Host '请尝试：' -ForegroundColor Yellow
+    Write-Host '1. 关闭此窗口，重新打开 PowerShell，执行 claude --version'
+    Write-Host '2. 如仍失败，回到安装助手选择 [4] 一键诊断'
+    Write-Host '3. 或运行「一键修复依赖.cmd」'
+    Write-Host ''
+    Read-Host '按回车键关闭窗口'
+    exit 10
+}
+
+try {
+    & claude
+    `$exitCode = `$LASTEXITCODE
+    if (`$null -ne `$exitCode -and `$exitCode -ne 0) {
+        Write-Host ''
+        Write-Host "[提示] Claude Code 已退出，退出码：`$exitCode" -ForegroundColor Yellow
+        Write-Host '如果刚才没有正常进入 Claude Code，请回到安装助手选择 [4] 一键诊断。' -ForegroundColor Yellow
+        Write-Host ''
+        Read-Host '按回车键关闭窗口'
+    }
+} catch {
+    Write-Host ''
+    Write-Host '[错误] Claude Code 启动过程中发生异常。' -ForegroundColor Red
+    Write-Host `$_.Exception.Message -ForegroundColor Red
+    Write-Host ''
+    Write-Host '请回到安装助手选择 [4] 一键诊断，只发送 report.txt。' -ForegroundColor Yellow
+    Write-Host ''
+    Read-Host '按回车键关闭窗口'
+    exit 20
+}
+"@
+
+    # 使用 UTF-16LE (Unicode) 编码为 Base64，避免中文、空格、引号转义问题
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($launchScript))
+
+    try {
+        $proc = Start-Process -FilePath $psExe `
+            -ArgumentList @("-NoExit", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encodedCommand) `
+            -WorkingDirectory $ProjectPath `
+            -PassThru `
+            -ErrorAction Stop
+
+        Write-Log "INFO" "Start-ClaudeTestTerminal: 已启动 PowerShell 测试终端 (PID=$($proc.Id), Path=$ProjectPath)"
+        return $true
+    }
+    catch {
+        Write-Warning "无法启动 PowerShell 测试终端。"
+        Write-Log "ERROR" "Start-ClaudeTestTerminal: Start-Process 失败: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+# ============================================================
 # 最终完成页
 # ============================================================
 
@@ -1260,7 +1404,7 @@ function Show-CompletionPage {
             Write-Success "新 PowerShell 已验证可直接运行 claude。"
             Write-Host ""
             Write-Info "下一步建议："
-            Write-Info "选择 [1] 立即验证 Claude Code 是否能正常使用。"
+            Write-Info "选择 [1] 启动 Claude Code 测试。"
         }
         elseif ($pathOk -and -not $freshOk) {
             Write-Host "==============================================================" -ForegroundColor Yellow
@@ -1391,8 +1535,9 @@ function Show-CompletionMenu {
     <#
     .SYNOPSIS
         v1.3.3 UX: 完成页快捷操作菜单。循环显示直到用户选择退出。
-        第一项为"立即验证 Claude Code 是否能正常使用（推荐）"。
-        不自动启动 claude，引导用户手动在终端输入。
+        [1] 自动打开测试项目终端并直接运行 claude（推荐）。
+        [2] 仅打开测试项目文件夹，不启动 claude。
+        不自动启动 claude——仅在用户主动选择 [1] 后才启动。
     #>
     while ($true) {
         Write-Host ""
@@ -1400,14 +1545,14 @@ function Show-CompletionMenu {
         Write-Host "  请选择下一步：" -ForegroundColor Cyan
         Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
 
-        # 选项 1: 立即验证 Claude Code 是否能正常使用（推荐）
+        # 选项 1: 启动 Claude Code 测试（推荐）
         $testProjectAvailable = ($script:TestProjectPath -and (Test-Path $script:TestProjectPath))
         if ($testProjectAvailable) {
-            Write-Host "  [1] 立即验证 Claude Code 是否能正常使用（推荐）" -ForegroundColor Green
-            Write-Host "      打开测试文件夹，手动打开终端，输入 claude 验证。" -ForegroundColor DarkGray
+            Write-Host "  [1] 启动 Claude Code 测试（推荐）" -ForegroundColor Green
+            Write-Host "      自动打开测试项目终端，并直接运行 claude。" -ForegroundColor DarkGray
         }
         else {
-            Write-Host "  [1] 立即验证 Claude Code（测试项目未创建）" -ForegroundColor DarkGray
+            Write-Host "  [1] 启动 Claude Code 测试（测试项目未创建）" -ForegroundColor DarkGray
         }
 
         # 选项 2: 打开测试项目文件夹
@@ -1452,41 +1597,20 @@ function Show-CompletionMenu {
                         Write-Info "请手动在任意位置新建文件夹，然后在文件夹中打开 PowerShell 输入 claude。"
                         continue
                     }
+                    $testProjectAvailable = ($script:TestProjectPath -and (Test-Path $script:TestProjectPath))
                 }
 
-                # 检查 fresh shell 验证状态
-                $nativeClaudeExe = Get-NativeClaudeExePath
-                $freshOk = $false
-                if ((Test-Path $nativeClaudeExe) -or $script:ClaudeInstalled) {
-                    $freshCheck = Test-ClaudeCommandInFreshShell
-                    $freshOk = $freshCheck.Success
-                }
+                Write-Info "正在打开 Claude Code 测试终端..."
+                $started = Start-ClaudeTestTerminal -ProjectPath $script:TestProjectPath
 
-                if (-not $freshOk -and $script:ClaudeInstalled) {
-                    Write-Warning "当前新 PowerShell 尚未确认能直接运行 claude。"
-                    Write-Info "建议先运行 [4] 一键诊断 或「一键修复依赖」。"
-                    Write-Info "也可以关闭当前窗口后重新打开 PowerShell，执行 claude --version。"
-                    Write-Host ""
+                if ($started) {
+                    Write-Success "已打开 Claude Code 测试终端。"
+                    Write-Info "新窗口会自动进入测试项目并运行 claude。"
+                    Write-Info "如新窗口启动失败，请选择 [4] 运行一键诊断。"
                 }
-
-                Write-Info "正在打开测试项目..."
-                Write-Info "该项目只用于首次验证 Claude Code 能正常使用，测试完成后可以删除。"
-                try {
-                    explorer.exe $script:TestProjectPath
-                    Write-Info "已打开测试项目文件夹: $($script:TestProjectPath)"
-                    Write-Host ""
-                    Write-Info "请在打开的文件夹空白处右键 → 在终端中打开"
-                    Write-Info "然后输入："
-                    Write-Host ""
-                    Write-Host "  claude" -ForegroundColor Green
-                    Write-Host ""
-                    Write-Info "进入 Claude Code 后，可以复制下面这句话测试："
-                    Write-Host ""
-                    Write-Host "  请用一句话说明当前项目是做什么的。" -ForegroundColor Cyan
-                    Write-Host ""
-                }
-                catch {
-                    Write-Warning "无法自动打开文件夹，请手动打开: $($script:TestProjectPath)"
+                else {
+                    Write-Warning "自动启动测试终端失败。"
+                    Write-Info "你仍可选择 [2] 打开测试项目文件夹，然后手动打开终端输入 claude。"
                 }
             }
             "2" {
