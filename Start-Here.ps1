@@ -341,9 +341,10 @@ function Step-CheckEnvironment {
 
     # Native Install 预判：在检测 Node.js/npm 前判断是否已有 Native Install 可用
     # 避免将 Node/npm 缺失误报为核心问题
-    $nativeBinDir = Join-Path $env:LOCALAPPDATA ".local\bin"
-    $nativeExePath = Join-Path $nativeBinDir "claude.exe"
-    $nativePreCheckOk = (Test-Path $nativeExePath) -and (Test-UserPathContains -TargetPath $nativeBinDir)
+    $nativeBinDir = Get-NativeClaudeBinPath
+    $nativeExePath = Get-NativeClaudeExePath
+    $nativePathCheck = Test-UserPathContains -TargetPath $nativeBinDir
+    $nativePreCheckOk = (Test-Path $nativeExePath) -and $nativePathCheck.Contains
 
     # Node.js 检测
     Write-CheckProgress -Current 4 -Total 10 -Name "Node.js"

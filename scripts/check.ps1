@@ -2752,6 +2752,26 @@ if (-not (Test-Path (Join-Path $RootDir "docs\v1.3.3-最终验收清单.md"))) {
     throw "docs/v1.3.3-最终验收清单.md must exist"
 }
 
+# 8. Native Install 路径不得使用 LOCALAPPDATA
+if ($startHereText -match '\$env:LOCALAPPDATA.*\.local\\bin') {
+    throw "Start-Here.ps1 must NOT use `$env:LOCALAPPDATA for Native Install path"
+}
+if ($startHereText -notmatch 'Get-NativeClaudeBinPath') {
+    throw "Start-Here.ps1 must use Get-NativeClaudeBinPath"
+}
+if ($startHereText -notmatch 'Get-NativeClaudeExePath') {
+    throw "Start-Here.ps1 must use Get-NativeClaudeExePath"
+}
+
+# 9. 验收清单路径正确
+$checklistText = Get-Content -Path (Join-Path $RootDir "docs\v1.3.3-最终验收清单.md") -Raw -Encoding UTF8
+if ($checklistText -match [regex]::Escape('%LOCALAPPDATA%\.local\bin\claude.exe')) {
+    throw "验收清单 must NOT contain %LOCALAPPDATA%\.local\bin\claude.exe"
+}
+if ($checklistText -notmatch [regex]::Escape('%USERPROFILE%\.local\bin\claude.exe')) {
+    throw "验收清单 must contain %USERPROFILE%\.local\bin\claude.exe"
+}
+
 Write-Host "[check] P2 UX copy anti-regression OK"
 
 # ============================================================

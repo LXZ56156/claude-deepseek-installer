@@ -1774,6 +1774,29 @@ x-api-key: $TestApiKey
         Test-Path (Join-Path $ScriptRoot "docs\v1.3.3-最终验收清单.md")
     } "docs/v1.3.3-最终验收清单.md 必须存在"
 
+    # --- 28j: Native Install 路径防回归（不得使用 LOCALAPPDATA）---
+    Assert "28j: Start-Here.ps1 不得在 Native Install 预判中使用 LOCALAPPDATA" {
+        $startHereText -notmatch '\$env:LOCALAPPDATA.*\.local\\bin'
+    } "Start-Here.ps1 不得使用 `$env:LOCALAPPDATA\.local\bin"
+
+    Assert "28j: Start-Here.ps1 Native Install 预判必须使用 Get-NativeClaudeBinPath" {
+        $startHereText -match 'Get-NativeClaudeBinPath' -and $startHereText -match 'Get-NativeClaudeExePath'
+    } "Start-Here.ps1 必须使用 Get-NativeClaudeBinPath 和 Get-NativeClaudeExePath"
+
+    Assert "28j: Start-Here.ps1 nativePreCheckOk 必须使用 .Contains" {
+        $startHereText -match '\.Contains'
+    } "Start-Here.ps1 nativePreCheckOk 必须使用 .Contains 属性"
+
+    # --- 28k: 验收清单路径防回归 ---
+    $checklistText = Get-Content -Path (Join-Path $ScriptRoot "docs\v1.3.3-最终验收清单.md") -Raw -Encoding UTF8
+    Assert "28k: 验收清单不得包含 LOCALAPPDATA\.local\bin\claude.exe" {
+        $checklistText -notmatch [regex]::Escape('%LOCALAPPDATA%\.local\bin\claude.exe')
+    } "验收清单不得包含 %LOCALAPPDATA%\.local\bin\claude.exe"
+
+    Assert "28k: 验收清单必须包含 %USERPROFILE%\.local\bin\claude.exe" {
+        $checklistText -match [regex]::Escape('%USERPROFILE%\.local\bin\claude.exe')
+    } "验收清单必须包含 %USERPROFILE%\.local\bin\claude.exe"
+
     Write-Host ""
 
     # ============================================================
