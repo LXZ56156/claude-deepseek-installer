@@ -3,7 +3,7 @@
 #
 # 用法:
 #   powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
-#   powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version "1.3.2"
+#   powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version "1.3.3"
 #
 # 输出:
 #   release/ClaudeCode-DeepSeek-本地配置助手-v<Version>.zip
@@ -11,7 +11,7 @@
 # ============================================================
 
 param(
-    [string]$Version = "1.3.2",
+    [string]$Version = "1.3.3",
     [string]$OutputDir = $null,
     [switch]$SkipSha256
 )
