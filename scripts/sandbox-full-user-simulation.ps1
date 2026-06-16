@@ -1016,6 +1016,153 @@ if ($rDefault.Exists -eq $false) {
         Write-SandboxFail "J. Claude inventory" $_.Exception.Message
     }
 
+    # J6: Claude command source runtime PATH/shim matrix
+    Write-Host ""
+    Write-Host "--- J6: Claude Source PATH/Shim Matrix ---" -ForegroundColor Cyan
+
+    try {
+        # Build temp directory tree
+        $matrixRoot = Join-Path $sandboxDir "claude-source-matrix"
+        Remove-Item $matrixRoot -Recurse -Force -ErrorAction SilentlyContinue
+        $matrixProfile = Join-Path $matrixRoot "UserProfile"
+        $matrixLocalBin = Join-Path $matrixProfile ".local\bin"
+        $matrixAppData = Join-Path $matrixRoot "AppData\Roaming"
+        $matrixNpm = Join-Path $matrixAppData "npm"
+        $matrixLocalAppData = Join-Path $matrixRoot "AppData\Local"
+        $matrixWinApps = Join-Path $matrixLocalAppData "Microsoft\WindowsApps"
+        $matrixPathDir = Join-Path $matrixRoot "PathBin"
+
+        foreach ($d in @($matrixProfile, $matrixLocalBin, $matrixAppData, $matrixNpm,
+            $matrixLocalAppData, $matrixWinApps, $matrixPathDir)) {
+            New-Item -ItemType Directory -Path $d -Force | Out-Null
+        }
+
+        # Helper shims
+        $goodCmdContent = "@echo off`r`necho 1.0.0-matrix`r`nexit /b 0`r`n"
+        $brokenCmdContent = "@echo off`r`necho broken`r`nexit /b 1`r`n"
+
+        # Build single subprocess that runs all 5 cases.
+        # Use [System.Text.StringBuilder] to avoid here-string escaping issues
+        # with mix of parent-expanded paths and subprocess-local variables.
+        $j6Sb = New-Object System.Text.StringBuilder
+        [void]$j6Sb.AppendLine('$ErrorActionPreference = "Continue"')
+        [void]$j6Sb.AppendLine('$systemPath = "C:\Windows\System32;C:\Windows"')
+        [void]$j6Sb.AppendLine("`$matrixPathDir = '$matrixPathDir'")
+        [void]$j6Sb.AppendLine("`$matrixNpm = '$matrixNpm'")
+        [void]$j6Sb.AppendLine("`$matrixWinApps = '$matrixWinApps'")
+        [void]$j6Sb.AppendLine("`$matrixProfile = '$matrixProfile'")
+        [void]$j6Sb.AppendLine("`$matrixLocalBin = '$matrixLocalBin'")
+        [void]$j6Sb.AppendLine("`$matrixAppData = '$matrixAppData'")
+        [void]$j6Sb.AppendLine("`$matrixLocalAppData = '$matrixLocalAppData'")
+        [void]$j6Sb.AppendLine('')
+        # Case J6.1: NO CLAUDE
+        [void]$j6Sb.AppendLine('# --- J6.1: NO CLAUDE ---')
+        [void]$j6Sb.AppendLine('$env:CCDI_TEST_MODE = "1"')
+        [void]$j6Sb.AppendLine('$env:CCDI_TEST_USERPROFILE = $matrixProfile')
+        [void]$j6Sb.AppendLine('$env:CCDI_TEST_DESKTOP = $matrixProfile')
+        [void]$j6Sb.AppendLine('$env:USERPROFILE = $matrixProfile')
+        [void]$j6Sb.AppendLine('$env:APPDATA = $matrixAppData')
+        [void]$j6Sb.AppendLine('$env:LOCALAPPDATA = $matrixLocalAppData')
+        [void]$j6Sb.AppendLine('$env:PATH = "$matrixPathDir;$systemPath"')
+        [void]$j6Sb.AppendLine('Get-ChildItem $matrixPathDir -Filter claude.* -ErrorAction SilentlyContinue | Remove-Item -Force')
+        [void]$j6Sb.AppendLine('$inv1 = Get-ClaudeCommandInventory')
+        [void]$j6Sb.AppendLine('$cnt1 = [int]($inv1.Candidates.Count)')
+        [void]$j6Sb.AppendLine('if ($cnt1 -eq 0) { Write-Output "SANDBOX_TEST:PASS:J6_NO_CLAUDE" }')
+        [void]$j6Sb.AppendLine('else { Write-Output "SANDBOX_TEST:FAIL:J6_NO_CLAUDE:Count=$cnt1" }')
+        [void]$j6Sb.AppendLine('')
+        # Case J6.2: PATH claude.cmd OK
+        [void]$j6Sb.AppendLine('# --- J6.2: PATH OK ---')
+        [void]$j6Sb.AppendLine('Set-Content -Path (Join-Path $matrixPathDir claude.cmd) -Value "@echo off`r`necho 1.0.0-matrix`r`nexit /b 0`r`n" -Encoding ASCII')
+        [void]$j6Sb.AppendLine('$env:USERPROFILE = $matrixProfile')
+        [void]$j6Sb.AppendLine('$env:APPDATA = $matrixAppData')
+        [void]$j6Sb.AppendLine('$env:LOCALAPPDATA = $matrixLocalAppData')
+        [void]$j6Sb.AppendLine('$env:PATH = "$matrixPathDir;$systemPath"')
+        [void]$j6Sb.AppendLine('$inv2 = Get-ClaudeCommandInventory')
+        [void]$j6Sb.AppendLine('$usable2 = @($inv2.Candidates | Where-Object { $_.Usable }).Count')
+        [void]$j6Sb.AppendLine('if ($usable2 -ge 1 -and $inv2.Active -and $inv2.Active.Usable) {')
+        [void]$j6Sb.AppendLine('  Write-Output "SANDBOX_TEST:PASS:J6_PATH_OK"')
+        [void]$j6Sb.AppendLine('  Write-Output "SANDBOX_TEST:INFO:J6_PATH_OK:Source=$($inv2.Active.Source)"')
+        [void]$j6Sb.AppendLine('} else { Write-Output "SANDBOX_TEST:FAIL:J6_PATH_OK:Usable=$usable2:Candidates=$($inv2.Candidates.Count)" }')
+        [void]$j6Sb.AppendLine('')
+        # Case J6.3: NPM_GLOBAL
+        [void]$j6Sb.AppendLine('# --- J6.3: NPM_GLOBAL ---')
+        [void]$j6Sb.AppendLine('Set-Content -Path (Join-Path $matrixNpm claude.cmd) -Value "@echo off`r`necho 1.0.0-matrix-npm`r`nexit /b 0`r`n" -Encoding ASCII')
+        [void]$j6Sb.AppendLine('$env:USERPROFILE = $matrixProfile')
+        [void]$j6Sb.AppendLine('$env:APPDATA = $matrixAppData')
+        [void]$j6Sb.AppendLine('$env:LOCALAPPDATA = $matrixLocalAppData')
+        [void]$j6Sb.AppendLine('$env:PATH = "$matrixNpm;$matrixPathDir;$systemPath"')
+        [void]$j6Sb.AppendLine('$inv3 = Get-ClaudeCommandInventory')
+        [void]$j6Sb.AppendLine('$npmCands = @($inv3.Candidates | Where-Object { $_.Source -eq "npm_global" -or $_.Path -like "*\npm\claude.*" })')
+        [void]$j6Sb.AppendLine('$npmUsable = @($npmCands | Where-Object { $_.Usable }).Count')
+        [void]$j6Sb.AppendLine('if ($npmCands.Count -gt 0 -and $npmUsable -ge 1) {')
+        [void]$j6Sb.AppendLine('  Write-Output "SANDBOX_TEST:PASS:J6_NPM_GLOBAL"')
+        [void]$j6Sb.AppendLine('  Write-Output "SANDBOX_TEST:INFO:J6_NPM_GLOBAL:Candidates=$($npmCands.Count):Usable=$npmUsable"')
+        [void]$j6Sb.AppendLine('} else { Write-Output "SANDBOX_TEST:FAIL:J6_NPM_GLOBAL:NpmCands=$($npmCands.Count):NpmUsable=$npmUsable" }')
+        [void]$j6Sb.AppendLine('')
+        # Case J6.4: WINDOWS_APPS
+        [void]$j6Sb.AppendLine('# --- J6.4: WINDOWS_APPS ---')
+        [void]$j6Sb.AppendLine('Set-Content -Path (Join-Path $matrixWinApps claude.cmd) -Value "@echo off`r`necho Claude Desktop alias`r`nexit /b 0`r`n" -Encoding ASCII')
+        [void]$j6Sb.AppendLine('$env:USERPROFILE = $matrixProfile')
+        [void]$j6Sb.AppendLine('$env:APPDATA = $matrixAppData')
+        [void]$j6Sb.AppendLine('$env:LOCALAPPDATA = $matrixLocalAppData')
+        [void]$j6Sb.AppendLine('$env:PATH = "$matrixWinApps;$systemPath"')
+        [void]$j6Sb.AppendLine('$inv4 = Get-ClaudeCommandInventory')
+        [void]$j6Sb.AppendLine('$waCands = @($inv4.Candidates | Where-Object { $_.Source -eq "windowsapps" -or $_.Path -like "*\WindowsApps\claude.*" })')
+        [void]$j6Sb.AppendLine('if ($waCands.Count -gt 0) {')
+        [void]$j6Sb.AppendLine('  $waRiskOk = ($waCands | Where-Object { $_.Risk -ne "WARN" }).Count -eq 0')
+        [void]$j6Sb.AppendLine('  if ($waRiskOk) { Write-Output "SANDBOX_TEST:PASS:J6_WINDOWS_APPS" }')
+        [void]$j6Sb.AppendLine('  else { Write-Output "SANDBOX_TEST:FAIL:J6_WINDOWS_APPS:RiskNotWarn=$($waCands[0].Risk)" }')
+        [void]$j6Sb.AppendLine('} else { Write-Output "SANDBOX_TEST:FAIL:J6_WINDOWS_APPS:NoCandidate:Total=$($inv4.Candidates.Count)" }')
+        [void]$j6Sb.AppendLine('')
+        # Case J6.5: PATH BROKEN + NATIVE FALLBACK
+        [void]$j6Sb.AppendLine('# --- J6.5: PATH BROKEN + NATIVE FALLBACK ---')
+        [void]$j6Sb.AppendLine('Set-Content -Path (Join-Path $matrixPathDir claude.cmd) -Value "@echo off`r`necho broken`r`nexit /b 1`r`n" -Encoding ASCII')
+        [void]$j6Sb.AppendLine('Set-Content -Path (Join-Path $matrixLocalBin claude.cmd) -Value "@echo off`r`necho 1.0.0-matrix-native`r`nexit /b 0`r`n" -Encoding ASCII')
+        [void]$j6Sb.AppendLine('$env:USERPROFILE = $matrixProfile')
+        [void]$j6Sb.AppendLine('$env:APPDATA = $matrixAppData')
+        [void]$j6Sb.AppendLine('$env:LOCALAPPDATA = $matrixLocalAppData')
+        [void]$j6Sb.AppendLine('$env:PATH = "$matrixPathDir;$matrixLocalBin;$systemPath"')
+        [void]$j6Sb.AppendLine('$inv5 = Get-ClaudeCommandInventory')
+        [void]$j6Sb.AppendLine('$nativeCand = @($inv5.Candidates | Where-Object { $_.Source -eq "native_local_bin" -or $_.Path -like "*\.local\bin\claude.*" }) | Select-Object -First 1')
+        [void]$j6Sb.AppendLine('$usableAny = @($inv5.Candidates | Where-Object { $_.Usable }).Count')
+        [void]$j6Sb.AppendLine('if ($nativeCand -and $nativeCand.Usable) {')
+        [void]$j6Sb.AppendLine('  Write-Output "SANDBOX_TEST:PASS:J6_PATH_BROKEN_NATIVE_FALLBACK"')
+        [void]$j6Sb.AppendLine('  Write-Output "SANDBOX_TEST:INFO:J6_PATH_BROKEN_NATIVE_FALLBACK:HasConflict=$($inv5.HasConflict):Summary=$($inv5.ConflictSummary)"')
+        [void]$j6Sb.AppendLine('} else { Write-Output "SANDBOX_TEST:FAIL:J6_PATH_BROKEN_NATIVE_FALLBACK:NativeFound=$($null -ne $nativeCand):NativeUsable=$(if($nativeCand){$nativeCand.Usable}else{"N/A"}):HasConflict=$($inv5.HasConflict):UsableAny=$usableAny" }')
+        $j6Script = $j6Sb.ToString()
+
+        # Start J6 subprocess with minimal PATH to avoid host claude leaking in
+        $j6Result = Invoke-SandboxFunctionTest -Label "Claude source matrix (J6)" `
+            -ReleaseRoot $extractDir -ScriptText $j6Script -TimeoutSec 120 `
+            -Environment @{ PATH = "C:\Windows\System32;C:\Windows" }
+
+        $j6Passes = 0
+        $j6Fails = 0
+        $j6Required = @("J6_NO_CLAUDE", "J6_PATH_OK", "J6_NPM_GLOBAL", "J6_WINDOWS_APPS", "J6_PATH_BROKEN_NATIVE_FALLBACK")
+        foreach ($marker in $j6Required) {
+            if ($j6Result.Stdout -match "SANDBOX_TEST:PASS:$marker") {
+                $j6Passes++
+                Write-SandboxPass "J6. $marker"
+            } else {
+                $j6Fails++
+                Write-SandboxFail "J6. $marker" "matrix test failed: $($j6Result.Stdout | Select-String $marker)"
+            }
+        }
+
+        if ($j6Fails -gt 0) {
+            Write-SandboxFail "J6. Claude source matrix" "$j6Fails/$($j6Required.Count) cases failed"
+        } elseif ($j6Passes -lt 4) {
+            Write-SandboxFail "J6. Claude source matrix" "only $j6Passes/$($j6Required.Count) cases passed, need at least 4"
+        } else {
+            Write-SandboxPass "J6. Claude source matrix ($j6Passes/$($j6Required.Count) cases)"
+        }
+
+        # Cleanup
+        Remove-Item $matrixRoot -Recurse -Force -ErrorAction SilentlyContinue
+    } catch {
+        Write-SandboxFail "J6. Claude source matrix" $_.Exception.Message
+    }
+
     # ============================================================
     # SCENARIO K: npm.cmd vs npm.ps1 resolution
     # ============================================================
@@ -1360,12 +1507,23 @@ try {
             Write-SandboxFail "O1. JSON error message" "configure-deepseek logs do not contain JSON format error message"
         }
 
-        # O2: Backup of corrupted file should exist
-        $backups = Get-ChildItem -Path (Join-Path $extractDir "backup") -Filter "*.bak" -ErrorAction SilentlyContinue
-        if ($backups.Count -gt 0) {
-            Write-SandboxPass "O2. Corrupted JSON backed up before rebuild"
+        # O2: Backup of corrupted file MUST exist (scan multiple directories)
+        $backupCandidates = @()
+        foreach ($scanDir in @(
+            (Join-Path $extractDir "backup"),
+            (Join-Path $corruptProfile ".claude"),
+            (Join-Path $corruptProfile ".claude-deepseek-installer"),
+            $sandboxDir
+        )) {
+            if (Test-Path $scanDir) {
+                $backupCandidates += Get-ChildItem -Path $scanDir -Recurse -File -Include "*.bak","*.backup","settings.json.*" -ErrorAction SilentlyContinue
+            }
+        }
+        $nonEmptyBackups = $backupCandidates | Where-Object { $_.Length -gt 0 }
+        if ($nonEmptyBackups.Count -gt 0) {
+            Write-SandboxPass "O2. Corrupted JSON backed up ($($nonEmptyBackups.Count) non-empty backup(s))"
         } else {
-            Write-SandboxInfo "O2. Backup check: may be in TestSafe limit"
+            Write-SandboxFail "O2. Corrupted JSON backup" "no non-empty backup .bak file found in backup/, .claude/, .claude-deepseek-installer/, or sandbox dir"
         }
 
         # O3: New settings.json should be valid JSON
@@ -1539,6 +1697,35 @@ try {
             } else {
                 Write-SandboxPass "P12. Check-Commands does NOT call Test-WslInstalled"
             }
+        }
+
+        # P13: Anti-regression: no soft INFO fallback for mandatory checks.
+        # Scan self source excluding this anti-regression block itself.
+        $selfLines = Get-Content -Path (Join-Path $PSScriptRoot "sandbox-full-user-simulation.ps1") -Encoding UTF8
+        $p13Start = -1; $p13End = -1
+        for ($si = 0; $si -lt $selfLines.Count; $si++) {
+            if ($selfLines[$si] -match 'P13: Anti-regression') { $p13Start = $si }
+            if ($p13Start -ge 0 -and $si -gt $p13Start -and $selfLines[$si] -match '^\s*\}\s*$' -and $si -gt $p13Start + 3) { $p13End = $si; break }
+        }
+        $selfSourceCheck = if ($p13Start -ge 0 -and $p13End -gt $p13Start) {
+            ($selfLines[0..($p13Start - 1)] -join "`n") + "`n" + ($selfLines[($p13End + 1)..($selfLines.Count - 1)] -join "`n")
+        } else { $selfLines -join "`n" }
+        $forbiddenSoft = @(
+            "O2. Backup check: may be in TestSafe limit",
+            "J4. Only",
+            "will verify during runtime if needed",
+            "could not extract Check-Commands body",
+            "could not extract Check-WSL"
+        )
+        $softFound = $false
+        foreach ($fs in $forbiddenSoft) {
+            if ($selfSourceCheck -match [regex]::Escape($fs)) {
+                Write-SandboxFail "P13. Anti-regression" "soft INFO fallback found: '$fs'"
+                $softFound = $true
+            }
+        }
+        if (-not $softFound) {
+            Write-SandboxPass "P13. No soft INFO fallback for mandatory checks"
         }
     } catch {
         Write-SandboxFail "P. Privacy scan" $_.Exception.Message
