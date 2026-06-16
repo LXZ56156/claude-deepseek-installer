@@ -742,6 +742,327 @@ function Get-ApiKeyFromEnvironment {
 }
 
 # ============================================================
+# PATH 持久化函数 (v1.3.3)
+# ============================================================
+
+function Get-NativeClaudeBinPath {
+    <#
+    .SYNOPSIS
+        返回 Claude 官方 Native Install 的默认安装目录。
+    .RETURNS
+        %USERPROFILE%\.local\bin 的完整路径
+    #>
+    return Join-Path (Get-UserProfilePath) ".local\bin"
+}
+
+function Get-NativeClaudeExePath {
+    <#
+    .SYNOPSIS
+        返回 Claude 官方 Native Install 的 claude.exe 完整路径。
+    .RETURNS
+        %USERPROFILE%\.local\bin\claude.exe 的完整路径
+    #>
+    return Join-Path (Get-NativeClaudeBinPath) "claude.exe"
+}
+
+function Test-UserPathContains {
+    <#
+    .SYNOPSIS
+        检测 User PATH 环境变量是否包含指定路径。
+        大小写不敏感，Trim 空白和末尾反斜杠后比较。
+        必须检查注册表（User 级别），而非当前进程 $env:Path。
+    .PARAMETER TargetPath
+        要检测的路径
+    .RETURNS
+        包含 Contains, NormalizedTarget, UserPathEntries 的哈希表
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPath
+    )
+
+    $result = @{
+        Contains         = $false
+        NormalizedTarget = ""
+        UserPathEntries  = @()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($TargetPath)) {
+        return $result
+    }
+
+    try {
+        $normalizedTarget = ([string]$TargetPath).Trim().TrimEnd('\').ToLowerInvariant()
+        $result.NormalizedTarget = $normalizedTarget
+
+        $userPathRaw = [Environment]::GetEnvironmentVariable("Path", "User")
+        if ([string]::IsNullOrWhiteSpace($userPathRaw)) {
+            Write-Log "DEBUG" "Test-UserPathContains: User PATH 为空"
+            return $result
+        }
+
+        $entries = $userPathRaw -split ';' | ForEach-Object { $_.Trim().TrimEnd('\') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        $result.UserPathEntries = @($entries)
+
+        foreach ($entry in $entries) {
+            if ($entry.ToLowerInvariant() -eq $normalizedTarget) {
+                $result.Contains = $true
+                Write-Log "DEBUG" "Test-UserPathContains: 路径已在 User PATH 中: $entry"
+                break
+            }
+        }
+    }
+    catch {
+        Write-Log "WARN" "Test-UserPathContains 异常: $_"
+    }
+
+    return $result
+}
+
+function Ensure-UserPathEntry {
+    <#
+    .SYNOPSIS
+        将指定路径持久化写入 User PATH，不需要管理员权限。
+        写入前去重，写入后刷新当前进程 PATH 并验证。
+    .PARAMETER PathToAdd
+        要加入 User PATH 的路径
+    .PARAMETER TestSafe
+        测试安全模式：跳过真实写入
+    .RETURNS
+        包含 Success, Changed, Path, Error 的哈希表
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PathToAdd,
+        [switch]$TestSafe
+    )
+
+    $result = @{
+        Success = $false
+        Changed = $false
+        Path    = $PathToAdd
+        Error   = ""
+    }
+
+    # 验证路径非空
+    if ([string]::IsNullOrWhiteSpace($PathToAdd)) {
+        $result.Error = "目标路径为空"
+        Write-Log "ERROR" "Ensure-UserPathEntry: $($result.Error)"
+        return $result
+    }
+
+    # TestSafe 模式：跳过真实写入和目录验证
+    if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
+        Write-Log "INFO" "TestSafe: 跳过 User PATH 写入: $PathToAdd"
+
+        # 仍检测是否已存在
+        $check = Test-UserPathContains -TargetPath $PathToAdd
+        $result.Success = $true
+        $result.Changed = (-not $check.Contains)
+        if ($result.Changed) {
+            Write-Log "INFO" "TestSafe: 路径未在 User PATH 中，实际运行时会写入。"
+        }
+        return $result
+    }
+
+    # 真实模式：验证目标目录存在
+    if (-not (Test-Path $PathToAdd -PathType Container)) {
+        $result.Error = "目标目录不存在: $PathToAdd"
+        Write-Log "WARN" "Ensure-UserPathEntry: $($result.Error)"
+        return $result
+    }
+
+    try {
+        # 1. 检测是否已存在
+        $check = Test-UserPathContains -TargetPath $PathToAdd
+        if ($check.Contains) {
+            $result.Success = $true
+            $result.Changed = $false
+            Write-Log "INFO" "Ensure-UserPathEntry: 路径已在 User PATH 中，无需写入: $PathToAdd"
+            return $result
+        }
+
+        # 2. 读取当前 User PATH
+        $userPathRaw = [Environment]::GetEnvironmentVariable("Path", "User")
+        $newUserPath = if ([string]::IsNullOrWhiteSpace($userPathRaw)) {
+            $PathToAdd
+        }
+        else {
+            # 去重：确保不重复追加
+            $entries = $userPathRaw -split ';' | ForEach-Object { $_.Trim().TrimEnd('\') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            $normalizedAdd = $PathToAdd.Trim().TrimEnd('\')
+            $alreadyPresent = $false
+            foreach ($entry in $entries) {
+                if ($entry.ToLowerInvariant() -eq $normalizedAdd.ToLowerInvariant()) {
+                    $alreadyPresent = $true
+                    break
+                }
+            }
+            if ($alreadyPresent) {
+                $result.Success = $true
+                $result.Changed = $false
+                Write-Log "INFO" "Ensure-UserPathEntry: 去重检测路径已存在（二次确认），无需写入"
+                return $result
+            }
+            ($entries -join ';') + ';' + $PathToAdd
+        }
+
+        # 3. 写入 User PATH
+        [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+        Write-Log "INFO" "Ensure-UserPathEntry: 已写入 User PATH: $PathToAdd"
+
+        # 4. 重新读取验证
+        $verifyCheck = Test-UserPathContains -TargetPath $PathToAdd
+        if (-not $verifyCheck.Contains) {
+            $result.Error = "写入后验证失败：User PATH 中仍未找到路径"
+            Write-Log "ERROR" "Ensure-UserPathEntry: $($result.Error)"
+            return $result
+        }
+
+        # 5. 同步刷新当前进程 PATH（让当前窗口立即可用）
+        try {
+            $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+            $currentProcessPath = $env:Path
+            $updatedProcessPath = $newUserPath
+            if ($machinePath) {
+                $updatedProcessPath = "$updatedProcessPath;$machinePath"
+            }
+            if ($currentProcessPath) {
+                $updatedProcessPath = "$updatedProcessPath;$currentProcessPath"
+            }
+            $env:Path = $updatedProcessPath
+            Write-Log "DEBUG" "Ensure-UserPathEntry: 当前进程 PATH 已同步刷新"
+        }
+        catch {
+            Write-Log "WARN" "Ensure-UserPathEntry: 当前进程 PATH 刷新失败（不影响持久化）: $_"
+        }
+
+        $result.Success = $true
+        $result.Changed = $true
+        Write-Log "INFO" "Ensure-UserPathEntry: 成功写入并验证 User PATH"
+    }
+    catch {
+        $result.Error = "写入 User PATH 异常: $($_.Exception.Message)"
+        Write-Log "ERROR" "Ensure-UserPathEntry: $($result.Error)"
+    }
+
+    return $result
+}
+
+# ============================================================
+# Fresh Shell 验证 (v1.3.3)
+# ============================================================
+
+function Test-ClaudeCommandInFreshShell {
+    <#
+    .SYNOPSIS
+        启动一个新的 PowerShell -NoProfile 子进程，模拟用户新开窗口后的环境。
+        重建 Machine + User PATH 后执行 claude --version。
+        不使用当前脚本已污染的 $env:Path。
+    .PARAMETER TestSafe
+        测试安全模式：跳过真实执行。
+    .RETURNS
+        包含 Success, Output, Error, ExitCode, Version 的哈希表
+    #>
+    param(
+        [switch]$TestSafe
+    )
+
+    $result = @{
+        Success  = $false
+        Output   = ""
+        Error    = ""
+        ExitCode = -1
+        Version  = $null
+    }
+
+    if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
+        Write-Log "INFO" "TestSafe: 跳过 fresh shell 验证"
+        $result.Error = "skipped_test_safe"
+
+        # MOCK 支持
+        if ($env:CCDI_MOCK_INSTALL_DECISION -eq "1" -and $env:CCDI_TEST_MODE -eq "1") {
+            $mockFresh = if ($env:CCDI_MOCK_FRESH_SHELL) { $env:CCDI_MOCK_FRESH_SHELL } else { "fail" }
+            if ($mockFresh -eq "ok") {
+                return @{ Success = $true; Output = "2.1.178 (Claude Code)"; Error = ""; ExitCode = 0; Version = "2.1.178 (Claude Code)" }
+            }
+            return @{ Success = $false; Output = ""; Error = "mock: fresh shell claude not found"; ExitCode = 10; Version = $null }
+        }
+
+        return $result
+    }
+
+    try {
+        # 构建子进程脚本：重建干净的 Machine + User PATH，然后检测 claude
+        $script = @'
+$ErrorActionPreference = "Stop"
+try {
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $cleanPath = @()
+    if ($userPath) { $cleanPath += $userPath }
+    if ($machinePath) { $cleanPath += $machinePath }
+    $env:Path = ($cleanPath -join ";")
+
+    $cmd = Get-Command claude -ErrorAction SilentlyContinue
+    if (-not $cmd) {
+        Write-Error "CCDI_FRESH_SHELL: claude not found in fresh shell PATH"
+        exit 10
+    }
+
+    $output = & claude --version 2>&1
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 0 -and $output) {
+        Write-Output $output
+        exit 0
+    }
+    else {
+        Write-Error "CCDI_FRESH_SHELL: claude --version failed (exit=$exitCode)"
+        exit 11
+    }
+}
+catch {
+    Write-Error "CCDI_FRESH_SHELL: $_"
+    exit 20
+}
+'@
+
+        # 通过 PowerShell -NoProfile -Command 执行子进程脚本
+        $freshResult = Invoke-CommandSafe -Command "powershell" -Arguments @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-Command", $script
+        ) -TimeoutSec 30
+
+        $result.ExitCode = $freshResult.ExitCode
+
+        if ($freshResult.Success -and -not [string]::IsNullOrWhiteSpace($freshResult.Output)) {
+            $result.Success = $true
+            $result.Output = $freshResult.Output.Trim()
+            $result.Version = $result.Output
+
+            # 从输出中提取版本号
+            if ($result.Output -match '(\d+\.\d+\.\d+[^\s,]*)') {
+                $result.Version = $matches[1]
+            }
+
+            Write-Log "INFO" "Test-ClaudeCommandInFreshShell: 成功 - $($result.Output)"
+        }
+        else {
+            $errorMsg = if ($freshResult.Error) { $freshResult.Error } else { "ExitCode=$($freshResult.ExitCode)" }
+            $result.Error = $errorMsg
+            Write-Log "WARN" "Test-ClaudeCommandInFreshShell: 失败 - $errorMsg"
+        }
+    }
+    catch {
+        $result.Error = "Fresh shell 验证异常: $($_.Exception.Message)"
+        Write-Log "ERROR" "Test-ClaudeCommandInFreshShell: $($result.Error)"
+    }
+
+    return $result
+}
+
+# ============================================================
 # PATH 刷新
 # ============================================================
 
@@ -1750,8 +2071,10 @@ function Test-Mojibake {
                     if ([int]$ch -gt 127) { $nonAscii++ }
                 }
                 # 超过 60% 非 ASCII 且不匹配常见中文字符范围
+                # 使用显式 Unicode 范围替代 \p{IsCJK...} 命名属性，
+                # 避免 PowerShell 5.1 / .NET Framework 不支持导致崩溃。
                 if ($nonAscii -gt ($total * 0.6)) {
-                    $hasValidCJK = $line -match '[\p{IsCJKUnifiedIdeographs}\p{IsCJKSymbolsAndPunctuation}\p{IsHiragana}\p{IsKatakana}]'
+                    $hasValidCJK = $line -match '[⺀-⻿　-〿぀-ゟ゠-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿︐-︟︰-﹏＀-￯]'
                     if (-not $hasValidCJK) {
                         $isSuspicious = $true
                     }

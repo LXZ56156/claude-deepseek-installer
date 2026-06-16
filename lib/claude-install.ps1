@@ -1,5 +1,5 @@
 ﻿# ============================================================
-# claude-install.ps1 - Claude Code 安装模块 (v1.3.2)
+# claude-install.ps1 - Claude Code 安装模块 (v1.3.3)
 # 集中管理 Claude Code 的检测和安装逻辑。
 #
 # 安装策略:
@@ -875,7 +875,9 @@ function Install-ClaudeCodeNative {
         return $result
     }
 
-    Write-Info "正在使用 Claude 官方 Native Install 方式安装..."
+    Write-Info "正在执行 Claude 官方安装包。"
+    Write-Info "此步骤可能持续数分钟，中途没有新文字也正常，请不要关闭窗口。"
+    Write-Info "安装完成后，本工具会自动验证结果。"
     Write-Log "INFO" "下载 Claude 官方安装脚本: https://claude.ai/install.ps1"
 
     try {
@@ -892,7 +894,10 @@ function Install-ClaudeCodeNative {
             return $result
         }
 
-        Write-Info "正在执行官方安装脚本，安装进度将直接显示在下方..."
+        Write-Info "官方安装脚本已下载，开始安装..."
+        Write-Info "下方是 Claude 官方安装器输出，可能包含英文提示。本工具会在结束后自动判断是否成功。"
+        Write-Host ""
+
         $installResult = Invoke-VisibleInstallCommand -FilePath "powershell" -Arguments @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tempInstallScript
         ) -TimeoutSec 600 -TestSafe:$TestSafe
@@ -900,23 +905,25 @@ function Install-ClaudeCodeNative {
         # 清理临时脚本
         Remove-Item $tempInstallScript -Force -ErrorAction SilentlyContinue
 
+        # 安装脚本执行结束，记录 ExitCode 状态到日志（不向用户展示）
         if ($installResult.Success) {
-            Write-Success "Native Install 安装脚本执行成功。"
-            Write-Log "INFO" "Native Install 完成"
-            $result.Success = $true
+            Write-Log "INFO" "Native Install 安装脚本 ExitCode=0"
         }
         else {
-            # 只记录详细错误到日志，不向用户展示 PowerShell 堆栈
-            $result.Error = "Native Install 安装脚本执行未成功完成"
+            # 只记录详细错误到日志，不向用户展示 PowerShell 堆栈或失败提示
+            $result.Error = "Native Install 安装脚本返回非零退出码或异常"
             $result.RawError = $installResult.Error
-            Write-Log "ERROR" "Native Install 失败详情: ExitCode=$($installResult.ExitCode), Error=$($installResult.Error), DurationMs=$($installResult.DurationMs)"
+            Write-Log "INFO" "Native Install 安装脚本返回非零退出码 (ExitCode=$($installResult.ExitCode), DurationMs=$($installResult.DurationMs))，将进行后验验证判断真实结果"
+            if ($installResult.Error) {
+                Write-Log "DEBUG" "Native Install 详情: Error=$($installResult.Error)"
+            }
         }
     }
     catch {
+        # 异常也写入日志，由后验验证决定最终结论
         $result.Error = "Native Install 异常: $($_.Exception.Message)"
         $result.RawError = $_.Exception.ToString()
-        Write-Warning $result.Error
-        Write-Log "ERROR" $result.Error
+        Write-Log "INFO" "Native Install 安装器异常（将进行后验验证）: $($_.Exception.Message)"
 
         # 清理可能残留的临时文件
         if ($tempInstallScript -and (Test-Path $tempInstallScript)) {
@@ -2634,8 +2641,23 @@ function Install-ClaudeCodeAuto {
 
         $nativeResult = Install-ClaudeCodeNative
 
-        if ($nativeResult.Success) {
-            # 验证安装（mock 模式下自动信任安装结果）
+        # 无论安装器 ExitCode 如何，始终先做后验验证
+        # Native Install 失败或返回异常 ExitCode 时不向用户展示失败信息，
+        # 由后验验证决定最终结论（避免"失败→成功"的矛盾提示）。
+        Write-Info ""
+        Write-Info "官方安装包执行结束，正在验证安装结果..."
+        Refresh-CurrentProcessPath
+        $verifyResult = Test-ClaudeCommandExisting
+        Write-Log "INFO" "Native Install 后验验证: Exists=$($verifyResult.Exists), Usable=$($verifyResult.Usable), Version=$($verifyResult.Version), Path=$($verifyResult.Path)"
+
+        # 记录安装器 ExitCode 异常到日志（不向用户展示）
+        if (-not $nativeResult.Success) {
+            Write-Log "INFO" "Native Install returned non-zero/unknown exit code, but post-install verification will decide outcome."
+        }
+
+        if ($verifyResult.Usable) {
+            # 后验验证通过：claude.exe 存在且可用
+
             if ($isMockDecision) {
                 Write-Log "DEBUG" "MOCK: trusting native install success"
                 $result.Success = $true
@@ -2651,122 +2673,109 @@ function Install-ClaudeCodeAuto {
                 Write-Success "Claude Code 安装完成 (mock Native Install)"
                 return $result
             }
-            Refresh-CurrentProcessPath
-            $verifyResult = Test-ClaudeCommandExisting
-            if ($verifyResult.Usable) {
-                Write-Success "Claude Code 安装验证通过: $($verifyResult.Version)"
-                # claude doctor is diagnostic-only; not called during install
 
-                $result.Success = $true
-                $result.Method = "official_native"
-                $result.Status = "installed"
-                $result.Version = $verifyResult.Version
-                Update-CcdiState -Updates @{
-                    claudeWasAlreadyInstalled = $false
-                    claudeInstallMethod       = "official_native"
-                    claudeInstallStatus       = "installed"
-                    claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-                } | Out-Null
-                return $result
-            }
-            elseif ($verifyResult.Exists) {
-                Write-Warning "检测到 claude 命令存在但无法运行，可能是旧安装、残留 shim、WindowsApps alias 或 PATH 冲突。"
-                Write-Log "WARN" "Native Install: claude exists but unusable: $($verifyResult.Error)"
-                Write-Info "将尝试 winget / npm 镜像安装作为备用方案..."
-                try {
-                    $inv = Get-ClaudeCommandInventory
-                    if ($inv.ConflictSummary) {
-                        Write-Log "WARN" "Claude command inventory: $($inv.ConflictSummary)"
-                    }
-                } catch { Write-Log "DEBUG" "Get-ClaudeCommandInventory failed (non-blocking): $_" }
-                # 继续 fallback 到 winget / npm mirror
-            }
-            else {
-                Write-Warning "安装脚本已执行但 claude 命令未找到，正在刷新 PATH 重试..."
-                Refresh-CurrentProcessPath
-                $verifyResult2 = Test-ClaudeCommandExisting
-                if ($verifyResult2.Usable) {
-                    Write-Success "Claude Code 安装验证通过: $($verifyResult2.Version)"
-                    # claude doctor is diagnostic-only; not called during install
+            Write-Success "Claude Code 已安装: $($verifyResult.Version)"
 
-                    $result.Success = $true
-                    $result.Method = "official_native"
-                    $result.Status = "installed"
-                    $result.Version = $verifyResult2.Version
-                    Update-CcdiState -Updates @{
-                        claudeWasAlreadyInstalled = $false
-                        claudeInstallMethod       = "official_native"
-                        claudeInstallStatus       = "installed"
-                        claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-                    } | Out-Null
-                    return $result
-                }
-                elseif ($verifyResult2.Exists) {
-                    Write-Warning "检测到 claude 命令存在但无法运行（PATH 刷新后），可能是旧安装或残留 shim。"
-                    Write-Log "WARN" "Native Install PATH retry: claude exists but unusable: $($verifyResult2.Error)"
-                    Write-Info "将尝试 winget / npm 镜像安装作为备用方案..."
-                    try {
-                        $inv = Get-ClaudeCommandInventory
-                        if ($inv.ConflictSummary) {
-                            Write-Log "WARN" "Claude command inventory: $($inv.ConflictSummary)"
-                        }
-                    } catch { Write-Log "DEBUG" "Get-ClaudeCommandInventory failed (non-blocking): $_" }
+            # --- PATH 持久化 (v1.3.3) ---
+            $nativeBinPath = Get-NativeClaudeBinPath
+            $pathResult = Ensure-UserPathEntry -PathToAdd $nativeBinPath
+
+            if ($pathResult.Success) {
+                if ($pathResult.Changed) {
+                    Write-Success "已将 Claude Code 安装目录加入用户 PATH"
+                    Write-Info "新打开的 PowerShell 将可以直接运行 claude"
                 }
                 else {
-                    Write-Warning "Native Install 安装脚本已执行但未检测到 claude 命令。"
-                    Write-Warning "将尝试 npmmirror 镜像安装作为备用方案。"
+                    Write-Info "Claude Code 安装目录已在用户 PATH 中"
                 }
             }
-        }
-        else {
-            Write-Warning "Claude 官方安装通道执行失败，正在自动切换备用安装通道。"
-            Write-Info "下一步将优先尝试 winget；如果 winget 不可用或验证失败，再切换 npmmirror 镜像。"
-            Write-Info "这通常是官方下载通道不稳定或被网络拦截，不代表整体安装失败。"
-            Write-Log "WARN" "Native Install 详细错误: $($nativeResult.Error)"
-
-            # 文件占用检测（使用 RawError 保留原始错误特征）
-            $nativeRawForLockCheck = @(
-                $nativeResult.Error
-                $nativeResult.RawError
-                $nativeResult.Status
-            ) -join "`n"
-            Write-Log "DEBUG" "Native Install lock check: HasRawError=$([bool]$nativeResult.RawError), TextLength=$($nativeRawForLockCheck.Length)"
-
-            if (Test-IsClaudeNativeFileLockError -Text $nativeRawForLockCheck) {
-                Write-Warning "Claude 官方安装器提示文件被占用。"
-                Write-Info "请关闭所有 claude / node / PowerShell / Windows Terminal 窗口。"
-                Write-Info "然后删除 %USERPROFILE%\.claude\downloads 后重新运行安装。"
-                Write-Info "不要删除 %USERPROFILE%\.claude\settings.json。"
+            else {
+                Write-Warning "Claude Code 已安装，但 PATH 自动写入失败"
+                Write-Warning "请手动将以下路径加入用户 PATH:"
+                Write-Warning "  $nativeBinPath"
             }
 
-            # 后验验证：官方安装器可能实际已成功安装 claude，但 ExitCode 异常或子进程
-            # 返回非零，导致脚本误判。在进入 winget 之前先检测 claude 是否其实已可用。
-            Refresh-CurrentProcessPath
-            $nativeFailedVerify = Test-ClaudeCommandExisting
-            Write-Log "INFO" "Native Install 失败后验验证: Exists=$($nativeFailedVerify.Exists), Usable=$($nativeFailedVerify.Usable), Version=$($nativeFailedVerify.Version), Path=$($nativeFailedVerify.Path)"
+            # --- Fresh Shell 验证 (v1.3.3) ---
+            $freshCheck = Test-ClaudeCommandInFreshShell
+            Write-Log "INFO" "Native Install fresh shell check: Success=$($freshCheck.Success), Version=$($freshCheck.Version), Error=$($freshCheck.Error)"
 
-            if ($nativeFailedVerify.Exists -and $nativeFailedVerify.Usable) {
-                Write-Success "Native Install 后验验证通过: $($nativeFailedVerify.Version)"
-                Write-Log "INFO" "Native Install returned failure but claude is usable; treating as success."
+            if ($freshCheck.Success) {
+                Write-Success "新 PowerShell 可直接运行 claude: $($freshCheck.Output)"
+            }
+            else {
+                Write-Warning "claude --version 在当前进程可用，但新 PowerShell 中可能无法识别"
+                if ($pathResult.Success -and $pathResult.Changed) {
+                    Write-Info "PATH 已写入注册表，关闭当前窗口后重开 PowerShell 通常即可解决。"
+                }
+                else {
+                    Write-Info "请运行「一键修复依赖」或重新运行安装工具修复 PATH。"
+                }
+            }
 
+            # 最终成功标准：claude 文件存在 + 可用 + (PATH 已写入 或 fresh shell 通过)
+            $ultimateSuccess = $verifyResult.Usable -and ($pathResult.Success -or $freshCheck.Success)
+
+            if ($ultimateSuccess) {
                 $result.Success = $true
                 $result.Method = "official_native"
-                $result.Status = "installed"
-                $result.Version = $nativeFailedVerify.Version
-                $result.WasAlreadyInstalled = $false
+                $result.Status = if ($freshCheck.Success) { "installed" } else { "installed_path_fixed" }
+                $result.Version = $verifyResult.Version
 
                 Update-CcdiState -Updates @{
                     claudeWasAlreadyInstalled = $false
                     claudeInstallMethod       = "official_native"
-                    claudeInstallStatus       = "installed"
+                    claudeInstallStatus       = $result.Status
                     claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
                 } | Out-Null
-
                 return $result
             }
 
-            Write-Info "Native Install 后验验证未通过，继续备用安装通道..."
+            # claude 可用但 PATH 修复和 fresh shell 都失败 → 部分成功
+            $result.Success = $true
+            $result.Method = "official_native"
+            $result.Status = "installed_needs_path_fix"
+            $result.Version = $verifyResult.Version
+
+            Update-CcdiState -Updates @{
+                claudeWasAlreadyInstalled = $false
+                claudeInstallMethod       = "official_native"
+                claudeInstallStatus       = "installed_needs_path_fix"
+                claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+            } | Out-Null
+
+            Write-Warning "Claude Code 已安装，但 claude 命令暂时无法直接运行"
+            Write-Info "请运行「一键修复依赖」或重新运行安装工具修复 PATH"
+            return $result
         }
+
+        # --- 后验验证未通过：claude.exe 不存在或不可用 ---
+        if (-not $verifyResult.Exists) {
+            Write-Log "INFO" "Native Install 后验验证: claude.exe 未找到"
+        }
+        elseif (-not $verifyResult.Usable) {
+            Write-Log "INFO" "Native Install 后验验证: claude.exe 存在但不可用 - $($verifyResult.Error)"
+        }
+
+        # 后验验证失败 → 检查是否是文件占用
+        $nativeRawForLockCheck = @(
+            $nativeResult.Error
+            $nativeResult.RawError
+            $nativeResult.Status
+        ) -join "`n"
+        Write-Log "DEBUG" "Native Install lock check: HasRawError=$([bool]$nativeResult.RawError), TextLength=$($nativeRawForLockCheck.Length)"
+
+        if (Test-IsClaudeNativeFileLockError -Text $nativeRawForLockCheck) {
+            Write-Warning "Claude 官方安装器提示文件被占用。"
+            Write-Info "请关闭所有 claude / node / PowerShell / Windows Terminal 窗口。"
+            Write-Info "然后删除 %USERPROFILE%\.claude\downloads 后重新运行安装。"
+            Write-Info "不要删除 %USERPROFILE%\.claude\settings.json。"
+        }
+
+        # 后验验证失败时才显示备用通道切换信息
+        Write-Warning "Claude 官方安装通道未成功，正在自动切换备用安装通道。"
+        Write-Info "下一步将优先尝试 winget；如果 winget 不可用或验证失败，再切换 npmmirror 镜像。"
+        Write-Info "这通常是官方下载通道不稳定或被网络拦截，不代表整体安装失败。"
+        Write-Log "INFO" "Native Install 后验验证未通过，进入备用安装通道"
     }
     else {
         Write-Warning "Claude 官方安装通道不可用: $($officialNetwork.Details)"

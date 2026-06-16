@@ -1346,17 +1346,19 @@ if ($claudeInstallText -match 'function Install-ClaudeCodeAuto[\s\S]{0,5000}Invo
     throw "Install-ClaudeCodeAuto must NOT call Invoke-ClaudeDoctorInteractiveSafe; claude doctor is diagnostic-only"
 }
 
-# 28. Native Install failure must show user-friendly message, NOT PowerShell stack traces
-if ($claudeInstallText -notmatch 'Claude 官方安装通道执行失败，正在自动切换备用安装通道') {
-    throw "Native Install failure must show user-friendly message about fallback to alternate channel"
+# 28. v1.3.3: Native Install 始终先做后验验证，只有后验验证失败才显示备用通道提示。
+# 旧版直接根据 ExitCode 判断失败，v1.3.3 改为后验优先。
+if ($claudeInstallText -notmatch 'Claude 官方安装通道未成功，正在自动切换备用安装通道' -and
+    $claudeInstallText -notmatch '官方安装包执行结束，正在验证安装结果') {
+    throw "Native Install flow must do post-install verification before declaring failure (v1.3.3)"
 }
 if ($claudeInstallText -notmatch '这通常是官方下载通道不稳定或被网络拦截，不代表整体安装失败') {
     throw "Native Install failure must reassure user that this is not an overall failure"
 }
 
-# 29. Native Install error detail must be logged, not displayed to user
-if ($claudeInstallText -notmatch 'Write-Log\s+"ERROR"\s+"Native Install 失败详情') {
-    throw "Native Install failure details must go to Write-Log, not user display"
+# 29. v1.3.3: Native Install 详细错误写入日志，不向用户展示
+if ($claudeInstallText -notmatch 'Write-Log\s+"(INFO|ERROR|DEBUG)"\s+"Native Install') {
+    throw "Native Install details must go to Write-Log, not user display"
 }
 
 # 30. Invoke-ClaudeDoctorInteractiveSafe uses isolated process execution (cmd.exe wrapping with temp files,
@@ -2003,7 +2005,7 @@ try {
         "skipped_test_safe_broken", "installed", "installed_needs_restart",
         "node_installed_needs_restart", "failed_missing_node_or_npm",
         "failed_npmmirror_unreachable", "failed_official_and_mirror", "failed_missing_npm_cmd",
-        "failed_claude_unusable")
+        "failed_claude_unusable", "installed_path_fixed", "installed_needs_path_fix")
     Write-Host "[check]     Valid Methods: $($validMethods -join ', ')"
     Write-Host "[check]     Valid Statuses: $($validStatuses -join ', ')"
 
@@ -2640,11 +2642,12 @@ if ($claudeInstallText -notmatch 'RawError\s*=\s*\$downloadResult\.Error') { thr
 if ($claudeInstallText -notmatch 'RawError\s*=\s*\$installResult\.Error') { throw "Install-ClaudeCodeNative must set RawError from installResult.Error" }
 
 # 2. 文件占用检测必须使用 RawError（原 Error 太泛化）
-$lockCheckArea = if ($claudeInstallText -match '(?s)文件占用检测.*?Write-Warning.*?settings\.json') { $matches[0] } else { "" }
-if ($lockCheckArea -notmatch 'nativeResult\.RawError') { throw "File lock check must use nativeResult.RawError" }
-if ($lockCheckArea -notmatch 'nativeResult\.Error') { throw "File lock check should also include nativeResult.Error" }
+# v1.3.3: 文件占用检测已移到后验验证失败分支内
+$lockCheckArea = if ($claudeInstallText -match '(?s)检查是否是文件占用.*?Write-Warning.*?settings\.json') { $matches[0] } else { "" }
+if ($lockCheckArea -notmatch 'nativeResult\.RawError' -and $claudeInstallText -notmatch 'nativeRawForLockCheck') { throw "File lock check must use nativeResult.RawError or nativeRawForLockCheck" }
+if ($lockCheckArea -notmatch 'nativeResult\.Error' -and $claudeInstallText -notmatch 'nativeRawForLockCheck') { throw "File lock check should also include nativeResult.Error or nativeRawForLockCheck" }
 # 不应仅依赖 $nativeResult.Error（太泛化）
-if ($lockCheckArea -match 'Test-IsClaudeNativeFileLockError\s+-Text\s+\$nativeResult\.Error\b' -and $lockCheckArea -notmatch 'nativeResult\.RawError') {
+if ($claudeInstallText -notmatch 'nativeRawForLockCheck' -and $lockCheckArea -match 'Test-IsClaudeNativeFileLockError\s+-Text\s+\$nativeResult\.Error\b' -and $lockCheckArea -notmatch 'nativeResult\.RawError') {
     throw "File lock check must not rely solely on generic Error"
 }
 
@@ -2906,32 +2909,29 @@ if ($claudeInstallText -match 'New-Object\s+System\.Net\.WebClient[\s\S]{0,300}D
     throw "claude-install.ps1 Invoke-VisibleFileDownload still uses plain WebClient.DownloadFile without timeout"
 }
 
-# --- 测试 2: Native failed branch 必须后验验证 ---
+# --- 测试 2: Native Install 始终后验验证 (v1.3.3) ---
 
-# 2a. 必须包含后验验证日志文本
-if ($claudeInstallText -notmatch 'Native Install 失败后验验证') {
-    throw "claude-install.ps1 Native failed branch must perform post-install claude verification"
+# 2a. v1.3.3: 后验验证不再仅限"失败"分支，而是始终执行
+if ($claudeInstallText -notmatch 'Native Install 后验验证') {
+    throw "claude-install.ps1 Native Install must perform post-install claude verification (v1.3.3: always, not only on failure)"
 }
 
-# 2b. 必须处理 claude 已可用的情况
-if ($claudeInstallText -notmatch 'Native Install returned failure but claude is usable') {
-    throw "claude-install.ps1 Native failed branch must treat usable claude as success"
+# 2b. v1.3.3: 后验验证通过时记录成功日志
+if ($claudeInstallText -notmatch 'Native Install returned non-zero/unknown exit code.*post-install verification will decide') {
+    throw "claude-install.ps1 must log when Native Install exit code is non-zero but defer to post-install verification"
 }
 
 # 2c. 后验成功必须写 claudeInstallMethod = "official_native"
-# 匹配 Native failed 分支中后验成功的 Update-CcdiState 块
-$nativeFailedBranch = [regex]::Match($claudeInstallText, '(?s)Native Install 失败后验验证.*?\breturn \$result\b')
-if ($nativeFailedBranch.Success) {
-    if ($nativeFailedBranch.Value -notmatch 'claudeInstallMethod\s*=\s*"official_native"') {
-        throw "claude-install.ps1 Native post-verification success must write claudeInstallMethod=official_native"
-    }
+# 匹配后验成功的 Update-CcdiState 块
+if ($claudeInstallText -notmatch 'claudeInstallMethod\s*=\s*"official_native"') {
+    throw "claude-install.ps1 Native post-verification success must write claudeInstallMethod=official_native"
 }
 
-# 2d. 后验验证必须在进入 winget fallback 之前执行
-# (顺序: Native failed → 后验验证 → winget. 不应先 winget 后验)
-$nativeToWinget = [regex]::Match($claudeInstallText, '(?s)Native Install 失败后验验证.*?尝试通过 winget 安装 Claude Code')
-if (-not $nativeToWinget.Success) {
-    throw "claude-install.ps1 native failed branch post-verification must appear before winget fallback"
+# 2d. v1.3.3: 后验验证必须在备用通道之前执行
+# (顺序: Native Install → 后验验证 → 通道切换判断 → winget. 不应先 winget 后验)
+$nativeToFallback = [regex]::Match($claudeInstallText, '(?s)官方安装包执行结束，正在验证安装结果.*?正在自动切换备用安装通道')
+if (-not $nativeToFallback.Success) {
+    throw "claude-install.ps1 post-install verification must appear before alternate channel fallback"
 }
 
 # --- 测试 3: 文案不能误导为直接切换 npm ---

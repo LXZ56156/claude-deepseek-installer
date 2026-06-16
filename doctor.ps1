@@ -34,7 +34,7 @@ if (-not $EntryScriptDir) { $EntryScriptDir = (Get-Location).Path }
 # doctor.ps1 自身不直接设置控制台代码页，避免 Windows PowerShell 5.1 + conhost 中文叠字。
 $ScriptDir = Initialize-CcdiScript -ScriptName "doctor"
 
-$ScriptVersion = "1.3.2"
+$ScriptVersion = "1.3.3"
 
 # 测试安全模式：显式 -TestSafe 参数或 CCDI_TEST_MODE 环境变量
 $script:DoctorTestSafeMode = $TestSafe -or ($env:CCDI_TEST_MODE -eq "1")
@@ -272,6 +272,41 @@ function Check-Commands {
         Add-Suggestion "在 VS Code 中按 Ctrl+Shift+P，搜索并执行 'Shell Command: Install code command in PATH'。"
     }
     # WSL 检测已统一移至 Check-WSL（避免全流程两次 wsl --version 探测），此处不提前调用
+    # --- Claude Code 安装文件检测 (v1.3.3) ---
+    $nativeClaudeExe = Get-NativeClaudeExePath
+    $nativeBinPath = Get-NativeClaudeBinPath
+    $claudeExeExists = Test-Path $nativeClaudeExe
+
+    if ($claudeExeExists) {
+        Add-CheckResult "Claude Code 安装文件" "OK" $nativeClaudeExe
+    }
+    else {
+        # 也检查 npm 全局安装路径
+        $npmClaudePath = if ($env:APPDATA) { Join-Path $env:APPDATA "npm\claude.cmd" } else { $null }
+        if ($npmClaudePath -and (Test-Path $npmClaudePath)) {
+            Add-CheckResult "Claude Code 安装文件" "OK" $npmClaudePath
+            $claudeExeExists = $true
+        }
+        else {
+            Add-CheckResult "Claude Code 安装文件" "WARN" "未找到 claude 安装文件"
+        }
+    }
+
+    # --- User PATH 检测 (v1.3.3) ---
+    $userPathCheck = Test-UserPathContains -TargetPath $nativeBinPath
+    if ($userPathCheck.Contains) {
+        Add-CheckResult "User PATH" "OK" "已包含 Claude Code 安装目录"
+    }
+    else {
+        if ($claudeExeExists) {
+            Add-CheckResult "User PATH" "ERROR" "未包含 Claude Code 安装目录，普通 PowerShell 无法直接运行 claude"
+            Add-Suggestion "请运行「一键修复依赖」或重新运行安装工具修复 PATH。也可以手动将以下路径加入用户 PATH：$nativeBinPath"
+        }
+        else {
+            Add-CheckResult "User PATH" "INFO" "未包含 Native Install 目录（Claude Code 可能以 npm 方式安装）"
+        }
+    }
+
     # --- Claude Code CLI + 命令来源（只调用一次 Get-ClaudeCommandInventory）---
     $inventory = $null
     try {
@@ -315,6 +350,27 @@ function Check-Commands {
             Add-CheckResult "Claude Code CLI" "ERROR" "claude 命令未找到或不可用"
             Add-Suggestion "未检测到 claude 命令。可能是安装失败，或 npm 全局 bin 路径未加入 PATH。请运行 install.ps1 安装，或关闭重开终端。"
         }
+    }
+
+    # --- Fresh Shell claude 检测 (v1.3.3) ---
+    try {
+        $freshShellCheck = Test-ClaudeCommandInFreshShell
+        if ($freshShellCheck.Success) {
+            Add-CheckResult "Fresh PowerShell claude" "OK" $freshShellCheck.Output
+        }
+        else {
+            if ($claudeExeExists) {
+                Add-CheckResult "Fresh PowerShell claude" "ERROR" "新 PowerShell 中无法识别 claude 命令"
+                Add-Suggestion "Claude Code 已安装但 new shell 中 claude 不可用。请运行「一键修复依赖」修复 PATH。"
+            }
+            else {
+                Add-CheckResult "Fresh PowerShell claude" "INFO" "未检测到 claude 安装文件，跳过 fresh shell 验证"
+            }
+        }
+    }
+    catch {
+        Write-Log "WARN" "Fresh Shell 验证异常: $_"
+        Add-CheckResult "Fresh PowerShell claude" "WARN" "验证过程中出现异常，已跳过"
     }
 
     # Claude 命令来源诊断（复用 $inventory）
@@ -992,6 +1048,24 @@ function Write-QuickSummary {
     if ($pathRisk.IsBlocked) {
         Add-ReportLine "    1. 先完整解压 ZIP 到普通文件夹（如 D:\\ClaudeDeepSeek）"
     }
+
+    # --- PATH 问题检测 (v1.3.3) ---
+    $claudeFileCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "Claude Code 安装文件" } | Select-Object -First 1
+    $userPathCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "User PATH" } | Select-Object -First 1
+    $freshShellCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "Fresh PowerShell claude" } | Select-Object -First 1
+
+    $claudeExeFound = ($claudeFileCheck -and $claudeFileCheck.Status -eq "OK")
+    $userPathMissing = ($userPathCheck -and $userPathCheck.Status -in @("ERROR", "WARN"))
+    $freshShellFailed = ($freshShellCheck -and $freshShellCheck.Status -eq "ERROR")
+
+    if ($claudeExeFound -and ($userPathMissing -or $freshShellFailed)) {
+        Add-ReportLine ""
+        Add-ReportLine "  Claude Code 已安装，但命令未正确加入 PATH。"
+        Add-ReportLine "  请运行「一键修复依赖」或重新运行安装工具修复 PATH。"
+        Add-ReportLine "  也可以手动将以下路径加入用户 PATH："
+        Add-ReportLine "    %USERPROFILE%\\.local\\bin"
+    }
+
     if (-not $nodeInfo.IsSupported) {
         Add-ReportLine "    - 运行「一键修复依赖.cmd」安装 Node.js"
     }
@@ -1004,7 +1078,10 @@ function Write-QuickSummary {
     if ($coreErrorCount -gt 0) {
         Add-ReportLine "    - 检查下方 [ERROR] 项目并逐项解决"
     }
-    if ($claudeVer -and $nodeInfo.IsSupported -and $configInfo.Exists -and $coreErrorCount -eq 0) {
+    if ($userPathMissing) {
+        Add-ReportLine "    - 运行「一键修复依赖.cmd」修复 User PATH"
+    }
+    if ($claudeVer -and $nodeInfo.IsSupported -and $configInfo.Exists -and $coreErrorCount -eq 0 -and -not $userPathMissing) {
         Add-ReportLine "    - 所有核心检测正常，无需额外操作"
     }
     Add-ReportLine ""
@@ -1257,15 +1334,33 @@ function Main {
     }
     Write-Host ""
 
-    # 执行所有检测
-    Check-MinimumRequirements
-    Check-SystemInfo
-    Check-Commands
-    Check-Files
-    Check-Network
-    Check-DeepSeekApi
-    Check-VSCode
-    Check-WSL
+    # 执行所有检测（每一步独立 try/catch，单个步骤异常不影响后续步骤）
+    $diagnosticSteps = @(
+        @{ Name = "最低要求检查";   Func = ${function:Check-MinimumRequirements} },
+        @{ Name = "系统信息";       Func = ${function:Check-SystemInfo} },
+        @{ Name = "命令检测";       Func = ${function:Check-Commands} },
+        @{ Name = "配置文件检测";   Func = ${function:Check-Files} },
+        @{ Name = "网络检测";       Func = ${function:Check-Network} },
+        @{ Name = "DeepSeek API";   Func = ${function:Check-DeepSeekApi} },
+        @{ Name = "VS Code";        Func = ${function:Check-VSCode} },
+        @{ Name = "WSL";            Func = ${function:Check-WSL} }
+    )
+
+    foreach ($step in $diagnosticSteps) {
+        try {
+            Write-Log "INFO" "诊断步骤开始: $($step.Name)"
+            & $step.Func
+            Write-Log "INFO" "诊断步骤完成: $($step.Name)"
+        }
+        catch {
+            $errorMsg = "诊断步骤 [$($step.Name)] 发生异常: $($_.Exception.Message)"
+            Write-Log "ERROR" $errorMsg
+            Write-Error-Msg $errorMsg
+            Add-CheckResult $step.Name "ERROR" "步骤执行异常，已跳过（不影响后续诊断）"
+            Add-Suggestion "诊断步骤 [$($step.Name)] 执行异常，建议重新运行诊断或联系技术支持。错误详情已写入日志。"
+            # 继续后续诊断，不中断
+        }
+    }
 
     # 生成报告
     Write-ReportHeader

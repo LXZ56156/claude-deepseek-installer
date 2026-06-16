@@ -31,7 +31,7 @@ if (-not $EntryScriptDir) { $EntryScriptDir = (Get-Location).Path }
 . (Join-Path $EntryScriptDir "lib\bootstrap.ps1")
 $ScriptDir = Initialize-CcdiScript -ScriptName "repair-deps"
 
-$ScriptVersion = "1.3.2"
+$ScriptVersion = "1.3.3"
 $IsTestSafe = $TestSafe -or $DryRun -or ($env:CCDI_TEST_MODE -eq "1")
 
 # 报告收集
@@ -253,6 +253,60 @@ function Start-RepairDeps {
     }
     else {
         Add-CR "Claude Code" "ERROR" "未安装"
+    }
+
+    # --- 4b. 检测 Native Install PATH 问题 (v1.3.3) ---
+    $nativeClaudeExe = Get-NativeClaudeExePath
+    $nativeBinPath = Get-NativeClaudeBinPath
+    $nativeExeExists = Test-Path $nativeClaudeExe
+    $userPathMissingNative = $false
+
+    if ($nativeExeExists) {
+        Write-Info "--- Native Install PATH ---"
+        $userPathCheck = Test-UserPathContains -TargetPath $nativeBinPath
+        if (-not $userPathCheck.Contains) {
+            $userPathMissingNative = $true
+            Add-CR "Native Install PATH" "WARN" "Claude Code 已安装 ($nativeClaudeExe)，但安装目录未加入 User PATH"
+
+            if (-not $IsTestSafe) {
+                Write-Info "检测到 Claude Code 已安装，但 claude 命令未加入 PATH"
+                Write-Info "正在修复用户 PATH..."
+                $pathFix = Ensure-UserPathEntry -PathToAdd $nativeBinPath
+
+                if ($pathFix.Success -and $pathFix.Changed) {
+                    Write-Success "PATH 修复完成"
+
+                    # 刷新后重新检测
+                    Refresh-CurrentProcessPath
+                    $claudeVer = Test-ClaudeInstalled
+                    if ($claudeVer) {
+                        Add-CR "Native Install PATH 修复" "OK" "修复成功，claude 已可识别: $claudeVer"
+                        # 更新 Claude Code 检测结果为 OK
+                        foreach ($cr in $script:CheckResults) {
+                            if ($cr.Name -eq "Claude Code" -and $cr.Status -eq "ERROR") {
+                                $cr.Status = "OK"
+                                $cr.Detail = $claudeVer
+                            }
+                        }
+                    }
+                    else {
+                        Add-CR "Native Install PATH 修复" "WARN" "PATH 已写入，但当前进程仍无法识别 claude（可关闭重开终端）"
+                    }
+                }
+                else {
+                    Add-CR "Native Install PATH 修复" "ERROR" "PATH 自动修复失败: $($pathFix.Error)"
+                    Write-Warning "PATH 自动修复失败"
+                    Write-Info "请手动添加以下路径到用户 PATH:"
+                    Write-Info "  $nativeBinPath"
+                }
+            }
+            else {
+                Add-CR "Native Install PATH" "SKIP" "测试安全模式，未写入 PATH"
+            }
+        }
+        else {
+            Add-CR "Native Install PATH" "OK" "已在 User PATH 中"
+        }
     }
 
     # ============================================================

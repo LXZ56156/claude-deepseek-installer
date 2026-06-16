@@ -37,7 +37,7 @@ if (-not $EntryScriptDir) { $EntryScriptDir = (Get-Location).Path }
 . (Join-Path $EntryScriptDir "lib\bootstrap.ps1")
 $ScriptDir = Initialize-CcdiScript -ScriptName "start-here"
 
-$ScriptVersion = "1.3.2"
+$ScriptVersion = "1.3.3"
 
 # 状态变量
 $script:ClaudeInstalled = $false
@@ -758,23 +758,29 @@ function Step-CreateTestProject {
         $readmeContent = @"
 # Claude Code 测试项目
 
-这是安装完成后自动创建的测试目录。
+这个文件夹是安装完成后自动创建的，只用于首次验证 Claude Code + DeepSeek API 是否能正常工作。
 
-你可以在此目录运行：
+## 用途
+
+测试完成后，可以直接删除本文件夹。删除不会影响 Claude Code 安装和 DeepSeek 配置。
+
+## 验证方法
+
+在此目录中打开 PowerShell，输入：
 
 ```
 claude
 ```
 
-然后输入：
+如果可以进入 Claude Code 交互界面，说明安装成功。
+
+然后尝试：
 
 ```
 请读取 README.md，并帮我生成一个简单的 hello world 网页。
 ```
 
-## 快速测试
-
-在终端中进入此目录，运行 `claude` 即可开始使用 Claude Code + DeepSeek API。
+如果 Claude Code 能理解并生成代码，说明 DeepSeek API 配置正确。
 
 ## 常见命令
 
@@ -888,8 +894,46 @@ function Step-GenerateReport {
         elseif ($script:ApiTestFailed) { "失败" }
         else { "未执行" }
 
+    # --- PATH 验证 (v1.3.3) ---
+    $nativeBinPath = Get-NativeClaudeBinPath
+    $nativeClaudeExe = Get-NativeClaudeExePath
+    $claudeInstallLocation = if (Test-Path $nativeClaudeExe) {
+        $nativeClaudeExe
+    }
+    else {
+        $claudeVerPath = if ($claudeVer) { "已安装（非 Native Install 路径）" } else { "未安装" }
+        $claudeVerPath
+    }
+    $userPathStatus = if (Test-Path $nativeClaudeExe) {
+        $check = Test-UserPathContains -TargetPath $nativeBinPath
+        if ($check.Contains) { "已包含 $nativeBinPath" } else { "未包含 $nativeBinPath" }
+    }
+    else { "N/A（非 Native Install）" }
+
+    $freshShellResult = if ($claudeVer -and (Test-Path $nativeClaudeExe)) {
+        $fs = Test-ClaudeCommandInFreshShell
+        if ($fs.Success) { "通过 - $($fs.Output)" } else { "失败" }
+    }
+    elseif ($claudeVer) { "通过（非 Native Install）" }
+    else { "N/A（Claude Code 未安装）" }
+
+    $claudeCommandUsable = if ($claudeVer) {
+        if ($freshShellResult -match "^通过") { "可直接运行" }
+        elseif (Test-Path $nativeClaudeExe) { "需要修复 PATH" }
+        else { "可运行（需验证）" }
+    }
+    else { "N/A" }
+
     $overallStatus = if ($script:TestSafeMode -and $script:ConfigWritten) { "测试安全模式完成" }
-        elseif ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestPassed) { "完整成功" }
+        elseif ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestPassed) {
+            # v1.3.3: 完整成功还需要 PATH 和 fresh shell 验证
+            if ($freshShellResult -match "^通过" -or (-not (Test-Path $nativeClaudeExe))) {
+                "完整成功"
+            }
+            else {
+                "部分成功：Claude Code 已安装，但 claude 命令未加入 PATH"
+            }
+        }
         elseif ($script:ClaudeInstalled -and $script:ConfigWritten) { "部分成功" }
         else { "未完成" }
 
@@ -921,10 +965,13 @@ $reportTitle
 --------------------------------------
 运行环境: Windows ($($winInfo.Version))
 Claude Code: $(if ($script:TestSafeMode) { "测试安全模式未执行真实安装" } elseif ($claudeVer) { "已安装 ($claudeVer)" } elseif ($script:ClaudeInstallStatus -match "needs_restart") { "已安装但需重开终端" } else { "未安装" })
+Claude Code 安装位置: $claudeInstallLocation
 Node.js: $(if ($nodeInfo.Installed) { "$($nodeInfo.Version)" } else { "未安装" })
 npm: $(if ($npmInfo.Installed) { "$($npmInfo.Version)" } else { "不可用" })
 DeepSeek 配置: $(if ($script:ConfigWritten) { "已配置" } else { "未配置" })
 API 测试: $apiTestStatus$(if ($script:ApiTestFailed) { " ($script:ApiTestFailReason)" } elseif ($script:ApiTestSkipped) { " - 未验证 API 是否可用" } else { "" })
+User PATH: $userPathStatus
+Fresh PowerShell 验证: $freshShellResult
 整体状态: $overallStatus
 $(if ($script:TestSafeMode) { "测试安全模式流程完成，不代表真实安装/API 已验证。" } else { "" })
 $(if ($script:ClaudeInstallStatus -match "needs_restart") { "NEEDS_RESTART - 需要关闭窗口重新运行「00-点我开始安装.cmd」继续安装。" } else { "" })
@@ -976,7 +1023,10 @@ $claudeInstallSummary
 $deepSeekConfigSummary
 $apiTestSummary
 $claudeLaunchSummary
+[OK] User PATH: $userPathStatus
+[OK] Fresh PowerShell 验证: $freshShellResult
 
+Claude 命令可用性: $claudeCommandUsable
 $overallStatus
 $testSafeNotice
 
@@ -1069,18 +1119,44 @@ function Show-CompletionPage {
         Write-Info "报告: $($script:ReportPath)"
     }
     elseif ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestPassed) {
-        Write-Host "==============================================================" -ForegroundColor Green
-        Write-Host "                                                              " -ForegroundColor Green
-        Write-Host "                 安装流程全部完成！                            " -ForegroundColor Green
-        Write-Host "                                                              " -ForegroundColor Green
-        Write-Host "==============================================================" -ForegroundColor Green
+        # v1.3.3: 检查 PATH 是否也成功
+        $nativeExeOk = Test-Path (Get-NativeClaudeExePath)
+        $pathOk = $true
+        if ($nativeExeOk) {
+            $pathCheck = Test-UserPathContains -TargetPath (Get-NativeClaudeBinPath)
+            $pathOk = $pathCheck.Contains
+        }
+
+        if ($pathOk -or -not $nativeExeOk) {
+            Write-Host "==============================================================" -ForegroundColor Green
+            Write-Host "                                                              " -ForegroundColor Green
+            Write-Host "                 安装流程全部完成！                            " -ForegroundColor Green
+            Write-Host "                                                              " -ForegroundColor Green
+            Write-Host "==============================================================" -ForegroundColor Green
+        }
+        else {
+            Write-Host "==============================================================" -ForegroundColor Yellow
+            Write-Host "                                                              " -ForegroundColor Yellow
+            Write-Host "        Claude Code 已安装，但 claude 命令未加入 PATH          " -ForegroundColor Yellow
+            Write-Host "                                                              " -ForegroundColor Yellow
+            Write-Host "==============================================================" -ForegroundColor Yellow
+        }
+
         Write-Host ""
         Write-Success "Claude Code 已安装"
         Write-Success "DeepSeek 配置已写入"
         Write-Success "API 测试通过"
         Write-Success "测试项目已创建"
         Write-Host ""
-        Write-Info "您现在可以运行 claude 开始使用！"
+
+        if ($pathOk -or -not $nativeExeOk) {
+            Write-Info "您现在可以运行 claude 开始使用！"
+        }
+        else {
+            Write-Warning "Claude Code 已安装，但 claude 命令暂时无法直接运行"
+            Write-Info "请运行「一键修复依赖」或重新运行安装工具修复 PATH"
+        }
+
         if ($script:TestProjectPath) {
             Write-Info "建议进入测试项目目录:"
             Write-Host "  cd `"$($script:TestProjectPath)`"" -ForegroundColor Cyan
@@ -1215,33 +1291,47 @@ function Show-CompletionMenu {
         Write-Host "  请选择下一步：" -ForegroundColor Cyan
         Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
 
-        # 选项 1: 打开测试项目文件夹
+        # 选项 1: 打开测试项目并查看使用说明（推荐）
         $testProjectAvailable = ($script:TestProjectPath -and (Test-Path $script:TestProjectPath))
         if ($testProjectAvailable) {
-            Write-Host "  [1] 打开测试项目文件夹" -ForegroundColor White
+            Write-Host "  [1] 打开测试项目并查看使用说明（推荐）" -ForegroundColor White
+            Write-Host "      该项目只用于首次验证，测试完成后可以删除。" -ForegroundColor DarkGray
         }
         else {
-            Write-Host "  [1] 打开测试项目文件夹（不可用）" -ForegroundColor DarkGray
+            Write-Host "  [1] 打开测试项目（不可用）" -ForegroundColor DarkGray
         }
 
-        # 选项 2: 打开安装报告
+        # 选项 2: 打开测试项目文件夹（仅查看）
+        if ($testProjectAvailable) {
+            Write-Host "  [2] 打开测试项目文件夹" -ForegroundColor White
+            Write-Host "      仅查看 README.md / CLAUDE.md / hello.md，不自动启动 claude。" -ForegroundColor DarkGray
+        }
+        else {
+            Write-Host "  [2] 打开测试项目文件夹（不可用）" -ForegroundColor DarkGray
+        }
+
+        # 选项 3: 打开安装报告
         $reportAvailable = ($script:ReportPath -and (Test-Path $script:ReportPath))
         if ($reportAvailable) {
-            Write-Host "  [2] 打开安装报告" -ForegroundColor White
+            Write-Host "  [3] 打开安装报告" -ForegroundColor White
         }
         else {
-            Write-Host "  [2] 打开安装报告（不可用）" -ForegroundColor DarkGray
+            Write-Host "  [3] 打开安装报告（不可用）" -ForegroundColor DarkGray
         }
 
-        # 选项 3: 运行一键诊断
-        Write-Host "  [3] 运行一键诊断" -ForegroundColor White
+        # 选项 4: 运行一键诊断
+        Write-Host "  [4] 运行一键诊断" -ForegroundColor White
 
-        # 选项 4: 退出
-        Write-Host "  [4] 退出" -ForegroundColor White
+        # 选项 5: 退出
+        Write-Host "  [5] 退出" -ForegroundColor White
+
+        Write-Host ""
+        Write-Host "  测试项目只是用来确认 Claude Code 能正常启动和调用模型。" -ForegroundColor DarkGray
+        Write-Host "  删除测试项目不会影响 Claude Code 安装和 DeepSeek 配置。" -ForegroundColor DarkGray
 
         Write-Host ""
 
-        $choice = Read-Host "请输入选项编号 (1-4)"
+        $choice = Read-Host "请输入选项编号 (1-5)"
 
         switch ($choice) {
             "1" {
@@ -1249,7 +1339,23 @@ function Show-CompletionMenu {
                     Write-Info "测试项目未创建。"
                     continue
                 }
-                Write-Info "正在打开测试项目文件夹..."
+                Write-Info "正在打开测试项目..."
+                Write-Info "该项目只用于首次验证 Claude Code 能正常使用，测试完成后可以删除。"
+                try {
+                    explorer.exe $script:TestProjectPath
+                    Write-Info "已打开测试项目文件夹: $($script:TestProjectPath)"
+                    Write-Info "在文件夹中打开 PowerShell，输入 claude 即可开始测试。"
+                }
+                catch {
+                    Write-Warning "无法自动打开文件夹，请手动打开: $($script:TestProjectPath)"
+                }
+            }
+            "2" {
+                if (-not $testProjectAvailable) {
+                    Write-Info "测试项目未创建。"
+                    continue
+                }
+                Write-Info "正在打开测试项目文件夹（仅查看文件，不启动 claude）..."
                 try {
                     explorer.exe $script:TestProjectPath
                     Write-Info "已打开: $($script:TestProjectPath)"
@@ -1258,7 +1364,7 @@ function Show-CompletionMenu {
                     Write-Warning "无法自动打开文件夹，请手动打开: $($script:TestProjectPath)"
                 }
             }
-            "2" {
+            "3" {
                 if (-not $reportAvailable) {
                     Write-Info "报告未生成。"
                     continue
@@ -1278,7 +1384,7 @@ function Show-CompletionMenu {
                     }
                 }
             }
-            "3" {
+            "4" {
                 Write-Info "正在运行一键诊断..."
                 $doctorScript = Join-Path $ScriptDir "doctor.ps1"
                 if (Test-Path $doctorScript) {
@@ -1294,12 +1400,12 @@ function Show-CompletionMenu {
                 Write-Host ""
                 Read-Host "按回车键返回..."
             }
-            "4" {
+            "5" {
                 Write-Info "感谢使用！"
                 return
             }
             default {
-                Write-Warning "无效选项，请输入 1-4。"
+                Write-Warning "无效选项，请输入 1-5。"
             }
         }
     }
