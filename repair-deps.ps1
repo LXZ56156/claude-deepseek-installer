@@ -263,7 +263,10 @@ function Start-RepairDeps {
 
     if ($nativeExeExists) {
         Write-Info "--- Native Install PATH ---"
+
+        $pathWasFixedOrAlreadyOk = $false
         $userPathCheck = Test-UserPathContains -TargetPath $nativeBinPath
+
         if (-not $userPathCheck.Contains) {
             $userPathMissingNative = $true
             Add-CR "Native Install PATH" "WARN" "Claude Code 已安装 ($nativeClaudeExe)，但安装目录未加入 User PATH"
@@ -273,32 +276,12 @@ function Start-RepairDeps {
                 Write-Info "正在修复用户 PATH..."
                 $pathFix = Ensure-UserPathEntry -PathToAdd $nativeBinPath
 
-                if ($pathFix.Success -and $pathFix.Changed) {
-                    Write-Success "PATH 修复完成"
-                    Write-Info "正在验证新 PowerShell 是否可直接运行 claude..."
-
-                    # v1.3.3 P1-1: fresh shell 验证（模拟用户新开窗口）
-                    $freshCheck = Test-ClaudeCommandInFreshShell
-
-                    if ($freshCheck.Success) {
-                        Add-CR "Native Install PATH 修复" "OK" "修复成功，新 PowerShell 可直接运行 claude: $($freshCheck.Output)"
-                        Write-Success "PATH 修复完成，新 PowerShell 已可识别 claude"
-                        # 更新 Claude Code 检测结果为 OK
-                        foreach ($cr in $script:CheckResults) {
-                            if ($cr.Name -eq "Claude Code" -and $cr.Status -eq "ERROR") {
-                                $cr.Status = "OK"
-                                $cr.Detail = $freshCheck.Output
-                            }
-                        }
-                    }
-                    else {
-                        Add-CR "Native Install PATH 修复" "WARN" "PATH 已写入注册表，但 fresh shell 验证未通过。请关闭当前窗口重开 PowerShell 后执行 claude --version"
-                        Write-Warning "PATH 已写入，但新 PowerShell 验证仍未通过。"
-                        Write-Info "请关闭当前窗口，重新打开 PowerShell 后执行 claude --version 验证。"
-                    }
+                if ($pathFix.Success) {
+                    $pathWasFixedOrAlreadyOk = $true
+                    Add-CR "Native Install PATH 写入" "OK" "User PATH 已写入 Native Install 目录"
                 }
                 else {
-                    Add-CR "Native Install PATH 修复" "ERROR" "PATH 自动修复失败: $($pathFix.Error)"
+                    Add-CR "Native Install PATH 写入" "ERROR" "PATH 自动修复失败: $($pathFix.Error)"
                     Write-Warning "PATH 自动修复失败"
                     Write-Info "请手动添加以下路径到用户 PATH:"
                     Write-Info "  $nativeBinPath"
@@ -309,7 +292,32 @@ function Start-RepairDeps {
             }
         }
         else {
+            $pathWasFixedOrAlreadyOk = $true
             Add-CR "Native Install PATH" "OK" "已在 User PATH 中"
+        }
+
+        # v1.3.3 P1-1: 只要 native exe 存在且 PATH 可用（无论原本就有还是刚修复），
+        # 都必须执行 fresh shell 验证
+        if (-not $IsTestSafe -and $pathWasFixedOrAlreadyOk) {
+            Write-Info "正在验证新 PowerShell 是否可直接运行 claude..."
+            $freshCheck = Test-ClaudeCommandInFreshShell
+
+            if ($freshCheck.Success) {
+                Add-CR "Fresh PowerShell claude" "OK" "新 PowerShell 可直接运行 claude: $($freshCheck.Output)"
+                Write-Success "新 PowerShell 已可识别 claude"
+                # 更新 Claude Code 检测结果为 OK
+                foreach ($cr in $script:CheckResults) {
+                    if ($cr.Name -eq "Claude Code" -and $cr.Status -eq "ERROR") {
+                        $cr.Status = "OK"
+                        $cr.Detail = $freshCheck.Output
+                    }
+                }
+            }
+            else {
+                Add-CR "Fresh PowerShell claude" "WARN" "User PATH 已配置，但 fresh shell 验证未通过: $($freshCheck.Error)"
+                Write-Warning "User PATH 已配置，但新 PowerShell 验证仍未通过。"
+                Write-Info "请关闭当前窗口，重新打开 PowerShell 后执行 claude --version。"
+            }
         }
     }
 

@@ -499,11 +499,25 @@ function Step-InstallClaudeCode {
         $finalCheck = Test-ClaudeCommandExisting
 
         if ($finalCheck.Exists -and $finalCheck.Usable) {
-            $script:ClaudeInstalled = $true
-            $script:ClaudeInstallMethod = if ($finalCheck.Source) { $finalCheck.Source } else { "final_fallback" }
-            $script:ClaudeInstallStatus = "installed"
-            Write-Success "最终验证: Claude Code 已安装可用: $($finalCheck.Version)"
-            Write-Log "INFO" "兜底检测通过: claude 可用, 覆盖安装结果 Success=true"
+            # v1.3.3 P1-2: 兜底检测必须包含 fresh shell 验证
+            $freshFinal = Test-ClaudeCommandInFreshShell
+
+            if ($freshFinal.Success) {
+                $script:ClaudeInstalled = $true
+                $script:ClaudeInstallMethod = if ($finalCheck.Source) { $finalCheck.Source } else { "final_fallback" }
+                $script:ClaudeInstallStatus = "installed"
+                Write-Success "最终验证: Claude Code 已可用 ($($finalCheck.Version))，新 PowerShell 也可直接运行。"
+                Write-Log "INFO" "兜底检测通过: fresh shell 可用, 覆盖安装结果 Success=true"
+            }
+            else {
+                $script:ClaudeInstalled = $true
+                $script:ClaudeInstallMethod = if ($finalCheck.Source) { $finalCheck.Source } else { "final_fallback" }
+                $script:ClaudeInstallStatus = "installed_needs_restart_or_path_fix"
+                Write-Warning "Claude Code 当前进程可用，但新 PowerShell 验证未通过。"
+                Write-Info "本工具会继续配置 DeepSeek API Key。"
+                Write-Info "安装结束后请按完成页提示重新打开 PowerShell 或运行「一键修复依赖」。"
+                Write-Log "WARN" "兜底检测部分通过: current process usable, fresh shell failed: $($freshFinal.Error)"
+            }
 
             $configStatus = Get-DeepSeekConfigStatus
             if (-not $configStatus.IsConfigured) {
@@ -969,9 +983,18 @@ function Step-GenerateReport {
         elseif ($script:ApiTestPassed) { "[OK] API 测试：通过" }
         elseif ($script:ApiTestSkipped) { "[SKIP] API 测试：已跳过" }
         else { "[WARN] API 测试：$apiTestStatus" }
-    $claudeLaunchSummary = if ($script:TestSafeMode) { "[SKIP] Claude 启动：未验证" }
-        elseif ($script:ClaudeInstalled) { "[OK] Claude 启动：可手动运行 claude 验证" }
-        else { "[SKIP] Claude 启动：未验证" }
+    $claudeLaunchSummary = if ($script:TestSafeMode) {
+        "[SKIP] Claude 启动：未验证"
+    }
+    elseif ($script:ClaudeInstalled -and $freshShellOk) {
+        "[OK] Claude 启动：新 PowerShell 可直接运行 claude"
+    }
+    elseif ($script:ClaudeInstalled -and -not $freshShellOk) {
+        "[WARN] Claude 启动：Claude Code 文件已安装，但新 PowerShell 尚未验证通过"
+    }
+    else {
+        "[SKIP] Claude 启动：未验证"
+    }
     $testSafeNotice = if ($script:TestSafeMode) { "测试安全模式流程完成，不代表真实安装/API 已验证。" } else { "" }
 
     $reportContent = @"
@@ -1484,11 +1507,37 @@ function Start-LazyInstall {
             Refresh-CurrentProcessPath
             $finalCheck = Test-ClaudeCommandExisting
             if ($finalCheck.Exists -and $finalCheck.Usable) {
-                $script:ClaudeInstalled = $true
-                $script:ClaudeInstallMethod = if ($finalCheck.Source) { $finalCheck.Source } else { "final_fallback" }
-                Write-Success "最终验证: Claude Code 已可用 ($($finalCheck.Version))，继续配置 DeepSeek API Key。"
-                Write-Log "INFO" "Start-LazyInstall 兜底通过: claude 可用, 继续流程"
-                # 不 return，继续走后续 API Key 配置
+                # v1.3.3 P1-2: 兜底检测必须包含 fresh shell 验证
+                $freshFinal = Test-ClaudeCommandInFreshShell
+
+                if ($freshFinal.Success) {
+                    $script:ClaudeInstalled = $true
+                    $script:ClaudeInstallMethod = if ($finalCheck.Source) { $finalCheck.Source } else { "final_fallback" }
+                    $script:ClaudeInstallStatus = "installed"
+                    Write-Success "最终验证: Claude Code 已可用 ($($finalCheck.Version))，新 PowerShell 也可直接运行。"
+                    Write-Log "INFO" "Start-LazyInstall 兜底通过: fresh shell 可用, 继续流程"
+                }
+                else {
+                    $script:ClaudeInstalled = $true
+                    $script:ClaudeInstallMethod = if ($finalCheck.Source) { $finalCheck.Source } else { "final_fallback" }
+                    $script:ClaudeInstallStatus = "installed_needs_restart_or_path_fix"
+
+                    Write-Warning "Claude Code 当前进程可用，但新 PowerShell 验证未通过。"
+                    Write-Info "本工具会继续配置 DeepSeek API Key。"
+                    Write-Info "安装结束后请按完成页提示重新打开 PowerShell 或运行「一键修复依赖」。"
+                    Write-Log "WARN" "Start-LazyInstall 兜底部分通过: current process usable, fresh shell failed: $($freshFinal.Error)"
+                }
+
+                $configStatus = Get-DeepSeekConfigStatus
+                if (-not $configStatus.IsConfigured) {
+                    Write-Warning "Claude Code 已安装，但 DeepSeek API Key 尚未配置或配置不完整。"
+                    if ($configStatus.ErrorMessage) {
+                        Write-Info "原因: $($configStatus.ErrorMessage)"
+                    }
+                    Write-Info "下一步：继续配置 DeepSeek API Key。"
+                }
+
+                # 不 return，继续后续 API Key 配置
             }
             else {
                 Write-Error-Msg "Claude Code 安装未成功，跳过后续配置步骤。"
@@ -1504,10 +1553,22 @@ function Start-LazyInstall {
         }
     }
 
-    # 安装成功后暂停：区分已安装和新安装的提示
+    # 安装成功后暂停：根据安装状态分类显示提示
+    $partialClaudeStatus = $script:ClaudeInstallStatus -in @(
+        "installed_needs_restart_or_path_fix",
+        "installed_needs_path_fix"
+    )
+
     if ($script:ClaudeInstallMethod -eq "existing" -or $script:ClaudeInstallStatus -eq "skipped_existing") {
         Write-Info "检测到 Claude Code 已安装，继续配置 DeepSeek。"
         Pause-ForUser
+    }
+    elseif ($partialClaudeStatus) {
+        Pause-ForNextStep -Force -Messages @(
+            "Claude Code 文件已安装，但新 PowerShell 命令验证尚未完整通过。",
+            "本工具会继续配置 DeepSeek API Key。",
+            "安装结束后请按完成页提示运行「一键修复依赖」或重新打开 PowerShell 验证 claude --version。"
+        )
     }
     else {
         Pause-ForNextStep -Force -Messages @(
