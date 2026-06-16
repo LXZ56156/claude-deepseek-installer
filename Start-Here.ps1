@@ -1277,8 +1277,8 @@ Write-Host '' -ForegroundColor Yellow
 Write-Host '  "Claude Code will be able to read, edit, and execute files here."' -ForegroundColor Gray
 Write-Host '' -ForegroundColor Yellow
 Write-Host '  这是 Claude Code 在问你：是否信任当前文件夹？' -ForegroundColor Yellow
-Write-Host '  这个测试项目是你自己创建的，完全安全。' -ForegroundColor Green
-Write-Host '  直接按回车即可继续。' -ForegroundColor Green
+Write-Host '  这个测试项目由本工具创建，仅用于验证 Claude Code 是否能正常启动。' -ForegroundColor Green
+Write-Host '  如你确认当前目录是测试项目，直接按回车即可继续。' -ForegroundColor Green
 Write-Host '--------------------------------------------------------------' -ForegroundColor Yellow
 Write-Host ''
 
@@ -1288,7 +1288,7 @@ if (-not `$cmd) {
     Write-Host ''
     Write-Host '请尝试：' -ForegroundColor Yellow
     Write-Host '1. 关闭此窗口，重新打开 PowerShell，执行 claude --version'
-    Write-Host '2. 如仍失败，回到安装助手选择 [4] 一键诊断'
+    Write-Host '2. 如果 claude --version 失败，回到安装助手选择 [4] 一键诊断'
     Write-Host '3. 或运行「一键修复依赖.cmd」'
     Write-Host ''
     Read-Host '按回车键关闭窗口'
@@ -1395,7 +1395,7 @@ function Show-CompletionPage {
         if ($pathOk -and $freshOk) {
             Write-Host "==============================================================" -ForegroundColor Green
             Write-Host "                                                              " -ForegroundColor Green
-            Write-Host "                 安装流程全部完成                              " -ForegroundColor Green
+            Write-Host "                 安装流程已完成                                " -ForegroundColor Green
             Write-Host "                                                              " -ForegroundColor Green
             Write-Host "==============================================================" -ForegroundColor Green
             Write-Host ""
@@ -1403,37 +1403,37 @@ function Show-CompletionPage {
             Write-Success "DeepSeek API 已配置。"
             Write-Success "新 PowerShell 已验证可直接运行 claude。"
             Write-Host ""
-            Write-Info "下一步建议："
-            Write-Info "选择 [1] 启动 Claude Code 测试。"
+            Write-Info "下一步：选择 [1] 启动 Claude Code 测试。"
         }
         elseif ($pathOk -and -not $freshOk) {
             Write-Host "==============================================================" -ForegroundColor Yellow
             Write-Host "                                                              " -ForegroundColor Yellow
-            Write-Host "   安装基本完成，但命令启动还需要验证                        " -ForegroundColor Yellow
+            Write-Host "   安装和配置已完成，建议启动测试确认                        " -ForegroundColor Yellow
             Write-Host "                                                              " -ForegroundColor Yellow
             Write-Host "==============================================================" -ForegroundColor Yellow
             Write-Host ""
             Write-Success "Claude Code 文件已安装。"
             Write-Success "DeepSeek API 已配置。"
-            Write-Warning "但新 PowerShell 暂未确认能直接运行 claude。"
+            Write-Info "PATH 已配置，但自动启动验证暂未通过。"
             Write-Host ""
-            Write-Info "下一步建议："
-            Write-Info "先关闭当前窗口，重新打开 PowerShell，执行："
-            Write-Host "  claude --version" -ForegroundColor Cyan
-            Write-Info "如仍失败，运行 [4] 一键诊断或「一键修复依赖」。"
+            Write-Info "下一步："
+            Write-Info "选择 [1] 启动 Claude Code 测试。"
+            Write-Info "如果新窗口无法进入 Claude Code，再选择 [4] 一键诊断。"
         }
         else {
             Write-Host "==============================================================" -ForegroundColor Yellow
             Write-Host "                                                              " -ForegroundColor Yellow
-            Write-Host "        Claude Code 已安装，但 claude 命令未加入 PATH          " -ForegroundColor Yellow
+            Write-Host "    Claude Code 已安装，但命令路径需要修复                    " -ForegroundColor Yellow
             Write-Host "                                                              " -ForegroundColor Yellow
             Write-Host "==============================================================" -ForegroundColor Yellow
             Write-Host ""
             Write-Success "Claude Code 文件已安装。"
             Write-Success "DeepSeek API 已配置。"
-            Write-Warning "但 claude 命令暂时无法直接运行。"
+            Write-Warning "当前还不能直接运行 claude。"
             Write-Host ""
-            Write-Info "请运行「一键修复依赖」或重新运行安装工具修复 PATH。"
+            Write-Info "下一步："
+            Write-Info "先选择 [4] 一键诊断，或运行「一键修复依赖.cmd」。"
+            Write-Info "修复后再选择 [1] 启动测试。"
         }
     }
     elseif ($script:ClaudeInstalled -and $script:ConfigWritten) {
@@ -1610,7 +1610,12 @@ function Show-CompletionMenu {
                 }
                 else {
                     Write-Warning "自动启动测试终端失败。"
-                    Write-Info "你仍可选择 [2] 打开测试项目文件夹，然后手动打开终端输入 claude。"
+                    Write-Host ""
+                    Write-Info "你可以按下面方式手动测试："
+                    Write-Info "  1. 选择 [2] 打开测试项目文件夹"
+                    Write-Info "  2. 在文件夹地址栏输入 powershell，然后按回车"
+                    Write-Info "  3. 在新打开的终端里输入 claude"
+                    Write-Info "  4. 如果仍失败，返回本窗口选择 [4] 一键诊断"
                 }
             }
             "2" {

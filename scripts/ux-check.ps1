@@ -997,19 +997,16 @@ x-api-key: $TestApiKey
         $qsText -match '网络与安装策略.*v1\.3\.3'
     } "QUICK_START.md 网络与安装策略标题必须是 v1.3.3"
 
-    # --- 23f: 文档新 CTA 检查 ---
-    Assert "README.md 包含新完成页 CTA" {
-        $readmeText -match '立即验证 Claude Code 是否能正常使用（推荐）'
-    } "README.md 必须包含完成页 [1] CTA"
-    Assert "QUICK_START.md 包含新完成页 CTA" {
-        $qsText -match '立即验证 Claude Code 是否能正常使用（推荐）'
-    } "QUICK_START.md 必须包含完成页 [1] CTA"
-    Assert "README.md 包含右键终端提示" {
-        $readmeText -match '在终端中打开'
-    } "README.md 必须包含右键→在终端中打开的提示"
-    Assert "QUICK_START.md 包含右键终端提示" {
-        $qsText -match '在终端中打开'
-    } "QUICK_START.md 必须包含右键→在终端中打开的提示"
+    # --- 23f: 文档新 CTA 检查（P1-5 已更新文档文案）---
+    Assert "README.md 包含完成页 [1] CTA" {
+        $readmeText -match '启动 Claude Code 测试（推荐）'
+    } "README.md 必须包含完成页 [1] 启动 Claude Code 测试（推荐）"
+    Assert "QUICK_START.md 包含完成页 [1] CTA" {
+        $qsText -match '启动 Claude Code 测试（推荐）'
+    } "QUICK_START.md 必须包含完成页 [1] 启动 Claude Code 测试（推荐）"
+    Assert "README.md 包含自动打开终端描述" {
+        $readmeText -match '自动.*终端|在文件夹地址栏输入'
+    } "README.md 必须包含自动打开终端或地址栏手动方式描述"
 
     # --- 23g: 文档售后模板检查 ---
     Assert "README.md 包含统一售后安全提示" {
@@ -1450,6 +1447,145 @@ x-api-key: $TestApiKey
     Assert "P1-1m: launchScript 不含完整 API Key 输出" {
         $launchBlock -notmatch 'ANTHROPIC_AUTH_TOKEN'
     } "launchScript 不得输出 API Key 相关变量"
+
+    Write-Host ""
+
+    # ============================================================
+    # 27. v1.3.3 P1 剩余体验检查：完成页降噪/信任提示/兜底/文档同步
+    # ============================================================
+    Write-CheckHeader "27. v1.3.3 P1 剩余体验：完成页降噪/信任提示/兜底/文档同步"
+
+    $startHerePath = Join-Path $ScriptRoot "Start-Here.ps1"
+    $startHereText = Get-Content $startHerePath -Raw -Encoding UTF8
+
+    # 读取文档
+    $readmePath = Join-Path $ScriptRoot "README.md"
+    $readmeText = if (Test-Path $readmePath) { Get-Content $readmePath -Raw -Encoding UTF8 } else { "" }
+    $qsPath = Join-Path $ScriptRoot "QUICK_START.md"
+    $qsText = if (Test-Path $qsPath) { Get-Content $qsPath -Raw -Encoding UTF8 } else { "" }
+    $userTutorialPath = Join-Path $ScriptRoot "docs\用户使用教程.md"
+    $userTutorialText = if (Test-Path $userTutorialPath) { Get-Content $userTutorialPath -Raw -Encoding UTF8 } else { "" }
+
+    # --- 27a: 不含绝对安全文案 ---
+    Assert "27a: Start-Here.ps1 不含'完全安全'" {
+        $startHereText -notmatch '完全安全'
+    } "Start-Here.ps1 不得包含'完全安全'"
+
+    Assert "27a: Start-Here.ps1 不含'绝对安全'" {
+        $startHereText -notmatch '绝对安全'
+    } "Start-Here.ps1 不得包含'绝对安全'"
+
+    Assert "27a: Start-Here.ps1 不含'100% 安全'" {
+        $startHereText -notmatch '100%\s*安全'
+    } "Start-Here.ps1 不得包含'100% 安全'"
+
+    # --- 27b: 新信任提示文案 ---
+    Assert "27b: 含新信任提示'由本工具创建，仅用于验证'" {
+        $startHereText -match [regex]::Escape('这个测试项目由本工具创建，仅用于验证 Claude Code 是否能正常启动')
+    } "Start-ClaudeTestTerminal 必须包含新信任提示"
+
+    Assert "27b: 含'如你确认当前目录是测试项目，直接按回车'" {
+        $startHereText -match [regex]::Escape('如你确认当前目录是测试项目，直接按回车即可继续')
+    } "Start-ClaudeTestTerminal 必须包含条件确认提示"
+
+    # --- 27c: 完成页 freshShellFail 但 pathOk 文案降噪 ---
+    Assert "27c: 含'安装和配置已完成，建议启动测试确认'" {
+        $startHereText -match [regex]::Escape('安装和配置已完成，建议启动测试确认')
+    } "完成页 pathOk+freshShellFail 场景标题必须降噪"
+
+    Assert "27c: 含'PATH 已配置，但自动启动验证暂未通过'" {
+        $startHereText -match [regex]::Escape('PATH 已配置，但自动启动验证暂未通过')
+    } "完成页必须说明 PATH 已配置但验证暂未通过"
+
+    Assert "27c: 含'选择 [1] 启动 Claude Code 测试'（pathOk+freshShellFail 场景）" {
+        $startHereText -match [regex]::Escape('选择 [1] 启动 Claude Code 测试')
+    } "完成页 pathOk+freshShellFail 场景下一步必须建议 [1]"
+
+    Assert "27c: 含'如果新窗口无法进入 Claude Code，再选择 [4] 一键诊断'" {
+        $startHereText -match [regex]::Escape('如果新窗口无法进入 Claude Code，再选择 [4] 一键诊断')
+    } "完成页 pathOk+freshShellFail 场景必须包含降级到 [4] 的指引"
+
+    # --- 27d: 完成页 PATH 缺失场景文案 ---
+    Assert "27d: 含'Claude Code 已安装，但命令路径需要修复'" {
+        $startHereText -match [regex]::Escape('Claude Code 已安装，但命令路径需要修复')
+    } "完成页 PATH 缺失场景标题必须明确"
+
+    Assert "27d: 含'先选择 [4] 一键诊断'" {
+        $startHereText -match [regex]::Escape('先选择 [4] 一键诊断')
+    } "完成页 PATH 缺失场景下一步必须写 [4] 诊断"
+
+    Assert "27d: 含'一键修复依赖.cmd'" {
+        $startHereText -match '一键修复依赖\.cmd'
+    } "完成页必须保留修复依赖入口"
+
+    # --- 27e: [1] 失败兜底步骤 ---
+    Assert "27e: 失败兜底含'在文件夹地址栏输入 powershell'" {
+        $startHereText -match [regex]::Escape('在文件夹地址栏输入 powershell')
+    } "Show-CompletionMenu [1] 失败兜底必须包含地址栏输入 powershell"
+
+    Assert "27e: 失败兜底含'选择 [2] 打开测试项目文件夹'" {
+        $startHereText -match '自动启动测试终端失败[\s\S]{0,500}选择 \[2\] 打开测试项目文件夹'
+    } "Show-CompletionMenu [1] 失败兜底第一步必须是 [2]"
+
+    Assert "27e: 失败兜底含'返回本窗口选择 [4] 一键诊断'" {
+        $startHereText -match [regex]::Escape('返回本窗口选择 [4] 一键诊断')
+    } "Show-CompletionMenu [1] 失败兜底必须保留 [4] 诊断"
+
+    # --- 27f: Show-CompletionPage 不调用 Start-ClaudeTestTerminal ---
+    # Reuse completionPageText from section 26 P1-1k extraction
+    $cpText27 = if ($startHereText -match '(?s)function Show-CompletionPage\s*\{.*?(?=^function Show-CompletionMenu\s*\{)') {
+        $matches[0]
+    } else { "" }
+    Assert "27f: Show-CompletionPage 不调用 Start-ClaudeTestTerminal" {
+        $cpText27 -notmatch 'Start-ClaudeTestTerminal'
+    } "Show-CompletionPage 不得直接调用 Start-ClaudeTestTerminal"
+
+    # --- 27g: [2] 仍只打开文件夹 ---
+    # Reuse completionMenuText from section 26
+    $cmStartIdx27 = $startHereText.IndexOf('function Show-CompletionMenu')
+    $cmBody27 = if ($cmStartIdx27 -ge 0) {
+        $afterCm = $startHereText.Substring($cmStartIdx27 + 30)
+        $nextFuncMatch = [regex]::Match($afterCm, '(?m)^function \w')
+        if ($nextFuncMatch.Success) { $afterCm.Substring(0, $nextFuncMatch.Index) } else { $afterCm }
+    } else { "" }
+    Assert "27g: [2] 不调用 Start-ClaudeTestTerminal" {
+        $cmBody27 -notmatch '"2"\s*\{[\s\S]{0,500}Start-ClaudeTestTerminal'
+    } "[2] 分支不得调用 Start-ClaudeTestTerminal"
+    Assert "27g: [2] 允许 explorer.exe" {
+        $cmBody27 -match '"2"\s*\{[\s\S]{0,500}explorer\.exe'
+    } "[2] 分支必须保留 explorer.exe"
+
+    # --- 27h: 文档同步 ---
+    $docsToCheck = @(
+        @{ Name = "README.md"; Text = $readmeText },
+        @{ Name = "QUICK_START.md"; Text = $qsText }
+    )
+    if (Test-Path $userTutorialPath) {
+        $docsToCheck += @{ Name = "docs/用户使用教程.md"; Text = $userTutorialText }
+    }
+
+    foreach ($doc in $docsToCheck) {
+        $docName = $doc.Name
+        $docText = $doc.Text
+        if (-not $docText) { continue }
+
+        Assert "27h: $docName 含'启动 Claude Code 测试'或自动测试描述" {
+            ($docText -match '启动 Claude Code 测试') -or ($docText -match '自动.*测试终端')
+        } "$docName 必须包含完成页 [1] 新流程描述"
+
+        Assert "27h: $docName 不含'完全安全'" {
+            $docText -notmatch '完全安全'
+        } "$docName 不得包含'完全安全'"
+
+        Assert "27h: $docName 保留手动方式或地址栏备选" {
+            ($docText -match '选择 \[2\]|在文件夹地址栏输入|powershell.*claude')
+        } "$docName 必须保留手动兜底路径"
+    }
+
+    # --- 27i: 售后安全口径 ---
+    Assert "27i: README.md 必须包含售后安全口径（report.txt + 不要发送完整 API Key）" {
+        $readmeText -match '只发送生成的 report\.txt|不要发送完整 API Key'
+    } "README.md 必须保留售后安全口径"
 
     Write-Host ""
 
