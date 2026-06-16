@@ -977,6 +977,29 @@ function Invoke-InstallCommandCaptured {
                 $result.TimedOut = $true
                 $result.Error = "timeout: ${TimeoutSec}s"
                 $result.DurationMs = [Math]::Round($sw.Elapsed.TotalMilliseconds, 0)
+
+                # 超时前尝试读取已写入的部分 stdout/stderr（临时文件由 finally 清理）
+                if (Test-Path $stdout) {
+                    try {
+                        $partialOut = Get-Content $stdout -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                        if ($partialOut) {
+                            $result.Output = $partialOut
+                            $result.SanitizedOutput = Sanitize-SecretLikeText -Text (Remove-AnsiEscape -Text $partialOut)
+                            Write-Log "DEBUG" "Timeout partial stdout: $($result.SanitizedOutput)"
+                        }
+                    } catch { }
+                }
+                if (Test-Path $stderr) {
+                    try {
+                        $partialErr = Get-Content $stderr -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                        if ($partialErr) {
+                            $result.Error = $partialErr
+                            $result.SanitizedError = Sanitize-SecretLikeText -Text (Remove-AnsiEscape -Text $partialErr)
+                            Write-Log "DEBUG" "Timeout partial stderr: $($result.SanitizedError)"
+                        }
+                    } catch { }
+                }
+
                 if (-not [string]::IsNullOrWhiteSpace($TimeoutMessage)) {
                     Write-Warning $TimeoutMessage
                 }

@@ -218,7 +218,7 @@ claude-deepseek-installer/
 |   |-- state.ps1                 # 安装状态管理
 |   |-- env-check.ps1             # 环境检测
 |   |-- config-writer.ps1         # 配置读写
-|   |-- claude-install.ps1        # Claude Code 安装（官方优先 + npm 镜像回退）
+|   |-- claude-install.ps1        # Claude Code 安装（Native Install → winget → npm 镜像，后验验证为准）
 |   `-- deepseek-env.defaults.json # DeepSeek 默认配置模板
 |-- scripts/                      # 开发和自检脚本
 |-- docs/                         # 用户文档
