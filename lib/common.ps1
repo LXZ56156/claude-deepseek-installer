@@ -212,9 +212,17 @@ function Test-IsZipInternalPath {
         return $result
     }
 
-    if ($lower -match $temporaryInternetRegex -or $lower -match $compressedRegex) {
+    # 浏览器临时目录（无论是否在 TEMP 下都阻断）
+    if ($lower -match $temporaryInternetRegex) {
         $result.IsZipTemp = $true
-        $result.Reason = "检测到压缩包或浏览器临时目录。请先完整解压 ZIP 到普通文件夹，例如 D:\\ClaudeDeepSeek。"
+        $result.Reason = "检测到浏览器临时目录。请先完整解压 ZIP 到普通文件夹，例如 D:\\ClaudeDeepSeek。"
+        return $result
+    }
+
+    # compressed 目录仅在 TEMP 下才阻断（避免 D:\compressed\... 误判）
+    if ($isUnderTemp -and $lower -match $compressedRegex) {
+        $result.IsZipTemp = $true
+        $result.Reason = "检测到压缩包临时目录。请先完整解压 ZIP 到普通文件夹，例如 D:\\ClaudeDeepSeek。"
         return $result
     }
 

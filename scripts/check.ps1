@@ -221,6 +221,12 @@ $pathRiskCases = @(
         Path          = "D:\" + ("a" * 240) + "\ClaudeCode-DeepSeek"
         ShouldBlock   = $false
         ExpectedLevel = $null
+    },
+    @{
+        Name          = "Normal folder named compressed (no longer BLOCK)"
+        Path          = "D:\compressed\ClaudeCode-DeepSeek"
+        ShouldBlock   = $false
+        ExpectedLevel = "INFO"
     }
 )
 

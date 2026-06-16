@@ -1104,7 +1104,13 @@ x-api-key: $TestApiKey
     Assert "WinRAR 临时目录 BLOCK: IsBlocked=true" { $r9.IsBlocked -eq $true } "WinRAR 临时目录未被阻断"
     Assert "WinRAR 临时目录 RiskLevel=BLOCK" { $r9.RiskLevel -eq "BLOCK" } "WinRAR 临时目录 RiskLevel 异常: $($r9.RiskLevel)"
 
-    # 24j: 文案反回归——用户文档不再包含旧误导文案
+    # 24j: 普通目录名含 compressed 不应阻断（仅 TEMP 下 compressed 才 BLOCK）
+    $normalCompressedPath = "D:\compressed\ClaudeCode-DeepSeek"
+    $r10 = Test-UserPathRisk -PathToCheck $normalCompressedPath
+    Assert "普通 compressed 目录允许: IsBlocked=false" { $r10.IsBlocked -eq $false } "compressed 目录被误判为临时目录"
+    Assert "普通 compressed 目录 RiskLevel=INFO" { $r10.RiskLevel -eq "INFO" } "compressed 目录 RiskLevel 异常: $($r10.RiskLevel)"
+
+    # 24k: 文案反回归——用户文档不再包含旧误导文案（编号调整：原 24j→24k，插入 compressed 测试）
     $userDocsToCheck = @(
         (Join-Path $ScriptRoot "README.md"),
         (Join-Path $ScriptRoot "QUICK_START.md"),
