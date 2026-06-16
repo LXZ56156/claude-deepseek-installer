@@ -493,6 +493,26 @@ function Step-InstallClaudeCode {
     }
 
     if (-not $installResult.Success) {
+        # 兜底检测：即使 Install-ClaudeCodeAuto 返回失败，
+        # 也要以 claude --version 的实际可用性为准（防止旧快照误判）。
+        Refresh-CurrentProcessPath
+        $finalCheck = Test-ClaudeCommandExisting
+        $configInfo = Test-ClaudeConfigExists
+
+        if ($finalCheck.Exists -and $finalCheck.Usable) {
+            $script:ClaudeInstalled = $true
+            $script:ClaudeInstallMethod = if ($finalCheck.Source) { $finalCheck.Source } else { "final_fallback" }
+            $script:ClaudeInstallStatus = "installed"
+            Write-Success "最终验证: Claude Code 已安装可用: $($finalCheck.Version)"
+            Write-Log "INFO" "兜底检测通过: claude 可用, 覆盖安装结果 Success=true"
+
+            if (-not $configInfo.Exists -or -not $configInfo.HasEnv) {
+                Write-Warning "Claude Code 已安装，但 DeepSeek API Key 尚未配置。"
+                Write-Info "下一步：继续配置 DeepSeek API Key。"
+            }
+            return $true
+        }
+
         Write-Error-Msg "Claude Code 安装未成功。"
         Write-Info "请先解决安装问题后重新运行本脚本。"
         Write-Info "如果仍不行，请运行「一键诊断.cmd」获取诊断报告。"
@@ -1137,12 +1157,34 @@ function Show-CompletionPage {
         Write-Info "终端也需要关闭重开才能识别新安装的程序。"
     }
     else {
-        Write-Host "==============================================================" -ForegroundColor Red
-        Write-Host "            安装未完成                                        " -ForegroundColor Red
-        Write-Host "==============================================================" -ForegroundColor Red
-        Write-Host ""
-        Write-Error-Msg "Claude Code 安装未成功。"
-        Write-Info "下一步: 运行「一键诊断.cmd」生成 report.txt，并将报告发给技术支持。"
+        # 最终兜底：即使在所有安装通道都失败的情况下，也做一次最终检测。
+        # 避免因为中间状态误判导致用户看到"安装未完成"。
+        Refresh-CurrentProcessPath
+        $finalClaude = Test-ClaudeCommandExisting
+        $finalConfig = Test-ClaudeConfigExists
+
+        if ($finalClaude.Exists -and $finalClaude.Usable) {
+            $script:ClaudeInstalled = $true
+            Write-Host "==============================================================" -ForegroundColor Yellow
+            Write-Host "            Claude Code 已安装，尚未配置 DeepSeek API Key     " -ForegroundColor Yellow
+            Write-Host "==============================================================" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Success "Claude Code 已安装: $($finalClaude.Version)"
+            Write-Success "安装来源: $($finalClaude.Source)"
+            if (-not $finalConfig.Exists -or -not $finalConfig.HasEnv) {
+                Write-Warning "DeepSeek API Key 尚未配置。"
+                Write-Info "请运行 configure-deepseek.ps1 配置 API Key，"
+                Write-Info "或在主菜单中选择 [1] 一键安装后配置。"
+            }
+        }
+        else {
+            Write-Host "==============================================================" -ForegroundColor Red
+            Write-Host "            安装未完成                                        " -ForegroundColor Red
+            Write-Host "==============================================================" -ForegroundColor Red
+            Write-Host ""
+            Write-Error-Msg "Claude Code 安装未成功。"
+            Write-Info "下一步: 运行「一键诊断.cmd」生成 report.txt，并将报告发给技术支持。"
+        }
     }
 
     Write-Host ""
@@ -1287,11 +1329,28 @@ function Start-LazyInstall {
             Write-Warning "当前需要重开终端后继续，已跳过后续配置步骤。"
         }
         else {
-            Write-Error-Msg "Claude Code 安装未成功，跳过后续配置步骤。"
-            Write-Info "请先解决安装问题后重新运行本脚本。"
+            # 最后一次兜底检测：也许 Claude 已可用但中间流程误判
+            Refresh-CurrentProcessPath
+            $finalCheck = Test-ClaudeCommandExisting
+            if ($finalCheck.Exists -and $finalCheck.Usable) {
+                $script:ClaudeInstalled = $true
+                $script:ClaudeInstallMethod = if ($finalCheck.Source) { $finalCheck.Source } else { "final_fallback" }
+                Write-Success "最终验证: Claude Code 已可用 ($($finalCheck.Version))，继续配置 DeepSeek API Key。"
+                Write-Log "INFO" "Start-LazyInstall 兜底通过: claude 可用, 继续流程"
+                # 不 return，继续走后续 API Key 配置
+            }
+            else {
+                Write-Error-Msg "Claude Code 安装未成功，跳过后续配置步骤。"
+                Write-Info "请先解决安装问题后重新运行本脚本。"
+                Show-CompletionPage
+                return
+            }
         }
-        Show-CompletionPage
-        return
+        # needs_restart 分支仍然需要 return
+        if ($script:ClaudeInstallStatus -match "needs_restart") {
+            Show-CompletionPage
+            return
+        }
     }
 
     # 安装成功后暂停：区分已安装和新安装的提示

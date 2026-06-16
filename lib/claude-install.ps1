@@ -292,6 +292,14 @@ function Get-ClaudeCommandInventory {
                 $candidate.Risk = "WARN"
                 $candidate.Note = "可能是 App Execution Alias / Claude Desktop alias，可能抢占真实 CLI"
             }
+            elseif (
+                $pathLower -match '\\microsoft\\winget\\packages\\anthropic\.claudecode_' -or
+                $pathLower -match '\\winget\\packages\\anthropic\.claudecode'
+            ) {
+                $candidate.Source = "winget"
+                $candidate.Risk = "OK"
+                $candidate.Note = "winget 安装的 Claude Code CLI"
+            }
             else {
                 $candidate.Source = "unknown"
                 $candidate.Risk = "WARN"
@@ -665,10 +673,11 @@ function Test-NpmMirrorClaudeCodeNetwork {
         return $result
     }
 
-    $cmdExe = if ($env:ComSpec) { $env:ComSpec } else { "cmd.exe" }
-    $npmViewCmd = "`"$($npmResolved.Path)`" view @anthropic-ai/claude-code version --registry=https://registry.npmmirror.com"
-    $npmViewResult = Invoke-CommandSafe -Command $cmdExe -Arguments @(
-        "/d", "/s", "/c", $npmViewCmd
+    $npmViewResult = Invoke-CommandSafe -Command $npmResolved.Path -Arguments @(
+        "view",
+        "@anthropic-ai/claude-code",
+        "version",
+        "--registry=https://registry.npmmirror.com"
     ) -TimeoutSec 60
 
     if ($npmViewResult.Success -and -not [string]::IsNullOrWhiteSpace($npmViewResult.Output)) {
@@ -706,9 +715,11 @@ function Test-NpmMirrorClaudeCodeNetwork {
     $result.PlatformPackage = $platformPackage
 
     if ($platformPackage) {
-        $npmPlatViewCmd = "`"$($npmResolved.Path)`" view $platformPackage version --registry=https://registry.npmmirror.com"
-        $platViewResult = Invoke-CommandSafe -Command $cmdExe -Arguments @(
-            "/d", "/s", "/c", $npmPlatViewCmd
+        $platViewResult = Invoke-CommandSafe -Command $npmResolved.Path -Arguments @(
+            "view",
+            $platformPackage,
+            "version",
+            "--registry=https://registry.npmmirror.com"
         ) -TimeoutSec 60
 
         if ($platViewResult.Success -and -not [string]::IsNullOrWhiteSpace($platViewResult.Output)) {
@@ -756,14 +767,12 @@ function Get-NpmInstallRiskConfig {
         return $result
     }
 
-    $cmdExe = if ($env:ComSpec) { $env:ComSpec } else { "cmd.exe" }
     $configKeys = @("optional", "omit", "ignore-scripts", "registry")
     $configValues = @{}
 
     foreach ($key in $configKeys) {
-        $npmConfigCmd = "`"$($npmResolved.Path)`" config get $key"
-        $configResult = Invoke-CommandSafe -Command $cmdExe -Arguments @(
-            "/d", "/s", "/c", $npmConfigCmd
+        $configResult = Invoke-CommandSafe -Command $npmResolved.Path -Arguments @(
+            "config", "get", $key
         ) -TimeoutSec 8
 
         $val = ""
@@ -971,11 +980,14 @@ function Install-ClaudeCodeNpmMirror {
 
     Write-Log "INFO" "执行: $($npmResolved.Path) install -g @anthropic-ai/claude-code --registry=https://registry.npmmirror.com"
 
-    # 通过 cmd.exe 包装执行 .cmd 文件，确保 Windows 上稳定执行
-    $cmdExe = if ($env:ComSpec) { $env:ComSpec } else { "cmd.exe" }
-    $inner = "`"$($npmResolved.Path)`" install -g @anthropic-ai/claude-code --registry=https://registry.npmmirror.com"
-    $installResult = Invoke-VisibleInstallCommand -FilePath $cmdExe -Arguments @(
-        "/d", "/s", "/c", $inner
+    # 直接传 npm.cmd 路径 + 参数数组给 Invoke-VisibleInstallCommand，
+    # 由它内部统一处理 .cmd 的执行兼容性（不再手动包 cmd.exe /c，
+    # 避免引号嵌套导致 '\"C:\Program Files\nodejs\npm.cmd\"' is not recognized）
+    $installResult = Invoke-VisibleInstallCommand -FilePath $npmResolved.Path -Arguments @(
+        "install",
+        "-g",
+        "@anthropic-ai/claude-code",
+        "--registry=https://registry.npmmirror.com"
     ) -TimeoutSec 900 -TestSafe:$TestSafe
 
     if ($installResult.Success) {
@@ -2131,9 +2143,24 @@ function Invoke-VisibleInstallCommand {
     Write-Log "INFO" "Invoke-VisibleInstallCommand: $($result.Command), TimeoutSec=$TimeoutSec, cwd=$(if ($Cwd) { $Cwd } else { (Get-Location).Path })"
 
     try {
+        # 解析 FilePath：如果是 .cmd / .bat，通过 cmd.exe 包装执行。
+        # Invoke-CommandSafe 内部已经有完整的 cmd.exe 包装，这里对可见安装命令
+        # 统一处理 Extension Awareness。
+        $resolvedPath = $FilePath
+        $resolvedArgs = $Arguments
+        $ext = if ($FilePath) { [System.IO.Path]::GetExtension($FilePath).ToLowerInvariant() } else { "" }
+        if ($ext -in @(".cmd", ".bat")) {
+            # .cmd/.bat 必须通过 cmd.exe /c 执行，且内部把整个命令行传给 /c
+            $quoted = @($resolvedPath) + $resolvedArgs
+            $inner = ($quoted | ForEach-Object { ConvertTo-CommandLineArgument -Argument $_ }) -join " "
+            $resolvedPath = if ($env:ComSpec) { $env:ComSpec } else { "cmd.exe" }
+            $resolvedArgs = @("/d", "/s", "/c", $inner)
+            Write-Log "DEBUG" "Invoke-VisibleInstallCommand: wrapping .cmd via cmd.exe: $resolvedPath /d /s /c $inner"
+        }
+
         $startParams = @{
-            FilePath     = $FilePath
-            ArgumentList = $Arguments
+            FilePath     = $resolvedPath
+            ArgumentList = $resolvedArgs
             NoNewWindow  = $true
             PassThru     = $true
             ErrorAction  = 'Stop'
@@ -2152,12 +2179,23 @@ function Invoke-VisibleInstallCommand {
         $result.DurationMs = $sw.ElapsedMilliseconds
 
         if ($finished) {
-            $result.ExitCode = $proc.ExitCode
-            $result.Success = ($proc.ExitCode -eq 0)
-            if (-not $result.Success) {
-                $result.Error = "$FilePath 返回非零退出码: $($proc.ExitCode)"
+            # Windows PowerShell 5.1 下 Start-Process -PassThru 的 ExitCode 可能为 $null
+            # 即使进程实际返回了 0。此时记录为 -1 并标记 Success=$false，
+            # 由调用方通过后验验证（如 Test-ClaudeCommandExisting）决定最终结果。
+            if ($null -eq $proc.ExitCode -or $proc.ExitCode -isnot [int]) {
+                $result.ExitCode = -1
+                $result.Success = $false
+                $result.Error = "$FilePath 未返回有效退出码（PS 5.1 已知限制），请调用方做后验验证"
+                Write-Log "WARN" "Invoke-VisibleInstallCommand: ExitCode 为空或无效，DurationMs=$($result.DurationMs)"
             }
-            Write-Log "INFO" "Invoke-VisibleInstallCommand 完成: ExitCode=$($proc.ExitCode), DurationMs=$($result.DurationMs)"
+            else {
+                $result.ExitCode = [int]$proc.ExitCode
+                $result.Success = ($result.ExitCode -eq 0)
+                if (-not $result.Success) {
+                    $result.Error = "$FilePath 返回非零退出码: $($result.ExitCode)"
+                }
+                Write-Log "INFO" "Invoke-VisibleInstallCommand 完成: ExitCode=$($result.ExitCode), DurationMs=$($result.DurationMs)"
+            }
         }
         else {
             # 超时：杀进程树
@@ -2251,50 +2289,69 @@ function Invoke-VisibleFileDownload {
             New-Item -ItemType Directory -Path $outDir -Force | Out-Null
         }
 
-        # 使用 Invoke-WebRequest 直接下载（不用子进程包装）
-        $response = Invoke-WebRequest -Uri $Url -Method GET `
-            -TimeoutSec $TimeoutSec -UseBasicParsing `
-            -ErrorAction Stop -MaximumRedirection 3
+        # 使用 WebClient.DownloadFile 进行二进制安全下载。
+        # 不能用 Invoke-WebRequest 把 response.Content 当 string 再 [IO.File]::WriteAllText，
+        # 某些 Windows 环境下会导致文件内容变成十进制字节串（如 "112 97 114 97 109 40 ..."）。
+        $client = New-Object System.Net.WebClient
+        $client.Headers.Add("User-Agent", "Mozilla/5.0 CCDI")
+        $client.DownloadFile($Url, $OutputPath)
 
-        if ($response.StatusCode -eq 200) {
-            $content = $response.Content
-            if ([string]::IsNullOrWhiteSpace($content)) {
-                $result.Error = "下载成功但内容为空"
-                $result.Status = "failed_download_empty"
-                Write-Log "ERROR" "Invoke-VisibleFileDownload: 内容为空, Url=$Url"
-                $sw.Stop(); $result.DurationMs = $sw.ElapsedMilliseconds
-                return $result
-            }
+        $sw.Stop()
+        $result.DurationMs = $sw.ElapsedMilliseconds
 
-            # 写入文件（UTF-8 无 BOM）
-            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-            [System.IO.File]::WriteAllText($OutputPath, $content, $utf8NoBom)
-
-            if (-not (Test-Path $OutputPath) -or (Get-Item $OutputPath).Length -eq 0) {
-                $result.Error = "文件写入失败或为空: $OutputPath"
-                $result.Status = "failed_download_write"
-                Write-Log "ERROR" "Invoke-VisibleFileDownload: 写入失败"
-                $sw.Stop(); $result.DurationMs = $sw.ElapsedMilliseconds
-                return $result
-            }
-
-            $sw.Stop(); $result.DurationMs = $sw.ElapsedMilliseconds
-            $result.Success = $true
-            $result.Status = "ok"
-            Write-Success "官方安装脚本下载完成 ($($result.DurationMs)ms, $($content.Length) bytes)"
-            Write-Log "INFO" "Invoke-VisibleFileDownload 成功: Url=$Url, size=$($content.Length), DurationMs=$($result.DurationMs)"
+        if (-not (Test-Path $OutputPath)) {
+            $result.Error = "下载完成但目标文件不存在"
+            $result.Status = "failed_download_empty"
+            Write-Log "ERROR" "Invoke-VisibleFileDownload: 下载完成但文件不存在, Url=$Url"
+            return $result
         }
-        else {
-            $sw.Stop(); $result.DurationMs = $sw.ElapsedMilliseconds
-            $result.Error = "HTTP $($response.StatusCode)"
-            $result.Status = "failed_download"
-            Write-Log "ERROR" "Invoke-VisibleFileDownload: HTTP $($response.StatusCode), Url=$Url"
+
+        $bytes = [IO.File]::ReadAllBytes($OutputPath)
+        $resultSize = $bytes.Length
+
+        if ($bytes.Length -lt 100) {
+            $result.Error = "下载文件过小 ($($bytes.Length) bytes)，可能不是安装脚本"
+            $result.Status = "failed_download_too_small"
+            Write-Log "ERROR" "Invoke-VisibleFileDownload: 文件过小 ($($bytes.Length) bytes), Url=$Url"
+            Remove-Item $OutputPath -Force -ErrorAction SilentlyContinue
+            return $result
         }
+
+        # 校验：检查前 512 字节是否像合法的 PowerShell 安装脚本
+        $headLen = [Math]::Min($bytes.Length, 512)
+        $head = [Text.Encoding]::UTF8.GetString($bytes, 0, $headLen)
+
+        # 拒绝十进制字节串（如 "112 97 114 97 109 40 ..."）
+        if ($head -match '^\s*\d+\s+\d+\s+\d+\s+\d+') {
+            $result.Error = "下载文件内容像十进制字节串，不是合法 PowerShell 脚本"
+            $result.Status = "failed_download_decimal_bytes"
+            Write-Log "ERROR" "Invoke-VisibleFileDownload: 内容为十进制字节串, Url=$Url, head=$($head.Substring(0, [Math]::Min(80, $head.Length)))"
+            Remove-Item $OutputPath -Force -ErrorAction SilentlyContinue
+            return $result
+        }
+
+        # 至少包含一个 PowerShell 脚本特征
+        if ($head -notmatch '(?i)param\s*\(|function|powershell|claude') {
+            $result.Error = "下载内容不像 Claude 官方 PowerShell 安装脚本"
+            $result.Status = "failed_download_not_ps1"
+            Write-Log "ERROR" "Invoke-VisibleFileDownload: 内容不像安装脚本, Url=$Url"
+            Remove-Item $OutputPath -Force -ErrorAction SilentlyContinue
+            return $result
+        }
+
+        $result.Success = $true
+        $result.Status = "ok"
+        Write-Success "官方安装脚本下载完成 ($($result.DurationMs)ms, $resultSize bytes)"
+        Write-Log "INFO" "Invoke-VisibleFileDownload 成功: Url=$Url, size=$resultSize, DurationMs=$($result.DurationMs)"
     }
     catch {
-        $sw.Stop(); $result.DurationMs = $sw.ElapsedMilliseconds
+        $sw.Stop()
+        $result.DurationMs = $sw.ElapsedMilliseconds
         $result.Error = "下载异常: $($_.Exception.Message)"
         $result.Status = "failed_download"
+
+        # 清理可能的部分下载文件
+        Remove-Item $OutputPath -Force -ErrorAction SilentlyContinue
 
         # 分析错误类型写入日志
         if ($_.Exception -is [System.Net.WebException]) {
@@ -2654,43 +2711,43 @@ function Install-ClaudeCodeAuto {
         Write-Info ""
         Write-Info "正在尝试通过 winget 安装 Claude Code（备用通道）..."
         $wingetClaudeResult = Install-ClaudeCodeViaWinget
-        if ($wingetClaudeResult.Success) {
-            Write-Success "winget Claude Code 安装命令已执行。正在验证..."
-            Refresh-CurrentProcessPath
-            $verifyWingetClaude = Test-ClaudeCommandExisting
-            if ($verifyWingetClaude.Usable) {
-                Write-Success "Claude Code 安装验证通过: $($verifyWingetClaude.Version)"
-                $result.Success = $true
-                $result.Method = "winget_claude_code"
-                $result.Status = "installed"
-                $result.Version = $verifyWingetClaude.Version
-                Update-CcdiState -Updates @{
-                    claudeWasAlreadyInstalled = $false
-                    claudeInstallMethod       = "winget_claude_code"
-                    claudeInstallStatus       = "installed"
-                    claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-                } | Out-Null
-                return $result
-            }
-            elseif ($verifyWingetClaude.Exists) {
-                Write-Warning "检测到 claude 命令存在但无法运行，可能是旧安装、残留 shim 或 WindowsApps alias。"
-                Write-Log "WARN" "winget ClaudeCode: claude exists but unusable: $($verifyWingetClaude.Error)"
-                Write-Info "继续尝试 npm 镜像安装..."
-                try {
-                    $inv = Get-ClaudeCommandInventory
-                    if ($inv.ConflictSummary) {
-                        Write-Log "WARN" "Claude command inventory: $($inv.ConflictSummary)"
-                    }
-                } catch { Write-Log "DEBUG" "Get-ClaudeCommandInventory failed (non-blocking): $_" }
-            }
-            else {
-                Write-Warning "winget 安装已完成但 claude 命令未找到。继续尝试 npm 镜像安装..."
-                Write-Log "WARN" "winget Claude Code 安装后验证失败: claude 命令未找到"
-            }
+
+        # winget 在 Windows PowerShell 5.1 下 Start-Process 的 ExitCode 可能为空，
+        # 因此不依赖 $wingetClaudeResult.Success 判断，始终做后验验证。
+        # 只要 claude --version 可用，就判定 winget 安装成功。
+        Refresh-CurrentProcessPath
+        $verifyWingetClaude = Test-ClaudeCommandExisting
+        Write-Log "INFO" "winget Claude Code 后验验证: Usable=$($verifyWingetClaude.Usable), Version=$($verifyWingetClaude.Version), Path=$($verifyWingetClaude.Path)"
+
+        if ($verifyWingetClaude.Usable) {
+            Write-Success "winget 安装验证通过: $($verifyWingetClaude.Version)"
+            $result.Success = $true
+            $result.Method = "winget"
+            $result.Status = "installed"
+            $result.Version = $verifyWingetClaude.Version
+            Update-CcdiState -Updates @{
+                claudeWasAlreadyInstalled = $false
+                claudeInstallMethod       = "winget"
+                claudeInstallStatus       = "installed"
+                claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+            } | Out-Null
+            return $result
+        }
+
+        if ($verifyWingetClaude.Exists) {
+            Write-Warning "检测到 claude 命令存在但无法运行，可能是旧安装、残留 shim 或 WindowsApps alias。"
+            Write-Log "WARN" "winget: claude exists but unusable: $($verifyWingetClaude.Error)"
+            Write-Info "继续尝试 npm 镜像安装..."
+            try {
+                $inv = Get-ClaudeCommandInventory
+                if ($inv.ConflictSummary) {
+                    Write-Log "WARN" "Claude command inventory: $($inv.ConflictSummary)"
+                }
+            } catch { Write-Log "DEBUG" "Get-ClaudeCommandInventory failed (non-blocking): $_" }
         }
         else {
-            Write-Log "INFO" "winget Claude Code 安装未成功: ExitCode=$($wingetClaudeResult.ExitCode), Error=$($wingetClaudeResult.Error)"
-            Write-Info "winget Claude Code 通道不可用，继续尝试 npm 镜像安装..."
+            Write-Log "INFO" "winget 安装后 claude 命令未找到: ExitCode=$($wingetClaudeResult.ExitCode), Error=$($wingetClaudeResult.Error)"
+            Write-Info "winget 安装后暂未检测到 claude，继续尝试 npm 镜像安装..."
         }
     }
 
@@ -2738,7 +2795,28 @@ function Install-ClaudeCodeAuto {
                 $nodeRecheck = Test-NodeJsInstalled
                 $npmRecheck = Test-NpmInstalled
                 if ($nodeRecheck.Installed -and $nodeRecheck.IsSupported -and $npmRecheck.Installed) {
-                    Write-Success "Node.js/npm 已验证可用 (Node $($nodeRecheck.Version), npm $($npmRecheck.Version))，继续安装 Claude Code。"
+                    Write-Success "Node.js/npm 已验证可用 (Node $($nodeRecheck.Version), npm $($npmRecheck.Version))。"
+
+                    # Node 安装后先检测 Claude 是否已由 winget 装好。
+                    # 如果 Claude 已可用，直接返回成功，不必继续 npm。
+                    Refresh-CurrentProcessPath
+                    $postNodeClaude = Test-ClaudeCommandExisting
+                    if ($postNodeClaude.Usable) {
+                        Write-Success "Claude Code 已可用 (Node 安装后重新检测): $($postNodeClaude.Version)"
+                        $result.Success = $true
+                        $result.Method = "winget"
+                        $result.Status = "installed"
+                        $result.Version = $postNodeClaude.Version
+                        Update-CcdiState -Updates @{
+                            claudeWasAlreadyInstalled = $false
+                            claudeInstallMethod       = "winget"
+                            claudeInstallStatus       = "installed"
+                            claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                        } | Out-Null
+                        return $result
+                    }
+
+                    Write-Info "继续安装 Claude Code..."
                     Write-Log "INFO" "Node.js/npm 二次验证通过: Node=$($nodeRecheck.Version), npm=$($npmRecheck.Version)"
                     # 重新检测 npmmirror 可达性（之前因 Node 不可用已提前返回）
                     $mirrorRecheck = Test-NpmMirrorClaudeCodeNetwork
@@ -2878,7 +2956,28 @@ function Install-ClaudeCodeAuto {
                     }
                 }
                 else {
-                    Write-Warning "Node.js 可能已安装，但当前终端暂未识别。"
+                    # Node 安装后二次验证未完全通过，给出具体诊断
+                    $diagLines = @()
+                    if ($nodeRecheck.Installed -and $nodeRecheck.IsSupported) {
+                        $diagLines += "Node.js: $($nodeRecheck.Version) (可用)"
+                    }
+                    elseif ($nodeRecheck.Installed) {
+                        $diagLines += "Node.js: $($nodeRecheck.Version) (版本不满足要求，需要 >= 18)"
+                    }
+                    else {
+                        $diagLines += "Node.js: 未检测到"
+                    }
+                    if ($npmRecheck.Installed) {
+                        $diagLines += "npm: $($npmRecheck.Version) (可用)"
+                    }
+                    else {
+                        $diagLines += "npm: 未检测到"
+                    }
+
+                    Write-Warning "Node.js/npm 安装后验证未完全通过:"
+                    foreach ($line in $diagLines) {
+                        Write-Info "  $line"
+                    }
                     Write-Info "请关闭此窗口后重新双击 [00-点我开始安装.cmd]。"
                     $result.Method = "node-via-winget"
                     $result.Status = "node_installed_needs_restart"

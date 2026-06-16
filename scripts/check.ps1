@@ -1963,7 +1963,7 @@ try {
 
     # All valid Method values
     $validMethods = @("existing", "official_native", "npm_npmmirror", "none",
-        "node-via-winget", "winget_claude_code")
+        "node-via-winget", "winget")
     $validStatuses = @("skipped_existing", "skipped_test_safe_existing", "skipped_test_safe_missing",
         "skipped_test_safe_broken", "installed", "installed_needs_restart",
         "node_installed_needs_restart", "failed_missing_node_or_npm",
@@ -2022,9 +2022,11 @@ if ($claudeInstallText -notmatch 'npm\.cmd') {
     throw "Install-ClaudeCodeNpmMirror must reference npm.cmd"
 }
 
-# 5. cmd.exe or $env:ComSpec must appear in Install-ClaudeCodeNpmMirror
-if ($claudeInstallText -notmatch 'Install-ClaudeCodeNpmMirror[\s\S]{0,1200}(cmd\.exe|\$env:ComSpec|\$cmdExe)') {
-    throw "Install-ClaudeCodeNpmMirror must use cmd.exe or `$env:ComSpec wrapper"
+# 5. Invoke-VisibleInstallCommand in Install-ClaudeCodeNpmMirror must use npm.cmd path
+#    (v1.3.2: 不再手动包 cmd.exe /c，改为传 npm.cmd 路径给 Invoke-VisibleInstallCommand，
+#     由它内部统一处理 .cmd 执行兼容性，避免引号嵌套错误)
+if ($claudeInstallText -notmatch 'npmResolved\.Path[\s\S]{0,200}Invoke-VisibleInstallCommand') {
+    throw "Install-ClaudeCodeNpmMirror must use Resolve-NpmCmdPath result with Invoke-VisibleInstallCommand"
 }
 
 # 6. Node.js winget install branch must include secondary verification (not just installResult.Success)
@@ -2750,10 +2752,10 @@ if ($uninstallTextForCheck -match '首次运行时间[\s\S]{0,30}安装完成' -
     throw "uninstall-config.ps1 must display firstRunAt separately from install completion"
 }
 
-    # 5. Every install-success Update-CcdiState (official_native/winget_claude_code/npm_npmmirror + installed)
+    # 5. Every install-success Update-CcdiState (official_native/winget/npm_npmmirror + installed)
     #    must include claudeInstallCompletedAt
     $claudeInstallTextForP5 = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
-    $successMethods = @("official_native","winget_claude_code","npm_npmmirror")
+    $successMethods = @("official_native","winget","npm_npmmirror")
     foreach ($method in $successMethods) {
         $blocks = [regex]::Matches($claudeInstallTextForP5, "(?s)claudeInstallMethod\s*=\s*`"$method`"[\s\S]{0,100}claudeInstallStatus\s*=\s*`"installed`"[\s\S]{0,200}?\| Out-Null")
         foreach ($block in $blocks) {

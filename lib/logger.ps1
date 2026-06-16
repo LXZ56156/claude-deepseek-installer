@@ -3,20 +3,44 @@
 # 提供统一的日志记录和彩色控制台输出功能
 # ============================================================
 
-# --- 编码初始化（防止 Windows PowerShell 5.1 控制台乱码）---
-try {
-    [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
-    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-    $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-    $null = & chcp 65001 2>$null
-}
-catch {
-    # 编码设置失败不阻塞模块加载
-}
+# --- 编码初始化（延迟到 Initialize-ConsoleEncodingSafe，按 PS 版本/终端智能决策）---
+# 不要在模块文件顶层无条件设置控制台编码。
+# Windows PowerShell 5.1 + conhost + chcp 65001 可能导致中文叠字（如 [信信息息]）。
+# 详见 Initialize-ConsoleEncodingSafe 的实现。
 
 # 全局日志目录和文件路径
 $script:LogDir = $null
 $script:LogFile = $null
+
+function Initialize-ConsoleEncodingSafe {
+    <#
+    .SYNOPSIS
+        按 PowerShell 版本和终端类型智能初始化控制台编码。
+        Windows PowerShell 5.1 Desktop + conhost 下不强制 chcp 65001，
+        避免中文叠字（如 [信信息息]、正正在在检检测测）。
+        日志文件始终用 UTF-8 写入，不受此函数影响。
+    #>
+    try {
+        $isLegacyWindowsPowerShell = (
+            $PSVersionTable.PSEdition -eq "Desktop" -and
+            $PSVersionTable.PSVersion.Major -le 5
+        )
+
+        if ($isLegacyWindowsPowerShell) {
+            Write-Log "DEBUG" "Legacy Windows PowerShell detected; skip forcing console UTF-8 to avoid duplicated Chinese glyphs."
+            return
+        }
+
+        # PowerShell 7+ / Windows Terminal 场景：可以安全设置 UTF-8
+        [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
+        [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+        $script:OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+        Write-Log "DEBUG" "Console UTF-8 initialized for non-legacy PowerShell."
+    }
+    catch {
+        Write-Log "WARN" "Console encoding init skipped: $_"
+    }
+}
 
 function Initialize-Logger {
     <#
@@ -65,6 +89,9 @@ function Initialize-Logger {
     }
 
     $script:LogFile = Join-Path $script:LogDir "$ScriptName-$timestamp.log"
+
+    # 按 PS 版本智能初始化控制台编码（Windows PS 5.1 不强制 UTF-8，避免中文叠字）
+    Initialize-ConsoleEncodingSafe
 
     Write-Log "INFO" "========== 日志开始 =========="
     Write-Log "INFO" "日志文件: $script:LogFile"
