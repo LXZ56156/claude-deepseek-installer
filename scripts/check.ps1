@@ -2677,6 +2677,84 @@ if ($wqsBodyForP13 -match [regex]::Escape('详情见"Claude 命令来源"')) {
 Write-Host "[check] P1/P2 environment diagnostics anti-regression OK"
 
 # ============================================================
+# P2 UX copy 防回归检查: 售后安全 / doctor 小白化 / 文案黑名单
+# ============================================================
+Write-Host "[check] P2 UX copy anti-regression: safety guidance, doctor AtAGlance, copy blacklist"
+
+$commonText = Get-Content -Path (Join-Path $RootDir "lib\common.ps1") -Raw -Encoding UTF8
+$doctorText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+$startHereText = Get-Content -Path (Join-Path $RootDir "Start-Here.ps1") -Raw -Encoding UTF8
+
+# 1. Write-SupportSafeGuidance 在 common.ps1 中，不在 Start-Here.ps1 中
+if ($commonText -notmatch 'function Write-SupportSafeGuidance') {
+    throw "Write-SupportSafeGuidance must be in lib/common.ps1"
+}
+if ($startHereText -match 'function Write-SupportSafeGuidance') {
+    throw "Write-SupportSafeGuidance must NOT be duplicated in Start-Here.ps1"
+}
+
+# 2. doctor.ps1 包含 Write-AtAGlance
+if ($doctorText -notmatch 'function Write-AtAGlance') {
+    throw "doctor.ps1 must contain Write-AtAGlance function"
+}
+if ($doctorText -notmatch 'Write-AtAGlance') {
+    throw "doctor.ps1 must call Write-AtAGlance in Main"
+}
+
+# 3. doctor.ps1 footer 使用 Write-SupportSafeGuidance（非 inline 重复）
+if ($doctorText -notmatch 'Write-SupportSafeGuidance') {
+    throw "doctor.ps1 Write-ReportFooter must call Write-SupportSafeGuidance"
+}
+
+# 4. 关键文件不含"完全安全"/"绝对安全"/"100% 安全"
+$blacklistTerms = @("完全安全", "绝对安全", "100% 安全", "没有任何风险")
+$keyFiles = @{
+    "Start-Here.ps1" = $startHereText
+    "doctor.ps1"      = $doctorText
+}
+foreach ($term in $blacklistTerms) {
+    foreach ($file in $keyFiles.Keys) {
+        if ($keyFiles[$file] -match [regex]::Escape($term)) {
+            throw "$file must not contain '$term'"
+        }
+    }
+}
+
+# 5. 关键文档必须包含安全话术
+$readmeText = Get-Content -Path (Join-Path $RootDir "README.md") -Raw -Encoding UTF8
+$quickstartText = Get-Content -Path (Join-Path $RootDir "QUICK_START.md") -Raw -Encoding UTF8
+$userGuideText = Get-Content -Path (Join-Path $RootDir "docs\用户使用教程.md") -Raw -Encoding UTF8
+
+$docAssertions = @(
+    @{Name="README.md"; Text=$readmeText},
+    @{Name="QUICK_START.md"; Text=$quickstartText},
+    @{Name="docs/用户使用教程.md"; Text=$userGuideText}
+)
+foreach ($doc in $docAssertions) {
+    if ($doc.Text -notmatch '只发送.*report\.txt') {
+        throw "$($doc.Name) must contain '只发送 report.txt'"
+    }
+    if ($doc.Text -notmatch '不要发送.*完整.*API.*Key|不要发送完整 API Key') {
+        throw "$($doc.Name) must contain '不要发送完整 API Key'"
+    }
+    if ($doc.Text -notmatch '不要发送.*settings\.json') {
+        throw "$($doc.Name) must contain '不要发送 settings.json'"
+    }
+}
+
+# 6. Start-Here.ps1 包含可选增强项汇总
+if ($startHereText -notmatch '可选增强项') {
+    throw "Start-Here.ps1 must contain optional items summary (可选增强项)"
+}
+
+# 7. 验收清单存在
+if (-not (Test-Path (Join-Path $RootDir "docs\v1.3.3-最终验收清单.md"))) {
+    throw "docs/v1.3.3-最终验收清单.md must exist"
+}
+
+Write-Host "[check] P2 UX copy anti-regression OK"
+
+# ============================================================
 # P3.1 防回归检查: RawError 数据流 + 文件占用增强 + WSL 重复查询
 # ============================================================
 Write-Host "[check] P3.1 anti-regression: RawError dataflow, lock keywords, WSL probe reduction"

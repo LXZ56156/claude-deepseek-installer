@@ -24,7 +24,7 @@
 ## v1.3.3 WIP
 
 - Branch: `fix/v1.3.3-native-path-doctor-ux`
-- Current HEAD: `4e46dd0`
+- Current HEAD: `e789bb5`
 - Status: UX 修复第一批次，未 release
 
 - Notes:

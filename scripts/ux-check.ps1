@@ -1590,6 +1590,193 @@ x-api-key: $TestApiKey
     Write-Host ""
 
     # ============================================================
+    # 28. v1.3.3 P2：降噪 / 售后口径 / doctor 小白化 / 验收清单
+    # ============================================================
+    Write-CheckHeader "28. v1.3.3 P2：降噪 / 售后口径 / doctor 小白化 / 验收清单"
+
+    $startHereText = Get-Content -Path (Join-Path $ScriptRoot "Start-Here.ps1") -Raw -Encoding UTF8
+    $doctorText = Get-Content -Path (Join-Path $ScriptRoot "doctor.ps1") -Raw -Encoding UTF8
+    $commonText = Get-Content -Path (Join-Path $ScriptRoot "lib\common.ps1") -Raw -Encoding UTF8
+    $readmeText = Get-Content -Path (Join-Path $ScriptRoot "README.md") -Raw -Encoding UTF8
+    $quickstartText = Get-Content -Path (Join-Path $ScriptRoot "QUICK_START.md") -Raw -Encoding UTF8
+    $userGuideText = Get-Content -Path (Join-Path $ScriptRoot "docs\用户使用教程.md") -Raw -Encoding UTF8
+
+    # --- 28a: 黑名单 — 禁止绝对安全类文案 ---
+    $blacklistAbsolute = @("完全安全", "绝对安全", "100% 安全", "没有任何风险")
+    foreach ($term in $blacklistAbsolute) {
+        Assert "28a: Start-Here.ps1 不含 '$term'" {
+            $startHereText -notmatch [regex]::Escape($term)
+        } "Start-Here.ps1 禁止出现 '$term'"
+        Assert "28a: doctor.ps1 不含 '$term'" {
+            $doctorText -notmatch [regex]::Escape($term)
+        } "doctor.ps1 禁止出现 '$term'"
+        Assert "28a: README.md 不含 '$term'" {
+            $readmeText -notmatch [regex]::Escape($term)
+        } "README.md 禁止出现 '$term'"
+        Assert "28a: QUICK_START.md 不含 '$term'" {
+            $quickstartText -notmatch [regex]::Escape($term)
+        } "QUICK_START.md 禁止出现 '$term'"
+        Assert "28a: 用户使用教程 不含 '$term'" {
+            $userGuideText -notmatch [regex]::Escape($term)
+        } "用户使用教程 禁止出现 '$term'"
+    }
+
+    # --- 28b: 黑名单 — 禁止正面建议发送敏感文件 ---
+    # 允许"不要发送..."，但禁止正面建议"发送..."
+    $leakPatterns = @(
+        @{Pattern='发送.*log'; Desc='正面建议发送 logs'}
+        @{Pattern='发送.*backup'; Desc='正面建议发送 backup'}
+        @{Pattern='发送.*settings\.json'; Desc='正面建议发送 settings.json'}
+        @{Pattern='发送.*完整.*API.*Key'; Desc='正面建议发送完整 API Key'}
+        @{Pattern='发送.*full-report'; Desc='正面建议发送 full-report'}
+        @{Pattern='把.*API.*Key.*发给'; Desc='建议把 API Key 发给别人'}
+    )
+    $leakFiles = @{
+        "Start-Here.ps1" = $startHereText
+        "doctor.ps1" = $doctorText
+        "README.md" = $readmeText
+        "QUICK_START.md" = $quickstartText
+        "用户使用教程" = $userGuideText
+    }
+    foreach ($leak in $leakPatterns) {
+        foreach ($file in $leakFiles.Keys) {
+            $text = $leakFiles[$file]
+            # Only flag positive suggestions, not "不要发送..." negations
+            $lines = $text -split "`r?`n"
+            $hasLeak = $false
+            foreach ($line in $lines) {
+                if ($line -match $leak.Pattern -and $line -notmatch '不要发送|不要.*发.*|请勿|禁止|不会写入|不会.*记录|用于验证.*Key') {
+                    $hasLeak = $true
+                    break
+                }
+            }
+            Assert "28b: $file 不含正面建议：$($leak.Desc)" {
+                -not $hasLeak
+            } "$file 禁止正面建议：$($leak.Desc)"
+        }
+    }
+
+    # --- 28c: 白名单 — Write-SupportSafeGuidance 在 lib/common.ps1 ---
+    Assert "28c: Write-SupportSafeGuidance 在 lib/common.ps1 中" {
+        $commonText -match 'function Write-SupportSafeGuidance'
+    } "Write-SupportSafeGuidance 必须在 lib/common.ps1"
+
+    Assert "28c: Start-Here.ps1 不含 Write-SupportSafeGuidance 重复定义" {
+        $startHereText -notmatch 'function Write-SupportSafeGuidance'
+    } "Start-Here.ps1 不应重复定义 Write-SupportSafeGuidance"
+
+    Assert "28c: Write-SupportSafeGuidance 包含 5 条安全口径" {
+        $funcBody = if ($commonText -match 'function Write-SupportSafeGuidance[\s\S]*?(?=^function |\Z)') { $matches[0] } else { "" }
+        ($funcBody -match '只发送生成的 report\.txt') -and
+        ($funcBody -match '不要发送 backup') -and
+        ($funcBody -match '不要发送完整 API Key') -and
+        ($funcBody -match '如果截图')
+    } "Write-SupportSafeGuidance 必须包含完整的 5 条安全口径"
+
+    # --- 28d: 白名单 — 售后安全口径出现在关键位置 ---
+    Assert "28d: doctor.ps1 使用 Write-SupportSafeGuidance（非 inline 重复）" {
+        $doctorText -match 'Write-SupportSafeGuidance'
+    } "doctor.ps1 必须调用 Write-SupportSafeGuidance"
+
+    Assert "28d: Start-Here.ps1 仍使用 Write-SupportSafeGuidance 生成报告" {
+        $startHereText -match 'Write-SupportSafeGuidance'
+    } "Start-Here.ps1 必须使用 Write-SupportSafeGuidance"
+
+    # --- 28e: 白名单 — doctor.ps1 一眼结论结构 ---
+    Assert "28e: doctor.ps1 包含 Write-AtAGlance 函数" {
+        $doctorText -match 'function Write-AtAGlance'
+    } "doctor.ps1 必须包含 Write-AtAGlance 函数"
+
+    Assert "28e: Write-AtAGlance 包含 '一眼结论'" {
+        $doctorText -match '一眼结论'
+    } "Write-AtAGlance 必须包含 '一眼结论'"
+
+    Assert "28e: Write-AtAGlance 包含 '当前状态'" {
+        $doctorText -match '当前状态'
+    } "Write-AtAGlance 必须包含 '当前状态'"
+
+    Assert "28e: Write-AtAGlance 包含 '下一步'" {
+        $doctorText -match '下一步'
+    } "Write-AtAGlance 必须包含 '下一步'"
+
+    Assert "28e: Write-AtAGlance 包含状态判定词" {
+        ($doctorText -match '可用' -and $doctorText -match '基本可用' -and $doctorText -match '需要修复')
+    } "Write-AtAGlance 必须包含 '可用'/'基本可用'/'需要修复' 状态判定词"
+
+    Assert "28e: Write-AtAGlance 在 Write-QuickSummary 之前调用（Main 函数中）" {
+        # 在 Main 函数中，Write-AtAGlance 的调用应在 Write-QuickSummary 之前
+        if ($doctorText -match 'function Main\s*\{[\s\S]*?\n\}') {
+            $mainBody = $matches[0]
+        } else {
+            $mainBody = $doctorText
+        }
+        $posAtAGlance = $mainBody.IndexOf('Write-AtAGlance')
+        $posQuickSum = $mainBody.IndexOf('Write-QuickSummary')
+        $posAtAGlance -ge 0 -and $posQuickSum -ge 0 -and $posAtAGlance -lt $posQuickSum
+    } "Write-AtAGlance 必须在 Write-QuickSummary 之前调用"
+
+    # --- 28f: 白名单 — 文档必须包含售后安全口径 ---
+    $docChecks = @{
+        "README.md" = $readmeText
+        "QUICK_START.md" = $quickstartText
+        "用户使用教程" = $userGuideText
+    }
+    foreach ($docName in $docChecks.Keys) {
+        $docText = $docChecks[$docName]
+        Assert "28f: $docName 包含 '只发送 report.txt'" {
+            $docText -match '只发送.*report\.txt|只发送生成的 report\.txt'
+        } "$docName 必须包含 '只发送 report.txt'"
+        Assert "28f: $docName 包含 '不要发送完整 API Key'" {
+            $docText -match '不要发送完整 API Key|不要发送.*完整.*API.*Key'
+        } "$docName 必须包含 '不要发送完整 API Key'"
+        Assert "28f: $docName 包含 '不要发送 backup'" {
+            $docText -match '不要发送 backup|不要发送.*backup'
+        } "$docName 必须包含 '不要发送 backup'"
+        Assert "28f: $docName 包含 '不要发送 settings.json'" {
+            $docText -match '不要发送.*settings\.json'
+        } "$docName 必须包含 '不要发送 settings.json'"
+    }
+
+    # --- 28g: 结构 — 完成页/doctor Native Install 不误报 ---
+    Assert "28g: Start-Here.ps1 包含 Native Install 预判逻辑" {
+        $startHereText -match 'nativePreCheckOk'
+    } "Start-Here.ps1 必须包含 Native Install 预判逻辑"
+
+    Assert "28g: Start-Here.ps1 包含可选增强项汇总" {
+        $startHereText -match '可选增强项'
+    } "Start-Here.ps1 必须包含可选增强项汇总"
+
+    Assert "28g: Show-CompletionPage 不直接调用 Start-ClaudeTestTerminal" {
+        # 精确提取 Show-CompletionPage 函数体（匹配到下一个顶级 function 之前）
+        if ($startHereText -match '(?m)^function Show-CompletionPage[\s\S]*?(?=^function |\Z)') {
+            $compPageBody = $matches[0]
+        } else {
+            $compPageBody = ""
+        }
+        $compPageBody -notmatch 'Start-ClaudeTestTerminal'
+    } "Show-CompletionPage 禁止直接调用 Start-ClaudeTestTerminal"
+
+    # --- 28h: 文档不出现旧流程 ---
+    Assert "28h: README.md 主路径是 [1] 启动 Claude Code 测试" {
+        $readmeText -match '\[1\].*启动.*Claude.*Code.*测试|启动.*Claude.*Code.*测试.*\[1\]'
+    } "README.md 主路径必须是 [1] 启动 Claude Code 测试"
+
+    Assert "28h: QUICK_START.md 主路径是 [1] 启动 Claude Code 测试" {
+        $quickstartText -match '\[1\].*启动.*Claude.*Code.*测试|启动.*Claude.*Code.*测试.*\[1\]'
+    } "QUICK_START.md 主路径必须是 [1] 启动 Claude Code 测试"
+
+    Assert "28h: 用户使用教程 不把 '右键空白处打开终端' 作为主路径" {
+        $userGuideText -notmatch '右键.*空白处.*打开.*终端|右键.*打开.*终端.*主'
+    } "用户使用教程 禁止 '右键空白处打开终端' 作为主路径"
+
+    # --- 28i: 验收清单存在 ---
+    Assert "28i: docs/v1.3.3-最终验收清单.md 存在" {
+        Test-Path (Join-Path $ScriptRoot "docs\v1.3.3-最终验收清单.md")
+    } "docs/v1.3.3-最终验收清单.md 必须存在"
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""

@@ -356,6 +356,36 @@ function Is-ApiKeyFormatValid {
     return $false
 }
 
+function Write-SupportSafeGuidance {
+    <#
+    .SYNOPSIS
+        v1.3.3 UX: 统一售后安全提示。
+        所有完成页、报告、README、诊断页共用此模板。
+        只发送 report.txt，不发送 backup/logs/full-report/settings.json/API Key。
+    .PARAMETER ForReport
+        返回纯文本（用于嵌入报告），而非控制台输出。
+    #>
+    param(
+        [switch]$ForReport
+    )
+
+    $lines = @(
+        "如需售后，请运行「一键诊断.cmd」。",
+        "只发送生成的 report.txt。",
+        "不要发送 backup/、logs/、reports/full-report-*、settings.json。",
+        "不要发送完整 API Key。",
+        "如果截图，请先确认截图里没有完整 API Key。"
+    )
+
+    if ($ForReport) {
+        return ($lines -join "`r`n")
+    }
+
+    foreach ($line in $lines) {
+        Write-Info $line
+    }
+}
+
 # ============================================================
 # JSON 处理函数
 # ============================================================

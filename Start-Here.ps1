@@ -150,36 +150,6 @@ function Pause-ForNextStep {
     Read-Host "按回车键继续..."
 }
 
-function Write-SupportSafeGuidance {
-    <#
-    .SYNOPSIS
-        v1.3.3 UX: 统一售后安全提示。
-        所有完成页、报告、README、诊断页共用此模板。
-        只发送 report.txt，不发送 backup/logs/full-report/settings.json/API Key。
-    .PARAMETER ForReport
-        返回纯文本（用于嵌入报告），而非控制台输出。
-    #>
-    param(
-        [switch]$ForReport
-    )
-
-    $lines = @(
-        "如需售后，请运行「一键诊断.cmd」。",
-        "只发送生成的 report.txt。",
-        "不要发送 backup/、logs/、reports/full-report-*、settings.json。",
-        "不要发送完整 API Key。",
-        "如果截图，请先确认截图里没有完整 API Key。"
-    )
-
-    if ($ForReport) {
-        return ($lines -join "`r`n")
-    }
-
-    foreach ($line in $lines) {
-        Write-Info $line
-    }
-}
-
 function Write-ApiKeySkipGuidance {
     <#
     .SYNOPSIS
@@ -369,6 +339,12 @@ function Step-CheckEnvironment {
         Write-ResultLine "Claude Code" "WARN" "未安装（将在下一步安装）"
     }
 
+    # Native Install 预判：在检测 Node.js/npm 前判断是否已有 Native Install 可用
+    # 避免将 Node/npm 缺失误报为核心问题
+    $nativeBinDir = Join-Path $env:LOCALAPPDATA ".local\bin"
+    $nativeExePath = Join-Path $nativeBinDir "claude.exe"
+    $nativePreCheckOk = (Test-Path $nativeExePath) -and (Test-UserPathContains -TargetPath $nativeBinDir)
+
     # Node.js 检测
     Write-CheckProgress -Current 4 -Total 10 -Name "Node.js"
     $nodeInfo = Test-NodeJsInstalled
@@ -381,7 +357,12 @@ function Step-CheckEnvironment {
         }
     }
     else {
-        Write-ResultLine "Node.js" "WARN" "未安装（如 Native Install 不可用将自动安装）"
+        if ($nativePreCheckOk) {
+            Write-ResultLine "Node.js" "INFO" "未安装（Native Install 已就绪，不影响基础使用）"
+        }
+        else {
+            Write-ResultLine "Node.js" "WARN" "未安装（如 Native Install 不可用将自动安装）"
+        }
     }
 
     # npm 检测
@@ -391,7 +372,12 @@ function Step-CheckEnvironment {
         Write-ResultLine "npm" "OK" $npmInfo.Version
     }
     else {
-        Write-ResultLine "npm" "SKIP" "未安装"
+        if ($nativePreCheckOk) {
+            Write-ResultLine "npm" "INFO" "未安装（Native Install 已就绪，不影响基础使用）"
+        }
+        else {
+            Write-ResultLine "npm" "SKIP" "未安装"
+        }
     }
 
     # winget 检测
@@ -470,7 +456,21 @@ function Step-CheckEnvironment {
     }
 
     Write-Host ""
-    Write-Info "环境检查完成。以上 WARN/SKIP 项不会阻止安装流程。"
+    Write-Info "环境检查完成。"
+
+    # 可选增强项汇总：将不影响核心安装的项集中展示，避免小白误以为安装失败
+    $optionalItems = [System.Collections.ArrayList]::new()
+    if (-not $codeVersion) { [void]$optionalItems.Add("VS Code：未检测到（可选增强项）") }
+    if (-not $gitVersion) { [void]$optionalItems.Add("Git：未安装（可选，不影响基础使用）") }
+    if (-not $wslInfo.Installed) { [void]$optionalItems.Add("WSL：未启用（高级选项，仅 WSL 用户需要）") }
+    if (-not $nodeInfo.Installed -and $nativePreCheckOk) { [void]$optionalItems.Add("Node.js/npm：未安装（Native Install 已就绪，不影响基础使用）") }
+    if ($optionalItems.Count -gt 0) {
+        Write-Host ""
+        Write-Info "可选增强项（缺失不影响安装和使用）："
+        foreach ($item in $optionalItems) {
+            Write-Host "    - $item" -ForegroundColor DarkGray
+        }
+    }
 
     # 缓存环境快照，供 Step-GenerateReport 复用，避免重复检测
     $script:EnvSnapshot = @{
@@ -508,10 +508,9 @@ function Step-CheckEnvironment {
 function Step-InstallClaudeCode {
     Write-Step "Step 2/7：安装 Claude Code"
 
-    # 显示安装策略说明
-    Write-Info "安装策略: 官方 Native Install → winget → npmmirror 镜像（自动降级）"
-    Write-Info "npm 镜像使用 Anthropic 官方发布的 @anthropic-ai/claude-code 包"
-    Write-Info "镜像只提高 Claude Code 下载成功率，不保证登录、鉴权、模型调用一定可用"
+    # 显示安装策略（压缩为一行）
+    Write-Info "安装策略: 官方 Native Install → winget → npm 镜像（自动降级）"
+    Write-Log "INFO" "详细策略: 官方 Native Install 优先，失败后尝试 winget，最后 npm 镜像（npmmirror.com/@anthropic-ai/claude-code）兜底"
     Write-Host ""
 
     # 调用统一安装函数
@@ -593,8 +592,7 @@ function Step-InstallClaudeCode {
 function Step-GetApiKey {
     Write-Step "Step 3/7：获取 DeepSeek API Key"
 
-    Write-Info "Claude Code 需要连接 DeepSeek API 才能使用。"
-    Write-Info "现在需要您的 DeepSeek API Key。"
+    Write-Info "Claude Code 需要 DeepSeek API Key 才能使用。"
     Write-Host ""
 
     if ($NonInteractive) {
@@ -707,8 +705,8 @@ function Step-WriteConfig {
 
     Write-Step "Step 4/7：写入 DeepSeek 配置"
 
-    Write-Info "正在将 DeepSeek API 配置写入 Claude Code..."
-    Write-Info "配置文件位置: $(Get-ClaudeConfigFile)"
+    Write-Info "正在写入配置文件..."
+    Write-Log "INFO" "配置文件路径: $(Get-ClaudeConfigFile)"
     Write-Host ""
 
     $writeResult = Write-DeepSeekConfig -ApiKey $ApiKey -NonInteractive:$NonInteractive
@@ -753,11 +751,8 @@ function Step-TestApi {
         return
     }
 
-    Write-Info "正在测试 DeepSeek API，最长等待 30 秒。"
-    Write-Info "如果测试失败，配置仍会保留，可稍后运行「一键诊断.cmd」重新检测。"
-    Write-Info "正在使用 Anthropic Format 接口验证 DeepSeek API..."
-    Write-Info "测试模型: deepseek-v4-flash（快速模型，响应快，成本低）"
-    Write-Info "这只发送极短测试消息 'Reply OK only.'"
+    Write-Info "正在使用 Anthropic Format 接口测试 DeepSeek API（最长等待 30 秒）。若失败配置仍会保留。"
+    Write-Log "INFO" "测试模型: deepseek-v4-flash, 测试消息: 'Reply OK only.'"
     Write-Host ""
 
     $apiTest = Test-DeepSeekApiAnthropic -ApiKey $ApiKey -Model "deepseek-v4-flash"

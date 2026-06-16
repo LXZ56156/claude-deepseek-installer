@@ -960,6 +960,193 @@ function Check-WSL {
 # 生成报告
 # ============================================================
 
+function Write-AtAGlance {
+    <#
+    .SYNOPSIS
+        v1.3.3 P2: 「一眼结论」— 报告最顶层的用户友好摘要。
+        先给结论再给详情，面向小白用户。
+        状态判定: 可用 / 基本可用 / 需要修复 / 未完成
+    #>
+    Add-ReportLine ""
+    Add-ReportLine "【一眼结论】"
+    Add-ReportLine ""
+
+    # 读取关键检测结果
+    $claudeCliCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "Claude Code CLI" } | Select-Object -First 1
+    $claudeFileCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "Claude Code 安装文件" } | Select-Object -First 1
+    $claudeSourceCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "Claude 命令来源" } | Select-Object -First 1
+    $configCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -match "ANTHROPIC_AUTH_TOKEN" } | Select-Object -First 1
+    $apiCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -match "Anthropic Format smoke test|DeepSeek API 测试" } | Select-Object -First 1
+    $userPathCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "User PATH" } | Select-Object -First 1
+    $freshShellCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "Fresh PowerShell claude" } | Select-Object -First 1
+    $nodeCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "Node.js" } | Select-Object -First 1
+    $npmCheck = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "npm" } | Select-Object -First 1
+
+    $claudeStatus = if ($claudeCliCheck) { $claudeCliCheck.Status } else { "UNKNOWN" }
+    $claudeDetail = if ($claudeCliCheck) { $claudeCliCheck.Detail } else { "" }
+    $claudeExeFound = ($claudeFileCheck -and $claudeFileCheck.Status -eq "OK")
+    $configOk = ($configCheck -and $configCheck.Status -eq "OK")
+    $apiOk = ($apiCheck -and $apiCheck.Status -eq "OK")
+    $apiSkipped = ($apiCheck -and $apiCheck.Status -eq "SKIP")
+    $userPathOk = ($userPathCheck -and $userPathCheck.Status -eq "OK")
+    $freshShellOk = ($freshShellCheck -and $freshShellCheck.Status -eq "OK")
+    $freshShellWarn = ($freshShellCheck -and $freshShellCheck.Status -eq "WARN")
+    $nativeExeExists = $claudeExeFound
+    $nativePathOk = $userPathOk
+
+    # 核心错误计数（排除可选项）
+    $coreErrors = @($script:DoctorState.Errors | Where-Object {
+        $_ -notmatch "VS Code|Git|WSL" -and
+        $_ -notmatch "Node\.js.*Native Install" -and
+        $_ -notmatch "npm.*Native Install"
+    })
+
+    # --- 逐项状态 ---
+    $claudeLabel = switch ($claudeStatus) {
+        "OK"    { "可用" }
+        "WARN"  { "可用（PATH 冲突）" }
+        "ERROR" { "未安装或不可用" }
+        default { "未检测" }
+    }
+    if ($claudeStatus -eq "OK" -and $claudeDetail -match '(\d+\.\d+\.\d+[^\s,]*)') {
+        $claudeLabel = "可用 ($($matches[1]))"
+    }
+
+    $configLabel = if ($configOk) { "已配置" } else { "未配置" }
+
+    $apiLabel = if ($apiOk) {
+        "通过"
+    }
+    elseif ($apiSkipped) {
+        "跳过"
+    }
+    elseif ($apiCheck) {
+        "失败"
+    }
+    else {
+        "未测试"
+    }
+
+    $pathLabel = if ($userPathOk) { "正常" } else { "需修复" }
+
+    $freshLabel = if ($freshShellOk) {
+        "通过"
+    }
+    elseif ($freshShellWarn) {
+        "建议手动验证"
+    }
+    elseif ($freshShellCheck) {
+        "失败"
+    }
+    else {
+        "未验证"
+    }
+
+    $nodeLabel = if ($nodeCheck) {
+        if ($nodeCheck.Status -eq "OK") { "已安装" }
+        elseif ($nodeCheck.Status -eq "INFO") { "未安装（Native Install 不影响基础使用）" }
+        else { "未安装" }
+    }
+    else { "未检测" }
+
+    Add-ReportLine "  Claude Code：$claudeLabel"
+    Add-ReportLine "  DeepSeek 配置：$configLabel"
+    Add-ReportLine "  API 测试：$apiLabel"
+    Add-ReportLine "  User PATH：$pathLabel"
+    Add-ReportLine "  Fresh PowerShell：$freshLabel"
+    Add-ReportLine "  Node/npm：$nodeLabel"
+
+    # --- 状态判定 ---
+    Add-ReportLine ""
+    Add-ReportLine ("=" * 63)
+
+    $overallStatus = "未完成"
+    $nextActions = [System.Collections.ArrayList]::new()
+
+    # 判定逻辑
+    $claudeUsable = ($claudeStatus -eq "OK" -or $claudeStatus -eq "WARN")
+    $deepSeekReady = ($configOk -and ($apiOk -or $apiSkipped))
+    $noCoreErrors = ($coreErrors.Count -eq 0)
+
+    if ($claudeUsable -and $deepSeekReady -and $noCoreErrors) {
+        if ($freshShellOk) {
+            $overallStatus = "可用"
+        }
+        elseif ($freshShellWarn -and $claudeExeFound -and $userPathOk) {
+            $overallStatus = "基本可用"
+        }
+        else {
+            $overallStatus = "可用"
+        }
+    }
+    elseif ($claudeExeFound -and $userPathOk -and $configOk -and $freshShellWarn) {
+        $overallStatus = "基本可用"
+    }
+    elseif ($claudeStatus -eq "ERROR" -or (-not $claudeExeFound -and $claudeStatus -ne "OK") -or $coreErrors.Count -ge 1) {
+        $overallStatus = "需要修复"
+    }
+
+    Add-ReportLine "  当前状态：$overallStatus"
+    Add-ReportLine ("=" * 63)
+
+    # --- 下一步（最多 3 条）---
+    Add-ReportLine ""
+    Add-ReportLine "  下一步："
+
+    switch ($overallStatus) {
+        "可用" {
+            if ($freshShellWarn) {
+                [void]$nextActions.Add("新开 PowerShell 执行 claude --version 确认可用")
+            }
+            [void]$nextActions.Add("回到安装助手完成页选择 [1] 启动 Claude Code 测试")
+            [void]$nextActions.Add("如果调用模型失败，检查 DeepSeek Key、余额和网络")
+        }
+        "基本可用" {
+            [void]$nextActions.Add("新开 PowerShell 执行 claude --version。如果能显示版本号，可以正常使用")
+            [void]$nextActions.Add("如果失败，运行「一键修复依赖.cmd」或重新运行诊断")
+            [void]$nextActions.Add("Native Install 已就绪时，Node.js/npm 未安装不影响基础使用")
+        }
+        "需要修复" {
+            if ($claudeStatus -eq "ERROR" -or -not $claudeExeFound) {
+                [void]$nextActions.Add("运行「00-点我开始安装.cmd」安装 Claude Code")
+            }
+            if (-not $userPathOk -and $claudeExeFound) {
+                [void]$nextActions.Add("运行「一键修复依赖.cmd」修复 User PATH")
+            }
+            if (-not $configOk) {
+                [void]$nextActions.Add("运行「00-点我开始安装.cmd」配置 DeepSeek API Key")
+            }
+            if ($apiCheck -and $apiCheck.Status -eq "ERROR" -and $configOk) {
+                [void]$nextActions.Add("检查 DeepSeek API Key 是否正确，或账户余额是否充足")
+            }
+            if ($nextActions.Count -eq 0 -and $coreErrors.Count -gt 0) {
+                [void]$nextActions.Add("查看下方 [ERROR] 项目并逐项解决")
+            }
+            if ($nextActions.Count -eq 0) {
+                [void]$nextActions.Add("运行「一键诊断.cmd」获取详细诊断报告")
+            }
+        }
+        default {
+            [void]$nextActions.Add("运行「00-点我开始安装.cmd」完成安装")
+            [void]$nextActions.Add("运行「一键诊断.cmd」获取详细诊断报告")
+        }
+    }
+
+    # 最多 3 条
+    $shown = 0
+    foreach ($action in $nextActions) {
+        if ($shown -ge 3) { break }
+        $shown++
+        Add-ReportLine "    $shown. $action"
+    }
+
+    # --- 售后安全提示 ---
+    Add-ReportLine ""
+    Add-ReportLine "  ---"
+    Add-ReportLine "  售后安全：只发送 report.txt，不要发送 logs、backup、settings.json 或完整 API Key。"
+    Add-ReportLine ""
+}
+
 function Write-QuickSummary {
     <#
     .SYNOPSIS
@@ -1373,9 +1560,9 @@ function Write-ReportFooter {
     Add-ReportLine ""
     Add-ReportLine ("=" * 73)
     Add-ReportLine "  报告结束"
-    Add-ReportLine "  如需售后，请只发送 report.txt。"
-    Add-ReportLine "  不要发送 backup/、logs/、reports/full-report-*、settings.json。"
-    Add-ReportLine "  不要发送完整 API Key。"
+    Add-ReportLine ""
+    $safeGuidance = Write-SupportSafeGuidance -ForReport
+    Add-ReportLine $safeGuidance
     Add-ReportLine ("=" * 73)
 }
 
@@ -1428,6 +1615,7 @@ function Main {
 
     # 生成报告
     Write-ReportHeader
+    Write-AtAGlance
     Write-QuickSummary
     Write-ReportSummary
     Write-ReportChecks
@@ -1441,6 +1629,21 @@ function Main {
     # 输出到控制台摘要
     Write-Host ""
     Write-Host ("=" * 60) -ForegroundColor Cyan
+
+    # 一眼结论：当前状态（从 AtAGlance 报告行中提取，避免重复计算）
+    $statusLine = $script:DoctorState.ReportLines | Where-Object { $_ -match '当前状态：' } | Select-Object -First 1
+    if ($statusLine) {
+        $statusText = ($statusLine -replace '.*当前状态：', '').Trim()
+        $statusColor = switch -Wildcard ($statusText) {
+            "可用"     { "Green" }
+            "基本可用" { "Yellow" }
+            "需要修复" { "Red" }
+            default    { "White" }
+        }
+        Write-Host "  当前状态：$statusText" -ForegroundColor $statusColor
+        Write-Host ("=" * 60) -ForegroundColor Cyan
+    }
+
     $okCount = @($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "OK" }).Count
     $warnCount = @($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "WARN" }).Count
     $errCount = @($script:DoctorState.CheckResults | Where-Object { $_.Status -eq "ERROR" }).Count
