@@ -919,6 +919,126 @@ x-api-key: $TestApiKey
     Write-Host ""
 
     # ============================================================
+    # 23. v1.3.3 第一批 UX 收尾修复检查
+    # ============================================================
+    Write-CheckHeader "23. v1.3.3 UX 收尾修复：Start/成功文案去重 + 文档同步"
+
+    $claudeInstallPath = Join-Path $ScriptRoot "lib\claude-install.ps1"
+    $nativeBlock = Get-Content $claudeInstallPath -Raw -Encoding UTF8
+
+    # --- 23a: Invoke-InstallCommandCaptured 必须使用 PSBoundParameters ---
+    $capturedBlock = if ($nativeBlock -match '(?s)(function Invoke-InstallCommandCaptured\s*\{.*?\r?\n\})') {
+        $matches[1]
+    } else { "" }
+    Assert "Invoke-InstallCommandCaptured 使用 PSBoundParameters 判断 StartMessage" {
+        $capturedBlock -match '\$PSBoundParameters\.ContainsKey\("StartMessage"\)'
+    } "Invoke-InstallCommandCaptured 必须用 PSBoundParameters.ContainsKey 区分未传参数和传空字符串"
+    Assert "Invoke-InstallCommandCaptured 使用 PSBoundParameters 判断 HeartbeatMessage" {
+        $capturedBlock -match '\$PSBoundParameters\.ContainsKey\("HeartbeatMessage"\)'
+    } "Invoke-InstallCommandCaptured 必须用 PSBoundParameters.ContainsKey 判断 HeartbeatMessage"
+    Assert "Invoke-InstallCommandCaptured 使用 PSBoundParameters 判断 TimeoutMessage" {
+        $capturedBlock -match '\$PSBoundParameters\.ContainsKey\("TimeoutMessage"\)'
+    } "Invoke-InstallCommandCaptured 必须用 PSBoundParameters.ContainsKey 判断 TimeoutMessage"
+    Assert "Invoke-InstallCommandCaptured 空 StartMessage 不输出" {
+        $capturedBlock -match 'IsNullOrWhiteSpace\(\$StartMessage\)'
+    } "Invoke-InstallCommandCaptured 必须用 IsNullOrWhiteSpace 检查 StartMessage，-StartMessage '' 必须静默"
+
+    # --- 23b: Install-ClaudeCodeNative 中 Write-NativeInstallUserMessage -Phase "Start" 只出现一次 ---
+    # 全文件搜索：该模式只应在 Install-ClaudeCodeNative 中出现恰好一次
+    # （函数定义的 switch 中 "Start" 不带 Write-NativeInstallUserMessage 前缀，不会被匹配）
+    $startCountAll = ([regex]::Matches($nativeBlock, 'Write-NativeInstallUserMessage\s+-Phase\s+"Start"')).Count
+    Assert "Install-ClaudeCodeNative 中 Native Start 消息只输出一次" {
+        $startCountAll -eq 1
+    } "Write-NativeInstallUserMessage -Phase Start 应在 claude-install.ps1 中出现恰好 1 次，当前 $startCountAll 次"
+
+    # --- 23c: Native Install 后验验证成功路径不可同时有 Write-Success 和 Write-NativeInstallUserMessage -Phase "Success" ---
+    # 检查后验验证区域（$verifyResult.Usable 之后）不应再有 Write-Success "Claude Code 已安装:"
+    # 注意：existing_native 路径（已安装跳过）允许保留 Write-Success "Claude Code 已安装: $($existingCheck.Version)"
+    # 只检查 $verifyResult 上下文（Native Install 新安装后验验证路径）
+    $postVerifyArea = if ($nativeBlock -match '(?s)\$verifyResult\.Usable.*?Write-NativeInstallUserMessage\s+-Phase\s+"Fallback"') {
+        $matches[0]
+    } else { "" }
+    Assert "Native Install 后验验证成功不再重复 Write-Success 版本信息" {
+        $postVerifyArea -notmatch 'Write-Success\s+"Claude Code 已安装:'
+    } "后验验证成功路径($verifyResult.Usable 块)应将 Write-Success 改为 Write-Log，避免与 Success Phase 重复"
+    Assert "Native Install fresh shell 成功不用 Write-Success 重复" {
+        $nativeBlock -notmatch 'Write-Success\s+"新 PowerShell 可直接运行 claude:'
+    } "Fresh shell 结果应写入日志而非重复成功结论"
+    Assert "Write-NativeInstallUserMessage -Phase Success 作为唯一成功结论存在" {
+        $nativeBlock -match 'Write-NativeInstallUserMessage\s+-Phase\s+"Success"'
+    } "Native Install 成功路径必须保留 Write-NativeInstallUserMessage -Phase Success 作为唯一用户可见成功结论"
+
+    # --- 23d: README 版本检查 ---
+    $readmePath = Join-Path $ScriptRoot "README.md"
+    $readmeText = Get-Content $readmePath -Raw -Encoding UTF8
+    Assert "README.md 不包含 Version-1.3.2" {
+        $readmeText -notmatch 'Version-1\.3\.2'
+    } "README.md 主说明区不允许再出现 Version-1.3.2"
+    Assert "README.md 包含 Version-1.3.3" {
+        $readmeText -match 'Version-1\.3\.3'
+    } "README.md 必须包含 Version-1.3.3"
+    Assert "README.md 包含 v1.3.3 一键版" {
+        $readmeText -match 'v1\.3\.3 一键版'
+    } "README.md 标题必须包含 v1.3.3 一键版"
+    Assert "README.md 网络与安装策略 v1.3.3" {
+        $readmeText -match '网络与安装策略.*v1\.3\.3'
+    } "README.md 网络与安装策略标题必须是 v1.3.3"
+
+    # --- 23e: QUICK_START 版本检查 ---
+    $qsPath = Join-Path $ScriptRoot "QUICK_START.md"
+    $qsText = Get-Content $qsPath -Raw -Encoding UTF8
+    Assert "QUICK_START.md 包含 v1.3.3" {
+        $qsText -match '快速开始指南.*v1\.3\.3'
+    } "QUICK_START.md 标题必须包含 v1.3.3"
+    Assert "QUICK_START.md 不包含 v1.3.2" {
+        $qsText -notmatch 'v1\.3\.2'
+    } "QUICK_START.md 不允许再出现 v1.3.2"
+    Assert "QUICK_START.md 网络与安装策略 v1.3.3" {
+        $qsText -match '网络与安装策略.*v1\.3\.3'
+    } "QUICK_START.md 网络与安装策略标题必须是 v1.3.3"
+
+    # --- 23f: 文档新 CTA 检查 ---
+    Assert "README.md 包含新完成页 CTA" {
+        $readmeText -match '立即验证 Claude Code 是否能正常使用（推荐）'
+    } "README.md 必须包含完成页 [1] CTA"
+    Assert "QUICK_START.md 包含新完成页 CTA" {
+        $qsText -match '立即验证 Claude Code 是否能正常使用（推荐）'
+    } "QUICK_START.md 必须包含完成页 [1] CTA"
+    Assert "README.md 包含右键终端提示" {
+        $readmeText -match '在终端中打开'
+    } "README.md 必须包含右键→在终端中打开的提示"
+    Assert "QUICK_START.md 包含右键终端提示" {
+        $qsText -match '在终端中打开'
+    } "QUICK_START.md 必须包含右键→在终端中打开的提示"
+
+    # --- 23g: 文档售后模板检查 ---
+    Assert "README.md 包含统一售后安全提示" {
+        $readmeText -match '只发送生成的 report\.txt' -and
+        $readmeText -match '不要发送 backup.*logs.*reports/full-report' -and
+        $readmeText -match '不要发送完整 API Key' -and
+        $readmeText -match '如果截图，请先确认截图里没有完整 API Key'
+    } "README.md 必须包含统一售后安全提示模板"
+    Assert "QUICK_START.md 包含统一售后安全提示" {
+        $qsText -match '只发送生成的 report\.txt' -and
+        $qsText -match '不要发送 backup.*logs.*reports/full-report' -and
+        $qsText -match '不要发送完整 API Key' -and
+        $qsText -match '如果截图，请先确认截图里没有完整 API Key'
+    } "QUICK_START.md 必须包含统一售后安全提示模板"
+
+    # --- 23h: 后验验证口径检查 ---
+    Assert "README.md 包含'后验验证为准'" {
+        $readmeText -match '后验验证为准'
+    } "README.md 必须包含后验验证为准的安装策略描述"
+    Assert "README.md 包含 ExitCode 不直接决定成败" {
+        $readmeText -match 'ExitCode 不直接决定成败|安装包 ExitCode'
+    } "README.md 必须说明安装包 ExitCode 不直接决定成败"
+    Assert "README.md 包含 fresh shell 验证" {
+        $readmeText -match 'fresh shell'
+    } "README.md 必须包含 fresh shell 验证描述"
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""

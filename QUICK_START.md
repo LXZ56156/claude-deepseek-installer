@@ -1,4 +1,4 @@
-# 快速开始指南 (v1.3.2)
+# 快速开始指南 (v1.3.3)
 
 ## 一、解压即用（推荐方式）
 
@@ -49,21 +49,43 @@ https://platform.deepseek.com/api_keys
 ### 第 6 步：等待安装
 
 脚本会自动完成：
-1. [OK] 检查系统环境
-2. [OK] 安装 Claude Code CLI
-3. [OK] 写入 DeepSeek 配置
-4. [OK] 测试 API 连接
-5. [OK] 创建测试项目
-6. [OK] 生成安装完成报告
+1. 检查系统环境
+2. 安装或检测 Claude Code CLI
+3. 修复必要 PATH
+4. 写入 DeepSeek 配置
+5. 测试 API 连接（如未跳过）
+6. 创建测试项目
+7. 生成安装报告
+
+安装结果以完成页显示为准：
+- 安装流程全部完成：可直接验证使用
+- 安装基本完成，但命令启动还需要验证：按提示重开 PowerShell 或运行一键修复依赖
+- 安装部分完成，API 测试未通过：运行一键诊断，只发送 report.txt
 
 ### 第 7 步：开始使用
 
-看到「安装流程全部完成」后，打开终端：
+安装结束后，在完成页选择：
 
-```powershell
-cd "%USERPROFILE%\Desktop\ClaudeCode-Test"
+**[1] 立即验证 Claude Code 是否能正常使用（推荐）**
+
+工具会打开测试项目文件夹。
+
+请在打开的文件夹空白处右键 → 在终端中打开，然后输入：
+
+```
 claude
 ```
+
+进入 Claude Code 后，输入：
+
+```
+请用一句话说明当前项目是做什么的。
+```
+
+如果 Claude Code 能正常回复，说明安装和配置基本可用。
+
+测试项目只是验证用途，可以删除。
+删除后不会影响 Claude Code 安装、DeepSeek 配置或 API Key。
 
 ---
 
@@ -81,15 +103,15 @@ claude
 
 ### 还不行？运行诊断
 
-双击 **`一键诊断.cmd`**，把项目根目录下生成的 `report.txt`（分享版）文件发给技术支持。历史报告保存在 `reports/`。
+如需售后，请运行「一键诊断.cmd」。
 
-**注意：**
-- **只发送 `report.txt`**（分享版，已脱敏路径和 Key）
-- **不要发送 `reports/full-report-xxx.txt`**（完整版，包含真实路径）
-- **不要发送 `backup/` 目录或 `.bak` 文件**（可能包含完整 API Key）
-- **不要发送 `logs/` 目录**（可能包含本机路径信息）
-- 诊断报告中的 API Key 已自动脱敏，可以放心发送
-- 不要截图包含 API Key 的窗口
+**售后安全提示：**
+- 只发送生成的 report.txt。
+- 不要发送 backup/、logs/、reports/full-report-*、settings.json。
+- 不要发送完整 API Key。
+- 如果截图，请先确认截图里没有完整 API Key。
+
+诊断报告中的 API Key 已自动脱敏，可以放心发送。
 
 ---
 
@@ -142,14 +164,15 @@ claude
 
 ---
 
-## 网络与安装策略 (v1.3.2)
+## 网络与安装策略 (v1.3.3)
 
-本工具会自动选择最优的 Claude Code 安装方式：
+本工具采用**后验验证为准**的 Claude Code 安装策略：
 
-1. **已安装则跳过**：不覆盖、不重装、不自动更新
+1. **已安装则跳过**：不覆盖、不重装、不自动更新（同时检查 User PATH 和 fresh shell 可用性）
 2. **优先官方安装**：检测 `claude.ai` 和 `downloads.claude.ai`，可用时使用官方 Native Install
-3. **自动切换镜像**：官方不可达或安装失败时，自动使用 `registry.npmmirror.com` 安装
-4. **只用官方包**：npm 镜像安装使用 Anthropic 官方发布的 `@anthropic-ai/claude-code` 包
+3. **后验验证为准**：安装包 ExitCode 不直接决定成败，最终以 claude --version 和 fresh shell 验证为准
+4. **备用通道**：官方方式未完成验证时，自动尝试 winget → npm 镜像
+5. **只用官方包**：npm 镜像安装使用 Anthropic 官方发布的 `@anthropic-ai/claude-code` 包
 
 **注意**：镜像只提高 Claude Code 下载成功率，不保证 Claude 登录、鉴权、模型调用一定可用。
 

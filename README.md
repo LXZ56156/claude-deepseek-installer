@@ -4,12 +4,12 @@
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-blue)](https://www.microsoft.com/windows)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)](https://learn.microsoft.com/powershell/)
-[![Version](https://img.shields.io/badge/Version-1.3.2-green)]()
+[![Version](https://img.shields.io/badge/Version-1.3.3-green)]()
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ---
 
-## 三步开始（v1.3.2 一键版）
+## 三步开始（v1.3.3 一键版）
 
 ### 1. 解压 ZIP
 
@@ -34,17 +34,34 @@
 
 之后脚本会自动完成：检测 → 安装 → 配置 → 测试 → 生成报告。
 
-看到 **「安装流程全部完成」** 后，即可运行 `claude` 开始使用。
+安装结束后，在完成页选择：
+
+**[1] 立即验证 Claude Code 是否能正常使用（推荐）**
+
+工具会打开测试项目文件夹。
+请在文件夹空白处右键 → 在终端中打开，然后输入：
+
+```
+claude
+```
+
+进入 Claude Code 后，可以输入：
+
+```
+请用一句话说明当前项目是做什么的。
+```
 
 ---
 
 > **遇到问题？** 按以下顺序排查：
-> 1. 双击「一键修复依赖.cmd」→ 修复缺失的 Node.js/npm/Claude
-> 2. 双击「一键诊断.cmd」→ 把 report.txt（分享版）发给技术支持
-> **不要发送** full-report-xxx.txt（包含完整路径信息）！
-> **不要发送** backup/、logs/ 或 reports/ 目录；backup/ 中的 .bak 文件可能包含完整 API Key。
+> 1. 双击「一键修复依赖.cmd」→ 修复缺失的 Node.js/npm/Claude/PATH
+> 2. 双击「一键诊断.cmd」→ 只发送生成的 report.txt
 >
-> **想修改配置？** 双击「恢复或卸载配置.cmd」。
+> **售后安全提示：**
+> - 只发送生成的 report.txt。
+> - 不要发送 backup/、logs/、reports/full-report-*、settings.json。
+> - 不要发送完整 API Key。
+> - 如果截图，请先确认截图里没有完整 API Key。
 
 ---
 
@@ -113,30 +130,43 @@
 
 ---
 
-## 网络与安装策略 (v1.3.2)
+## 网络与安装策略 (v1.3.3)
 
-本工具采用**自动降级**的 Claude Code 安装策略：
+本工具采用**后验验证为准**的 Claude Code 安装策略：
 
 ```
 检测 claude 是否已安装
-  -> 已安装: 跳过（不覆盖、不重装、不自动更新）
-  -> 未安装: 检测官方安装通道
-       -> 官方可用: Native Install（优先）
-            -> 安装失败: npm 镜像 fallback
-       -> 官方不可用: npm 镜像
-            -> Node.js >= 18 + npm 可用: 安装
-            -> Node.js/npm 缺失: 提示手动安装
+  -> 已安装:
+       检查 User PATH 和新 PowerShell 可用性
+       -> 可用: 跳过安装，继续配置 DeepSeek
+       -> PATH 缺失: 自动修复 User PATH
+       -> 新 PowerShell 未验证通过: 完成页提示修复/重开终端
+  -> 未安装:
+       检测官方安装通道
+       -> 官方可用:
+            执行 Native Install
+            -> 安装包执行结束后，进行后验验证
+            -> 后验验证通过: 完成
+            -> 后验验证未通过: 切换 winget / npm 镜像备用通道
+       -> 官方不可用:
+            切换 winget / npm 镜像备用通道
+       -> 备用通道:
+            优先 winget
+            winget 不可用或验证失败，再尝试 npm 镜像
+            npm 镜像需要 Node.js >= 18 + npm
 ```
 
 ### 策略要点
 
 | 要点 | 说明 |
 |------|------|
-| 默认官方安装 | 优先使用 `https://claude.ai/install.ps1`（Windows）或 `install.sh`（WSL） |
-| 自动切换镜像 | 官方不可达时，自动使用 `registry.npmmirror.com` 安装 |
-| 不覆盖已安装 | 已安装 Claude Code 时默认跳过，不自动更新 |
-| 官方包来源 | npm 镜像安装使用 **Anthropic 官方发布的** `@anthropic-ai/claude-code` 包 |
-| 不使用非官方包 | 不使用任何绿色版、魔改版、第三方二进制或 Docker 镜像 |
+| 默认官方安装 | 优先使用 Claude 官方 Native Install |
+| 后验验证为准 | 安装包 ExitCode 不直接决定成败，最终以 claude --version 和 fresh shell 验证为准 |
+| 自动修 PATH | Native Install 安装到 .local\bin 时，会自动写入 User PATH |
+| 备用安装通道 | 官方方式未完成验证时，自动尝试 winget / npm 镜像 |
+| 不覆盖已安装 | 已安装 Claude Code 时默认不重装、不自动更新 |
+| 官方包来源 | npm 镜像安装使用 Anthropic 官方发布的 @anthropic-ai/claude-code 包 |
+| 不使用非官方包 | 不使用绿色版、魔改版、第三方二进制或 Docker 镜像 |
 
 ### 镜像说明
 
@@ -148,6 +178,10 @@
 
 | 症状 | 可能原因 | 建议 |
 |------|----------|------|
+| 完成页提示新 PowerShell 验证未通过 | User PATH 尚未刷新或被占用 | 关闭窗口重开 PowerShell，运行 claude --version；仍失败则运行一键修复依赖 |
+| claude 命令不存在 | PATH 未写入或未刷新 | 运行一键修复依赖 |
+| API 测试失败 | Key 错误、余额不足、网络问题或 DeepSeek 服务异常 | 运行一键诊断，只发送 report.txt |
+| npm 镜像安装未完成验证 | Node/npm 不完整或镜像网络异常 | 运行一键诊断或重新安装 Node.js LTS |
 | 无法安装 | 无法访问 `claude.ai` | 检查网络/VPN/代理设置 |
 | 无法安装 | 无法访问 `downloads.claude.ai` | 检查 DNS/防火墙 |
 | 切换镜像后仍失败 | 未安装 Node.js 18+ / npm | 从 https://nodejs.org 下载 LTS 版 |
@@ -296,21 +330,13 @@ powershell -ExecutionPolicy Bypass -File .\doctor.ps1 -ShareSafe
 
 将项目根目录的 `report.txt`（分享版）发送给卖家/技术支持。
 
-**不要发送 `full-report-xxx.txt`（包含完整路径信息）！**
+**售后安全提示：**
+- 只发送生成的 report.txt。
+- 不要发送 backup/、logs/、reports/full-report-*、settings.json。
+- 不要发送完整 API Key。
+- 如果截图，请先确认截图里没有完整 API Key。
 
-请只发送项目根目录下的 `report.txt`。
-
-不要发送以下内容：
-- `backup/` 目录或其中的 `.bak` 文件：可能包含你的完整 API Key。
-- `logs/` 目录：可能包含本机路径信息。
-- `reports/full-report-*.txt`：包含完整路径，仅供本机排查。
-- 任何截图中包含 API Key 的窗口。
-
-### 第 3 步：不要发送 API Key
-
-**报告中的 API Key 已自动脱敏处理。**
-请**不要**单独发送您的 API Key 给任何人！
-**不要截图包含 API Key 的窗口！**
+报告中的 API Key 已自动脱敏处理。
 
 ---
 

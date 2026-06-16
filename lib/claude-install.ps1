@@ -928,12 +928,24 @@ function Invoke-InstallCommandCaptured {
     $result.StdOutPath = $stdout
     $result.StdErrPath = $stderr
 
-    # 默认消息
-    if (-not $StartMessage) { $StartMessage = "正在执行 $FriendlyName..." }
-    if (-not $HeartbeatMessage) { $HeartbeatMessage = "仍在执行 $FriendlyName，请继续等待，不要关闭窗口。" }
-    if (-not $TimeoutMessage) { $TimeoutMessage = "$FriendlyName 超时，已停止。请运行一键诊断。" }
+    # 默认消息 — 使用 PSBoundParameters 区分"未传参数"和"显式传空字符串"
+    $hasStartMessage = $PSBoundParameters.ContainsKey("StartMessage")
+    $hasHeartbeatMessage = $PSBoundParameters.ContainsKey("HeartbeatMessage")
+    $hasTimeoutMessage = $PSBoundParameters.ContainsKey("TimeoutMessage")
 
-    if ($StartMessage) { Write-Info $StartMessage }
+    if (-not $hasStartMessage) {
+        $StartMessage = "正在执行 $FriendlyName..."
+    }
+    if (-not $hasHeartbeatMessage) {
+        $HeartbeatMessage = "仍在执行 $FriendlyName，请继续等待，不要关闭窗口。"
+    }
+    if (-not $hasTimeoutMessage) {
+        $TimeoutMessage = "$FriendlyName 超时，已停止。请运行一键诊断。"
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($StartMessage)) {
+        Write-Info $StartMessage
+    }
 
     try {
         $proc = Start-Process -FilePath $FilePath `
@@ -952,7 +964,7 @@ function Invoke-InstallCommandCaptured {
             Start-Sleep -Seconds $nextHeartbeat
             if (-not $proc.HasExited) {
                 $elapsed = [Math]::Round($sw.Elapsed.TotalSeconds, 0)
-                if ($HeartbeatMessage) { Write-Info "$HeartbeatMessage（已等待 $elapsed 秒）" }
+                if (-not [string]::IsNullOrWhiteSpace($HeartbeatMessage)) { Write-Info "$HeartbeatMessage（已等待 $elapsed 秒）" }
                 $nextHeartbeat = $HeartbeatSec
             }
             if ($sw.Elapsed.TotalSeconds -gt $TimeoutSec) {
@@ -965,7 +977,12 @@ function Invoke-InstallCommandCaptured {
                 $result.TimedOut = $true
                 $result.Error = "timeout: ${TimeoutSec}s"
                 $result.DurationMs = [Math]::Round($sw.Elapsed.TotalMilliseconds, 0)
-                Write-Warning $TimeoutMessage
+                if (-not [string]::IsNullOrWhiteSpace($TimeoutMessage)) {
+                    Write-Warning $TimeoutMessage
+                }
+                else {
+                    Write-Warning "$FriendlyName 超时，已停止。请运行一键诊断。"
+                }
                 Write-Info "详细错误已写入日志，请运行「一键诊断.cmd」排查。"
                 return $result
             }
@@ -1078,8 +1095,6 @@ function Install-ClaudeCodeNative {
         }
 
         Write-Info "官方安装脚本已下载，开始安装..."
-        Write-NativeInstallUserMessage -Phase "Start"
-        Write-Host ""
 
         # v1.3.3 P1-2: 默认使用捕获模式，英文输出写入日志，控制台只显示中文心跳
         $installResult = Invoke-InstallCommandCaptured -FilePath "powershell" -Arguments @(
@@ -2820,7 +2835,7 @@ function Install-ClaudeCodeAuto {
                 $freshCheck = Test-ClaudeCommandInFreshShell
 
                 if ($freshCheck.Success) {
-                    Write-Success "新 PowerShell 可直接运行 claude: $($freshCheck.Output)"
+                    Write-Log "INFO" "Native Install (existing) fresh shell 可用: $($freshCheck.Output)"
                     $result.Success = $true
                     $result.Method = "existing_native"
                     $result.Status = "skipped_existing"
@@ -2959,7 +2974,7 @@ function Install-ClaudeCodeAuto {
                 return $result
             }
 
-            Write-Success "Claude Code 已安装: $($verifyResult.Version)"
+            Write-Log "INFO" "Native Install 后验验证可用: $($verifyResult.Version)"
 
             # --- PATH 持久化 (v1.3.3) ---
             $nativeBinPath = Get-NativeClaudeBinPath
@@ -2967,7 +2982,7 @@ function Install-ClaudeCodeAuto {
 
             if ($pathResult.Success) {
                 if ($pathResult.Changed) {
-                    Write-Success "已将 Claude Code 安装目录加入用户 PATH"
+                    Write-Info "已将 Claude Code 安装目录加入用户 PATH。"
                     Write-Info "新打开的 PowerShell 将可以直接运行 claude"
                 }
                 else {
@@ -2985,7 +3000,7 @@ function Install-ClaudeCodeAuto {
             Write-Log "INFO" "Native Install fresh shell check: Success=$($freshCheck.Success), Version=$($freshCheck.Version), Error=$($freshCheck.Error)"
 
             if ($freshCheck.Success) {
-                Write-Success "新 PowerShell 可直接运行 claude: $($freshCheck.Output)"
+                Write-Log "INFO" "Native Install fresh shell 可用: $($freshCheck.Output)"
             }
             else {
                 Write-Warning "claude --version 在当前进程可用，但新 PowerShell 中可能无法识别"
