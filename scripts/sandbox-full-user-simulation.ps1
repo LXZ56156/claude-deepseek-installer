@@ -129,6 +129,14 @@ function Invoke-SandboxProcess {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
 
+    # 先复制父进程全部环境变量，再覆盖显式传入的变量。
+    # 不能只设显式变量：$psi.EnvironmentVariables 一旦被触碰，子进程
+    # 就不再继承父进程环境，导致 CCDI_TEST_MODE / CCDI_TEST_USERPROFILE
+    # 等全局状态丢失，进而污染真实 %USERPROFILE%\.claude\settings.json。
+    $parentEnv = [Environment]::GetEnvironmentVariables()
+    foreach ($k in $parentEnv.Keys) {
+        $psi.EnvironmentVariables[$k] = [string]$parentEnv[$k]
+    }
     foreach ($k in $Environment.Keys) {
         $psi.EnvironmentVariables[$k] = [string]$Environment[$k]
     }

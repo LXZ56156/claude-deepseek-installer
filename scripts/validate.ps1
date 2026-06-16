@@ -88,6 +88,57 @@ function Get-RealSettingsSnapshot {
     }
 }
 
+function Backup-RealSettings {
+    <#
+    .SYNOPSIS
+        备份真实 settings.json 到 TEMP 目录下的带时间戳文件。
+        所有 sandbox 测试运行前调用，防止测试污染真实配置。
+    .RETURNS
+        包含 BackupPath 的哈希表，如果备份失败则为 $null。
+    #>
+    $path = Join-Path ([System.Environment]::GetFolderPath("UserProfile")) ".claude\settings.json"
+    if (-not (Test-Path $path)) {
+        Write-Host "[validate] Real settings.json does not exist, skip backup" -ForegroundColor DarkGray
+        return $null
+    }
+
+    try {
+        $timestamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
+        $backupDir = Join-Path $RootDir "backup"
+        if (-not (Test-Path $backupDir)) {
+            New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+        }
+        $backupPath = Join-Path $backupDir "validate-preflight-$timestamp.settings.json.bak"
+        Copy-Item $path $backupPath -Force
+        Write-Host "[validate] Real settings.json backed up: $backupPath" -ForegroundColor Green
+        return @{
+            BackupPath = $backupPath
+            SHA256     = (Get-FileHash -Algorithm SHA256 -Path $path).Hash
+            Length     = (Get-Item $path).Length
+        }
+    }
+    catch {
+        Write-Host "[validate] WARNING: Failed to backup real settings.json: $_" -ForegroundColor Yellow
+        return $null
+    }
+}
+
+function Restore-RealSettings {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BackupPath,
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPath
+    )
+
+    if (-not (Test-Path $BackupPath)) {
+        throw "Backup file not found: $BackupPath"
+    }
+
+    Copy-Item $BackupPath $TargetPath -Force
+    Write-Host "[validate] Real settings.json restored from: $BackupPath" -ForegroundColor Green
+}
+
 function Assert-RealSettingsUnchanged {
     param(
         [Parameter(Mandatory = $true)]
@@ -417,6 +468,13 @@ $beforeSettings = Get-RealSettingsSnapshot
 Write-Host "[validate] Mode=$Mode Version=$Version Branch=$(git branch --show-current) RequireClean=$requireCleanForRun"
 Write-Host "[validate] Real settings baseline: Exists=$($beforeSettings.Exists) Length=$($beforeSettings.Length) SHA256=$($beforeSettings.SHA256)"
 
+# 备份真实 settings.json，防止 sandbox 测试意外污染。
+# 备份保存在项目 backup/ 目录下，带时间戳，不会被 git 追踪。
+$script:SettingsBackup = $null
+if ($beforeSettings.Exists) {
+    $script:SettingsBackup = Backup-RealSettings
+}
+
 # RequireClean 下的 git status 检查（在验证步骤开始前运行）
 if ($requireCleanForRun) {
     Invoke-ValidationStep -Name "git status clean" -ScriptBlock {
@@ -450,7 +508,13 @@ switch ($Mode) {
 
 $afterSettings = Get-RealSettingsSnapshot
 Invoke-ValidationStep -Name "real settings.json unchanged" -ScriptBlock ([scriptblock]{
-    Assert-RealSettingsUnchanged -Before $beforeSettings -After $afterSettings
+    try {
+        Assert-RealSettingsUnchanged -Before $beforeSettings -After $afterSettings
+    }
+    catch {
+        $backupInfo = if ($script:SettingsBackup) { " Backup available: $($script:SettingsBackup.BackupPath) (SHA256: $($script:SettingsBackup.SHA256))" } else { " No backup was taken (settings.json didn't exist before tests)." }
+        throw ($_.Exception.Message + $backupInfo)
+    }
 })
 
 # 结束前 final git status clean（兜底：防止验证步骤意外生成未被 .gitignore 覆盖的文件）
