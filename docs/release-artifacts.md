@@ -6,14 +6,14 @@
 
 > **⚠ 旧验收记录 / stale until next release build**
 >
-> 以下 ZIP 信息和 SHA256 对应上一轮打包产物（commit `655d7cb`）。
-> 当前分支 HEAD 已推进至后续修复提交，代码验证已通过但尚未重新打包。
-> **在下次 `build-release.ps1` 或 `package-release.ps1` 重新生成 ZIP 之前，以下信息不代表当前分支最新提交 的交付产物。**
+> 以下 ZIP 信息和 SHA256 对应上一轮打包产物（commit `655d7cb`），不代表当前分支最新代码。
+> Current repair commit: `2013133`。后续修复提交可能存在，见 `git log`。
+> **Before delivery, rebuild the ZIP via `build-release.ps1` and replace this section with the real artifact source commit, SHA256, size, and entry count.**
 
 - Branch: `release/v1.3.2-rc`
 - Artifact source commit: `655d7cb2c6994b3a5ce21b3c9cbe25358714d6eb` (ZIP artifact source tree — stale)
 - Generating code commit: `655d7cb2c6994b3a5ce21b3c9cbe25358714d6eb` (feat(release): rename to 00-点我开始安装.cmd — stale)
-- Metadata HEAD (current): `03dbb19` (当前分支 HEAD，代码验证已通过；下一轮打包前修复提交，见 `git log`)
+- Current repair commit: `2013133` (latest fix round before re-pack; subsequent commits may exist — check `git log`)
 - ZIP: `ClaudeCode-DeepSeek-本地配置助手-v1.3.2.zip` (旧打包产物)
 - SHA256: `5a272b54a60d398b3a3620d31cabc3fd5e92ef7c214ce8627fc01201ef55ce29` (旧产物 SHA256)
 - Size: 191605 bytes (187.1 KB) (旧产物)

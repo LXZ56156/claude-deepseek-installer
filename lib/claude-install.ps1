@@ -2560,6 +2560,7 @@ function Install-ClaudeCodeAuto {
                     claudeWasAlreadyInstalled = $false
                     claudeInstallMethod       = "official_native"
                     claudeInstallStatus       = "installed"
+                    claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
                 } | Out-Null
                 return $result
             }
@@ -2591,6 +2592,7 @@ function Install-ClaudeCodeAuto {
                         claudeWasAlreadyInstalled = $false
                         claudeInstallMethod       = "official_native"
                         claudeInstallStatus       = "installed"
+                        claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
                     } | Out-Null
                     return $result
                 }
@@ -2666,6 +2668,7 @@ function Install-ClaudeCodeAuto {
                     claudeWasAlreadyInstalled = $false
                     claudeInstallMethod       = "winget_claude_code"
                     claudeInstallStatus       = "installed"
+                    claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
                 } | Out-Null
                 return $result
             }
@@ -2776,6 +2779,7 @@ function Install-ClaudeCodeAuto {
                             claudeWasAlreadyInstalled = $false
                             claudeInstallMethod       = "npm_npmmirror"
                             claudeInstallStatus       = "installed"
+                            claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
                         } | Out-Null
                         Write-Success "Claude Code 安装完成 (mock npm mirror)"
                         return $result
@@ -2792,6 +2796,7 @@ function Install-ClaudeCodeAuto {
                             claudeWasAlreadyInstalled = $false
                             claudeInstallMethod       = "npm_npmmirror"
                             claudeInstallStatus       = "installed"
+                            claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
                         } | Out-Null
                         return $result
                     }
@@ -2828,6 +2833,7 @@ function Install-ClaudeCodeAuto {
                                 claudeWasAlreadyInstalled = $false
                                 claudeInstallMethod       = "npm_npmmirror"
                                 claudeInstallStatus       = "installed"
+                                claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
                             } | Out-Null
                             return $result
                         }
@@ -2866,6 +2872,7 @@ function Install-ClaudeCodeAuto {
                         Update-CcdiState -Updates @{
                             claudeInstallMethod = "npm_npmmirror"
                             claudeInstallStatus = "installed_needs_restart"
+                            claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
                         } | Out-Null
                         return $result
                     }
@@ -2973,6 +2980,7 @@ function Install-ClaudeCodeAuto {
             claudeWasAlreadyInstalled = $false
             claudeInstallMethod       = "npm_npmmirror"
             claudeInstallStatus       = "installed"
+            claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
         } | Out-Null
         Write-Success "Claude Code 安装完成 (mock npm mirror)"
         return $result
@@ -2991,6 +2999,7 @@ function Install-ClaudeCodeAuto {
             claudeWasAlreadyInstalled = $false
             claudeInstallMethod       = "npm_npmmirror"
             claudeInstallStatus       = "installed"
+            claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
         } | Out-Null
         return $result
     }
@@ -3027,6 +3036,7 @@ function Install-ClaudeCodeAuto {
                 claudeWasAlreadyInstalled = $false
                 claudeInstallMethod       = "npm_npmmirror"
                 claudeInstallStatus       = "installed"
+                claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
             } | Out-Null
             return $result
         }
@@ -3068,6 +3078,7 @@ function Install-ClaudeCodeAuto {
         Update-CcdiState -Updates @{
             claudeInstallMethod = "npm_npmmirror"
             claudeInstallStatus = "installed_needs_restart"
+            claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
         } | Out-Null
         return $result
     }

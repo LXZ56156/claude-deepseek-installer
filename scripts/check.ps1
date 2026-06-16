@@ -2750,6 +2750,35 @@ if ($uninstallTextForCheck -match '首次运行时间[\s\S]{0,30}安装完成' -
     throw "uninstall-config.ps1 must display firstRunAt separately from install completion"
 }
 
+    # 5. Every install-success Update-CcdiState (official_native/winget_claude_code/npm_npmmirror + installed)
+    #    must include claudeInstallCompletedAt
+    $claudeInstallTextForP5 = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+    $successMethods = @("official_native","winget_claude_code","npm_npmmirror")
+    foreach ($method in $successMethods) {
+        $blocks = [regex]::Matches($claudeInstallTextForP5, "(?s)claudeInstallMethod\s*=\s*`"$method`"[\s\S]{0,100}claudeInstallStatus\s*=\s*`"installed`"[\s\S]{0,200}?\| Out-Null")
+        foreach ($block in $blocks) {
+            if ($block.Value -notmatch 'claudeInstallCompletedAt') {
+                throw "claude-install.ps1: $method + installed must set claudeInstallCompletedAt"
+            }
+        }
+    }
+
+    # 6. skipped_existing branch must NOT write claudeInstallCompletedAt
+    $skippedExistingBlocks = [regex]::Matches($claudeInstallTextForP5, "(?s)skipped_existing[\s\S]{0,200}?\| Out-Null")
+    foreach ($block in $skippedExistingBlocks) {
+        if ($block.Value -match 'claudeInstallCompletedAt') {
+            throw "claude-install.ps1: skipped_existing must NOT set claudeInstallCompletedAt"
+        }
+    }
+
+    # 7. installed_needs_restart (npm_npmmirror) must have claudeInstallCompletedAt
+    $needsRestartBlocks = [regex]::Matches($claudeInstallTextForP5, "(?s)installed_needs_restart.*?npm_npmmirror[\s\S]{0,200}?\| Out-Null")
+    foreach ($block in $needsRestartBlocks) {
+        if ($block.Value -notmatch 'claudeInstallCompletedAt') {
+            throw "claude-install.ps1: installed_needs_restart must set claudeInstallCompletedAt"
+        }
+    }
+
 Write-Host "[check] P5 anti-regression OK"
 
 # ============================================================
