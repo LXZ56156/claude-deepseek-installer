@@ -1002,7 +1002,7 @@ function Step-GenerateReport {
         "[ERROR]"
     }
     $freshShellStatusText = if ($freshShellOk) {
-        "通过 - $freshShellResult"
+        $freshShellResult
     }
     elseif ($script:ClaudeInstalled -and $userPathOk) {
         "$($freshShellResult)（自动验证未通过；请新开 PowerShell 手动验证）"
