@@ -5,9 +5,9 @@
 ## v1.3.2 RC
 
 - Branch: `release/v1.3.2-rc`
-- Artifact source commit: `4dd908f` (ZIP artifact source tree)
-- Generating code commit: `4dd908f` (release build)
-- Metadata HEAD: `4dd908f` (current HEAD of release/v1.3.2-rc)
+- Artifact source commit: `9d6e59c` (ZIP artifact source tree)
+- Generating code commit: `9d6e59c` (release build)
+- Metadata HEAD: `9d6e59c` (current HEAD of fix/v1.3.3-native-path-doctor-ux)
 - ZIP: `ClaudeCode-DeepSeek-本地配置助手-v1.3.2.zip`
 - SHA256: `6944152F9AA4FE531B276E1947F1A2F1769CC09AD8DC86E4B8E20A0F105722F3`
 - Size: `223948 bytes (218.7 KB)`
