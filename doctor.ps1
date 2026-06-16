@@ -24,20 +24,14 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
-# --- 编码初始化（防止 Windows PowerShell 5.1 控制台乱码）---
-try {
-    [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
-    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-    $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-    $null = & chcp 65001 2>$null
-}
-catch {
-    # 编码设置失败不阻塞脚本执行
-}
-
 $EntryScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 if (-not $EntryScriptDir) { $EntryScriptDir = (Get-Location).Path }
+
 . (Join-Path $EntryScriptDir "lib\bootstrap.ps1")
+
+# 控制台编码由 Initialize-CcdiScript -> Initialize-Logger ->
+# Initialize-ConsoleEncodingSafe 统一处理。
+# doctor.ps1 自身不直接设置控制台代码页，避免 Windows PowerShell 5.1 + conhost 中文叠字。
 $ScriptDir = Initialize-CcdiScript -ScriptName "doctor"
 
 $ScriptVersion = "1.3.2"

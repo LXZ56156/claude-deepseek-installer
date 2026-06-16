@@ -497,7 +497,6 @@ function Step-InstallClaudeCode {
         # 也要以 claude --version 的实际可用性为准（防止旧快照误判）。
         Refresh-CurrentProcessPath
         $finalCheck = Test-ClaudeCommandExisting
-        $configInfo = Test-ClaudeConfigExists
 
         if ($finalCheck.Exists -and $finalCheck.Usable) {
             $script:ClaudeInstalled = $true

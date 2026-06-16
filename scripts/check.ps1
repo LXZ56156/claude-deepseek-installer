@@ -1063,10 +1063,45 @@ if ($doctorText -notmatch 'Convert-ToSafeReportText') {
     throw "doctor.ps1 must use Convert-ToSafeReportText for report sanitization"
 }
 
-# 45. doctor.ps1 must have encoding initialization
-if ($doctorText -notmatch 'Console\]::InputEncoding.*UTF8Encoding' -or
-    $doctorText -notmatch 'Console\]::OutputEncoding.*UTF8Encoding') {
-    throw "doctor.ps1 must initialize console encoding to UTF-8"
+# 45. doctor.ps1 encoding policy: must NOT force chcp 65001 or Console Encoding directly.
+# Encoding is handled by Initialize-ConsoleEncodingSafe via bootstrap/logger.
+$loggerTextForEncoding = Get-Content -Path (Join-Path $RootDir "lib\logger.ps1") -Raw -Encoding UTF8
+
+# 45a. doctor.ps1 must not call chcp 65001 directly (skip comment lines)
+if ($doctorText -match '(?m)^[^#\r\n]*chcp\s+65001') {
+    throw "doctor.ps1 must not call chcp 65001 directly; use Initialize-ConsoleEncodingSafe via bootstrap/logger"
+}
+
+# 45b. doctor.ps1 must not set Console InputEncoding/OutputEncoding directly
+if ($doctorText -match '\[Console\]::InputEncoding\s*=' -or
+    $doctorText -match '\[Console\]::OutputEncoding\s*=') {
+    throw "doctor.ps1 must not set Console InputEncoding/OutputEncoding directly; use Initialize-ConsoleEncodingSafe"
+}
+
+# 45c. doctor.ps1 must load bootstrap.ps1
+if ($doctorText -notmatch 'lib\\bootstrap\.ps1' -and $doctorText -notmatch 'lib/bootstrap\.ps1') {
+    throw "doctor.ps1 must load lib/bootstrap.ps1"
+}
+
+# 45d. doctor.ps1 must call Initialize-CcdiScript
+if ($doctorText -notmatch 'Initialize-CcdiScript\s+-ScriptName\s+"doctor"') {
+    throw "doctor.ps1 must initialize through Initialize-CcdiScript -ScriptName `"doctor`""
+}
+
+# 45e. logger.ps1 must have Initialize-ConsoleEncodingSafe
+if ($loggerTextForEncoding -notmatch 'function Initialize-ConsoleEncodingSafe') {
+    throw "logger.ps1 must define Initialize-ConsoleEncodingSafe"
+}
+
+# 45f. Initialize-ConsoleEncodingSafe must detect legacy PS 5.1 Desktop
+if ($loggerTextForEncoding -notmatch 'PSEdition' -or
+    $loggerTextForEncoding -notmatch 'Desktop') {
+    throw "Initialize-ConsoleEncodingSafe must detect Windows PowerShell Desktop/5.1"
+}
+
+# 45g. Initialize-ConsoleEncodingSafe must skip forced UTF-8 on legacy
+if ($loggerTextForEncoding -notmatch 'skip|legacy|Windows PowerShell') {
+    throw "Initialize-ConsoleEncodingSafe must explicitly skip forced UTF-8 for legacy Windows PowerShell 5.1/conhost"
 }
 
 # 46. Invoke-ClaudeDoctorInteractiveSafe must use cmd.exe wrapping (shell redirect + set CI=1)
@@ -2954,5 +2989,54 @@ if ($configWriterText -notmatch '未设置 API Key|ANTHROPIC_AUTH_TOKEN[\s\S]{0,
 }
 
 Write-Host "[check] P7 anti-regression OK"
+
+# ============================================================
+# P8 v1.3.2 最终补漏 (user-entry chcp ban, WebClient Dispose)
+# ============================================================
+Write-Host "[check] P8 anti-regression: v1.3.2 final cleanup"
+
+# --- P8a: 所有用户入口不得直接 chcp 65001 ---
+$userEntryFiles = @(
+    "Start-Here.ps1",
+    "doctor.ps1",
+    "configure-deepseek.ps1",
+    "uninstall-config.ps1",
+    "repair-deps.ps1",
+    "install.ps1",
+    "00-点我开始安装.cmd",
+    "一键诊断.cmd",
+    "恢复或卸载配置.cmd",
+    "一键修复依赖.cmd",
+    "Start-Install.cmd",
+    "Run-Diagnostics.cmd",
+    "Restore-Config.cmd"
+)
+
+foreach ($entry in $userEntryFiles) {
+    $entryPath = Join-Path $RootDir $entry
+    if (-not (Test-Path $entryPath)) { continue }
+
+    $encoding = if ($entry -like "*.cmd") { "ASCII" } else { "UTF8" }
+    $text = Get-Content -Path $entryPath -Raw -Encoding $encoding
+
+    if ($text -match '(?m)^[^#\r\n]*chcp\s+65001') {
+        throw "User entry file must not call chcp 65001 directly: $entry. Use Initialize-ConsoleEncodingSafe via bootstrap/logger."
+    }
+}
+
+# --- P8b: Invoke-VisibleFileDownload must dispose WebClient ---
+$claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+
+# 初始化为 $null（幂等安全检查）
+if ($claudeInstallText -notmatch '\$client\s*=\s*\$null') {
+    throw "claude-install.ps1 Invoke-VisibleFileDownload should initialize `$client = `$null for safe disposal"
+}
+
+# finally 中必须 Dispose
+if ($claudeInstallText -notmatch 'finally[\s\S]{0,300}\$client\.Dispose\(\)') {
+    throw "claude-install.ps1 Invoke-VisibleFileDownload should dispose WebClient in finally"
+}
+
+Write-Host "[check] P8 anti-regression OK"
 
 Write-Host "[check] OK"

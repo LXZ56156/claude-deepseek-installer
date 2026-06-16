@@ -857,6 +857,43 @@ x-api-key: $TestApiKey
     Write-Host ""
 
     # ============================================================
+    # 21. v1.3.2 最终补漏 UX 检查（一键诊断编码策略）
+    # ============================================================
+    Write-CheckHeader "21. 一键诊断编码策略检查"
+
+    $doctorPath = Join-Path $ScriptRoot "doctor.ps1"
+    $doctorText = Get-Content $doctorPath -Raw -Encoding UTF8
+    $doctorCmdPath = Join-Path $ScriptRoot "一键诊断.cmd"
+    $doctorCmdText = Get-Content $doctorCmdPath -Raw -Encoding ASCII
+
+    Assert "doctor.ps1 不直接 chcp 65001" {
+        $doctorText -notmatch '(?m)^[^#\r\n]*chcp\s+65001'
+    } "doctor.ps1 不得直接执行 chcp 65001，否则 PS5.1/cmd 下可能中文叠字"
+
+    Assert "doctor.ps1 不直接设置 Console Encoding" {
+        $doctorText -notmatch '\[Console\]::InputEncoding\s*=' -and
+        $doctorText -notmatch '\[Console\]::OutputEncoding\s*='
+    } "doctor.ps1 应通过 logger 的 Initialize-ConsoleEncodingSafe 统一处理编码"
+
+    Assert "doctor.ps1 通过 bootstrap 初始化" {
+        $doctorText -match 'lib\\bootstrap\.ps1|lib/bootstrap\.ps1'
+    } "doctor.ps1 必须加载 bootstrap.ps1"
+
+    Assert "doctor.ps1 调用 Initialize-CcdiScript" {
+        $doctorText -match 'Initialize-CcdiScript\s+-ScriptName\s+"doctor"'
+    } "doctor.ps1 必须调用 Initialize-CcdiScript -ScriptName doctor"
+
+    Assert "一键诊断.cmd 不包含 chcp 65001" {
+        $doctorCmdText -notmatch 'chcp\s+65001'
+    } "一键诊断.cmd 不得设置 chcp 65001"
+
+    Assert "一键诊断.cmd 调用 doctor.ps1 -ShareSafe" {
+        $doctorCmdText -match 'doctor\.ps1' -and $doctorCmdText -match '-ShareSafe'
+    } "一键诊断.cmd 必须调用 doctor.ps1 -ShareSafe"
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""

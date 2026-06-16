@@ -2322,6 +2322,7 @@ function Invoke-VisibleFileDownload {
     Write-Host ""
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $client = $null
 
     try {
         # 确保目标目录存在
@@ -2413,6 +2414,11 @@ function Invoke-VisibleFileDownload {
         }
         else {
             Write-Log "ERROR" "Invoke-VisibleFileDownload 异常: $_"
+        }
+    }
+    finally {
+        if ($null -ne $client) {
+            try { $client.Dispose() } catch { }
         }
     }
 

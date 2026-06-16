@@ -39,6 +39,7 @@ function Initialize-CcdiScript {
 
     Initialize-Logger -LogDirPath (Join-Path $script:CcdiProjectRoot "logs") -ScriptName $ScriptName
     Initialize-CcdiNetworkDefaults
+    Initialize-ConsoleEncodingSafe
 
     return $script:CcdiProjectRoot
 }
