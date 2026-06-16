@@ -1140,6 +1140,117 @@ x-api-key: $TestApiKey
     Write-Host ""
 
     # ============================================================
+    # 25. v1.3.3 P0 修复检查（完成页语法/Fresh Shell 重写/Node 分级/报告文案）
+    # ============================================================
+    Write-CheckHeader "25. v1.3.3 P0 修复检查：语法/Fresh Shell/Node 分级/报告文案"
+
+    $startHerePath = Join-Path $ScriptRoot "Start-Here.ps1"
+    $startHereText = Get-Content $startHerePath -Raw -Encoding UTF8
+    $commonPath = Join-Path $ScriptRoot "lib\common.ps1"
+    $commonText = Get-Content $commonPath -Raw -Encoding UTF8
+    $doctorPath = Join-Path $ScriptRoot "doctor.ps1"
+    $doctorText = Get-Content $doctorPath -Raw -Encoding UTF8
+
+    # --- P0-1: 完成页 [1] 语法修复 ---
+    Assert "P0-1: Start-Here.ps1 不含 Test-Path `$nativeClaudeExe -or" {
+        $startHereText -notmatch 'Test-Path\s+\$nativeClaudeExe\s+-or'
+    } "Start-Here.ps1 仍包含错误的 Test-Path `$nativeClaudeExe -or 语法"
+
+    Assert "P0-1: Start-Here.ps1 含 (Test-Path `$nativeClaudeExe) -or `$script:ClaudeInstalled" {
+        $startHereText -match '\(Test-Path\s+\$nativeClaudeExe\)\s+-or\s+\$script:ClaudeInstalled'
+    } "Start-Here.ps1 缺失正确的 (Test-Path `$nativeClaudeExe) -or `$script:ClaudeInstalled"
+
+    # --- P0-2: Fresh Shell 重写 ---
+    # 提取 Test-ClaudeCommandInFreshShell 函数体（从函数声明到下一个函数声明）
+    $freshShellFuncBody = ""
+    $commonLines = Get-Content $commonPath -Encoding UTF8
+    $inFunc = $false; $funcStart = -1; $funcEnd = -1
+    for ($i = 0; $i -lt $commonLines.Count; $i++) {
+        if ($commonLines[$i] -match '^function Test-ClaudeCommandInFreshShell\b') { $funcStart = $i; $inFunc = $true; continue }
+        if ($inFunc -and $commonLines[$i] -match '^function \w') { $funcEnd = $i; break }
+    }
+    if ($funcStart -ge 0) {
+        if ($funcEnd -lt 0) { $funcEnd = $commonLines.Count - 1 }
+        $freshShellFuncBody = ($commonLines[$funcStart..($funcEnd - 1)] -join "`n")
+    }
+
+    Assert "P0-2: Test-ClaudeCommandInFreshShell 不得调用 Invoke-CommandSafe" {
+        # 函数体内不应有 Invoke-CommandSafe 调用；允许注释中提到该名称（如 "不再通过 Invoke-CommandSafe"）
+        ($freshShellFuncBody -and $freshShellFuncBody -notmatch '\bInvoke-CommandSafe\s+-')
+    } "Test-ClaudeCommandInFreshShell 仍调用 Invoke-CommandSafe"
+
+    Assert "P0-2: Test-ClaudeCommandInFreshShell 创建临时 .ps1 文件" {
+        $freshShellFuncBody -match 'ccdi_fresh_shell_.*\.ps1'
+    } "Test-ClaudeCommandInFreshShell 未创建临时 .ps1 检测脚本"
+
+    Assert "P0-2: Test-ClaudeCommandInFreshShell 使用 powershell.exe -File" {
+        $freshShellFuncBody -match 'powershell\.exe.*-File' -or
+        $freshShellFuncBody -match '-File[\s\S]{0,50}\$temp'
+    } "Test-ClaudeCommandInFreshShell 未使用 powershell.exe -File"
+
+    Assert "P0-2: Test-ClaudeCommandInFreshShell 捕获 stdout/stderr/ExitCode" {
+        ($freshShellFuncBody -match 'RedirectStandardOutput' -and
+         $freshShellFuncBody -match 'RedirectStandardError' -and
+         $freshShellFuncBody -match 'ExitCode')
+    } "Test-ClaudeCommandInFreshShell 未独立捕获 stdout/stderr/ExitCode"
+
+    Assert "P0-2: Test-ClaudeCommandInFreshShell 保留 TestSafe/mock 分支" {
+        ($freshShellFuncBody -match 'CCDI_MOCK_INSTALL_DECISION' -and
+         $freshShellFuncBody -match 'CCDI_MOCK_FRESH_SHELL')
+    } "Test-ClaudeCommandInFreshShell 缺失 TestSafe/mock 分支"
+
+    Assert "P0-2: Test-ClaudeCommandInFreshShell 30 秒超时" {
+        $freshShellFuncBody -match 'WaitForExit\(30000\)'
+    } "Test-ClaudeCommandInFreshShell 未设置 30 秒超时"
+
+    Assert "P0-2: Test-ClaudeCommandInFreshShell 超时杀进程树" {
+        $freshShellFuncBody -match 'taskkill\.exe'
+    } "Test-ClaudeCommandInFreshShell 超时未使用 taskkill /T /F"
+
+    Assert "P0-2: Test-ClaudeCommandInFreshShell finally 清理临时文件" {
+        ($freshShellFuncBody -match 'finally[\s\S]{0,200}Remove-Item' -or
+         $freshShellFuncBody -match 'Remove-Item.*Force.*temp')
+    } "Test-ClaudeCommandInFreshShell 未清理临时文件"
+
+    # --- P0-3: doctor Node/npm 错误级别 ---
+    Assert "P0-3: doctor.ps1 Node.js 检测根据 Native Install 降级" {
+        $doctorText -match 'isNativeInstallLikely.*Add-CheckResult\s+"Node\.js"\s+"INFO"' -or
+        $doctorText -match 'isNativeInstallLikely[\s\S]{0,300}Node\.js[\s\S]{0,100}INFO'
+    } "doctor.ps1 Node.js 未按 Native Install 状态降级为 INFO"
+
+    Assert "P0-3: doctor.ps1 npm 检测根据 Native Install 降级" {
+        $doctorText -match 'isNativeInstallLikely.*Add-CheckResult\s+"npm"\s+"INFO"' -or
+        $doctorText -match 'isNativeInstallLikely[\s\S]{0,300}npm[\s\S]{0,100}INFO'
+    } "doctor.ps1 npm 未按 Native Install 状态降级为 INFO"
+
+    Assert "P0-3: doctor.ps1 含 Native Install 不影响基础使用文案" {
+        $doctorText -match '当前为 Native Install，已不影响 Claude Code 基础使用'
+    } "doctor.ps1 缺失 '当前为 Native Install，已不影响 Claude Code 基础使用' 文案"
+
+    Assert "P0-3: doctor.ps1 Fresh Shell 文件与 PATH 就绪时降级为 WARN" {
+        $doctorText -match '自动验证未通过，但 Claude Code 文件和 PATH 均已就绪'
+    } "doctor.ps1 Fresh Shell 在文件和 PATH 就绪时未提供温和文案"
+
+    # --- P0-4: 安装报告文案 ---
+    Assert "P0-4: Start-Here.ps1 installed_needs_restart_or_path_fix 不触发重跑文案" {
+        $startHereText -notmatch 'installed_needs_restart_or_path_fix[\s\S]{0,200}重新双击「00-点我开始安装\.cmd」继续安装流程'
+    } "Start-Here.ps1 仍在 installed_needs_restart_or_path_fix 下输出'重新双击'误导文案"
+
+    Assert "P0-4: Start-Here.ps1 含 安装和配置已完成 或 新开 PowerShell claude --version 指引" {
+        ($startHereText -match '新开 PowerShell 手动执行' -or
+         $startHereText -match 'claude --version[\s\S]{0,50}手动验证' -or
+         $startHereText -match '如仍失败.*一键修复依赖' -or
+         $startHereText -match '安装和配置已完成')
+    } "Start-Here.ps1 缺失新开 PowerShell 验证指引或安装和配置已完成文案"
+
+    # --- P0 整体: 不得使用 -match "needs_restart" 通配 ---
+    Assert "P0: Start-Here.ps1 不再使用 -match needs_restart（精确匹配 status）" {
+        $startHereText -notmatch '-match\s+"needs_restart"'
+    } "Start-Here.ps1 仍使用 -match needs_restart 通配，installed_needs_restart_or_path_fix 可能被误判"
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""

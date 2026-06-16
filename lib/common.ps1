@@ -913,104 +913,260 @@ function Test-ClaudeCommandInFreshShell {
         启动一个新的 PowerShell -NoProfile 子进程，模拟用户新开窗口后的环境。
         重建 Machine + User PATH 后执行 claude --version。
         不使用当前脚本已污染的 $env:Path。
+
+        v1.3.3 P0-2: 不再通过 Invoke-CommandSafe / cmd.exe 包装。
+        改为创建临时 .ps1 检测脚本，用 powershell.exe -File 直接执行，
+        独立捕获 stdout/stderr/exit code，避免 cmd 引号/重定向/exit code 丢失。
     .PARAMETER TestSafe
         测试安全模式：跳过真实执行。
     .RETURNS
-        包含 Success, Output, Error, ExitCode, Version 的哈希表
+        包含 Success, Output, Error, ExitCode, Version,
+        Reason, CommandPath, UserPathContainsNative, NativeExeExists 的哈希表
     #>
     param(
         [switch]$TestSafe
     )
 
     $result = @{
-        Success  = $false
-        Output   = ""
-        Error    = ""
-        ExitCode = -1
-        Version  = $null
+        Success               = $false
+        Output                = ""
+        Error                 = ""
+        ExitCode              = -1
+        Version               = $null
+        Reason                = ""
+        CommandPath           = ""
+        UserPathContainsNative = $false
+        NativeExeExists       = $false
     }
 
     if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
         Write-Log "INFO" "TestSafe: 跳过 fresh shell 验证"
         $result.Error = "skipped_test_safe"
+        $result.Reason = "test_safe"
 
         # MOCK 支持
         if ($env:CCDI_MOCK_INSTALL_DECISION -eq "1" -and $env:CCDI_TEST_MODE -eq "1") {
             $mockFresh = if ($env:CCDI_MOCK_FRESH_SHELL) { $env:CCDI_MOCK_FRESH_SHELL } else { "fail" }
             if ($mockFresh -eq "ok") {
-                return @{ Success = $true; Output = "2.1.178 (Claude Code)"; Error = ""; ExitCode = 0; Version = "2.1.178 (Claude Code)" }
+                return @{
+                    Success = $true; Output = "2.1.178 (Claude Code)"; Error = ""; ExitCode = 0;
+                    Version = "2.1.178 (Claude Code)"; Reason = "mock"; CommandPath = "C:\mock\claude.exe";
+                    UserPathContainsNative = $true; NativeExeExists = $true
+                }
             }
-            return @{ Success = $false; Output = ""; Error = "mock: fresh shell claude not found"; ExitCode = 10; Version = $null }
+            return @{
+                Success = $false; Output = ""; Error = "mock: fresh shell claude not found";
+                ExitCode = 10; Version = $null; Reason = "mock"; CommandPath = "";
+                UserPathContainsNative = $false; NativeExeExists = $false
+            }
         }
 
         return $result
     }
 
-    try {
-        # 构建子进程脚本：重建干净的 Machine + User PATH，然后检测 claude
-        $script = @'
+    # --- 创建临时检测脚本和输出文件 ---
+    $tempDir = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
+    $tempScript = Join-Path $tempDir "ccdi_fresh_shell_${PID}_$(Get-Random).ps1"
+    $tempOut    = Join-Path $tempDir "ccdi_fresh_shell_out_${PID}_$(Get-Random).txt"
+    $tempErr    = Join-Path $tempDir "ccdi_fresh_shell_err_${PID}_$(Get-Random).txt"
+
+    $probeScript = @'
 $ErrorActionPreference = "Stop"
+
+$result = [ordered]@{
+    Success               = $false
+    Output                = ""
+    Error                 = ""
+    CommandPath           = ""
+    UserPathContainsNative = $false
+    NativeExeExists       = $false
+}
+
 try {
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $userProfile = [Environment]::GetFolderPath("UserProfile")
+    $nativeBin   = Join-Path $userProfile ".local\bin"
+    $nativeExe   = Join-Path $nativeBin "claude.exe"
+
+    $userPath    = [Environment]::GetEnvironmentVariable("Path", "User")
     $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-    $cleanPath = @()
-    if ($userPath) { $cleanPath += $userPath }
-    if ($machinePath) { $cleanPath += $machinePath }
-    $env:Path = ($cleanPath -join ";")
+
+    $cleanPathParts = @()
+    if ($userPath)    { $cleanPathParts += $userPath }
+    if ($machinePath) { $cleanPathParts += $machinePath }
+    $env:Path = ($cleanPathParts -join ";")
+
+    $result.NativeExeExists = Test-Path $nativeExe
+
+    if ($userPath) {
+        $entries = $userPath -split ";" | ForEach-Object { $_.Trim().TrimEnd('\') } | Where-Object { $_ }
+        $target = $nativeBin.Trim().TrimEnd('\')
+        foreach ($entry in $entries) {
+            if ($entry.ToLowerInvariant() -eq $target.ToLowerInvariant()) {
+                $result.UserPathContainsNative = $true
+                break
+            }
+        }
+    }
 
     $cmd = Get-Command claude -ErrorAction SilentlyContinue
     if (-not $cmd) {
-        Write-Error "CCDI_FRESH_SHELL: claude not found in fresh shell PATH"
+        $result.Error = "claude not found in reconstructed User+Machine PATH"
+        $result | ConvertTo-Json -Compress
         exit 10
     }
 
-    $output = & claude --version 2>&1
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -eq 0 -and $output) {
-        Write-Output $output
+    $cmdPath = if ($cmd.Source) { $cmd.Source } else { $cmd.Definition }
+    $result.CommandPath = $cmdPath
+
+    $versionOutput = & claude --version 2>&1
+    $code = $LASTEXITCODE
+
+    if ($code -eq 0 -and -not [string]::IsNullOrWhiteSpace(($versionOutput | Out-String))) {
+        $result.Success = $true
+        $result.Output = (($versionOutput | Out-String).Trim())
+        $result | ConvertTo-Json -Compress
         exit 0
     }
-    else {
-        Write-Error "CCDI_FRESH_SHELL: claude --version failed (exit=$exitCode)"
-        exit 11
-    }
+
+    $result.Error = "claude --version failed, exit=$code, output=$(($versionOutput | Out-String).Trim())"
+    $result | ConvertTo-Json -Compress
+    exit 11
 }
 catch {
-    Write-Error "CCDI_FRESH_SHELL: $_"
+    $result.Error = "fresh shell probe exception: $($_.Exception.Message)"
+    $result | ConvertTo-Json -Compress
     exit 20
 }
 '@
 
-        # 通过 PowerShell -NoProfile -Command 执行子进程脚本
-        $freshResult = Invoke-CommandSafe -Command "powershell" -Arguments @(
-            "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-Command", $script
-        ) -TimeoutSec 30
+    try {
+        # 写入临时 .ps1（UTF-8 no BOM）
+        [System.IO.File]::WriteAllText($tempScript, $probeScript, (New-Object System.Text.UTF8Encoding($false)))
 
-        $result.ExitCode = $freshResult.ExitCode
+        # 直接使用 Start-Process + powershell.exe -File，不通过 Invoke-CommandSafe / cmd.exe
+        $proc = Start-Process -FilePath "powershell.exe" `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tempScript) `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardOutput $tempOut `
+            -RedirectStandardError $tempErr
 
-        if ($freshResult.Success -and -not [string]::IsNullOrWhiteSpace($freshResult.Output)) {
-            $result.Success = $true
-            $result.Output = $freshResult.Output.Trim()
-            $result.Version = $result.Output
+        # 等待子进程完成，最多 30 秒
+        $finished = $proc.WaitForExit(30000)
 
-            # 从输出中提取版本号
-            if ($result.Output -match '(\d+\.\d+\.\d+[^\s,]*)') {
-                $result.Version = $matches[1]
+        if (-not $finished) {
+            # 超时：杀进程树
+            $result.Reason = "timeout"
+            $result.Error = "Fresh shell 验证超时（30 秒）"
+            Write-Log "WARN" "Test-ClaudeCommandInFreshShell: 超时，杀进程树 PID=$($proc.Id)"
+
+            try {
+                $killResult = & taskkill.exe /PID $proc.Id /T /F 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Log "INFO" "已终止 fresh shell 进程树 PID=$($proc.Id): $killResult"
+                }
+                else {
+                    if (-not $proc.HasExited) { $proc.Kill() }
+                }
+                $proc.WaitForExit(5000) | Out-Null
+            }
+            catch {
+                Write-Log "WARN" "终止 fresh shell 进程异常: $_"
+                try { if (-not $proc.HasExited) { $proc.Kill() } } catch {}
             }
 
-            Write-Log "INFO" "Test-ClaudeCommandInFreshShell: 成功 - $($result.Output)"
+            $result.ExitCode = -1
+            return $result
+        }
+
+        $exitCode = $proc.ExitCode
+        $result.ExitCode = $exitCode
+
+        # 读取 stdout（应为 JSON）
+        $jsonOutput = ""
+        if (Test-Path $tempOut) {
+            $jsonOutput = Get-Content $tempOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+            if ($null -eq $jsonOutput) { $jsonOutput = "" }
+        }
+        $stderrText = ""
+        if (Test-Path $tempErr) {
+            $stderrText = Get-Content $tempErr -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+            if ($null -eq $stderrText) { $stderrText = "" }
+        }
+
+        # 解析 JSON 输出
+        $parsed = $null
+        if (-not [string]::IsNullOrWhiteSpace($jsonOutput)) {
+            try {
+                $parsed = $jsonOutput.Trim() | ConvertFrom-Json
+            }
+            catch {
+                Write-Log "WARN" "Test-ClaudeCommandInFreshShell: JSON 解析失败, stdout=$([System.Environment]::NewLine)$jsonOutput"
+            }
+        }
+
+        if ($parsed) {
+            $result.Success = [bool]$parsed.Success
+            $result.Output = if ($parsed.Output) { [string]$parsed.Output } else { "" }
+            $result.Error = if ($parsed.Error) { [string]$parsed.Error } else { "" }
+            $result.CommandPath = if ($parsed.CommandPath) { [string]$parsed.CommandPath } else { "" }
+            $result.UserPathContainsNative = if ($parsed.PSObject.Properties.Name -contains "UserPathContainsNative") {
+                [bool]$parsed.UserPathContainsNative
+            } else { $false }
+            $result.NativeExeExists = if ($parsed.PSObject.Properties.Name -contains "NativeExeExists") {
+                [bool]$parsed.NativeExeExists
+            } else { $false }
+
+            # 版本提取
+            if ($result.Success -and $result.Output) {
+                if ($result.Output -match '(\d+\.\d+\.\d+[^\s,]*)') {
+                    $result.Version = $matches[1]
+                }
+                else {
+                    $result.Version = $result.Output
+                }
+            }
+
+            if ($result.Success) {
+                $result.Reason = "success"
+                Write-Log "INFO" "Test-ClaudeCommandInFreshShell: 成功 - Version=$($result.Version), CommandPath=$($result.CommandPath)"
+            }
+            else {
+                $result.Reason = "probe_reported_failure"
+                # 失败但 native 文件和 PATH 都就绪 → 不写 ERROR，写 INFO（避免误报）
+                if ($result.NativeExeExists -and $result.UserPathContainsNative) {
+                    Write-Log "INFO" "Test-ClaudeCommandInFreshShell: 失败但文件与 PATH 均已就绪 - ExitCode=$exitCode, Error=$($result.Error), NativeExeExists=$($result.NativeExeExists), UserPathContainsNative=$($result.UserPathContainsNative)"
+                    $result.Reason = "fail_but_path_ok"
+                }
+                else {
+                    Write-Log "WARN" "Test-ClaudeCommandInFreshShell: 失败 - ExitCode=$exitCode, Error=$($result.Error), NativeExeExists=$($result.NativeExeExists), UserPathContainsNative=$($result.UserPathContainsNative)"
+                }
+            }
         }
         else {
-            $errorMsg = if ($freshResult.Error) { $freshResult.Error } else { "ExitCode=$($freshResult.ExitCode)" }
-            $result.Error = $errorMsg
-            Write-Log "WARN" "Test-ClaudeCommandInFreshShell: 失败 - $errorMsg"
+            # JSON 解析失败，用 stderr + exit code 作为诊断信息
+            $result.Reason = "json_parse_failed"
+            $result.Error = if ($stderrText.Trim()) {
+                "stdout 非 JSON, stderr=$($stderrText.Trim())"
+            }
+            else {
+                "stdout 非 JSON, exit=$exitCode"
+            }
+            Write-Log "WARN" "Test-ClaudeCommandInFreshShell: JSON 解析失败, exit=$exitCode, stderr=$($stderrText.Trim())"
         }
     }
     catch {
         $result.Error = "Fresh shell 验证异常: $($_.Exception.Message)"
+        $result.Reason = "exception"
         Write-Log "ERROR" "Test-ClaudeCommandInFreshShell: $($result.Error)"
+    }
+    finally {
+        # 清理临时文件
+        foreach ($tmpPath in @($tempScript, $tempOut, $tempErr)) {
+            if ($tmpPath -and (Test-Path $tmpPath)) {
+                Remove-Item $tmpPath -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 
     return $result

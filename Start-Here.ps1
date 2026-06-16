@@ -1051,7 +1051,7 @@ $reportTitle
 【一眼结论】
 --------------------------------------
 运行环境: Windows ($($winInfo.Version))
-Claude Code: $(if ($script:TestSafeMode) { "测试安全模式未执行真实安装" } elseif ($claudeVer) { "已安装 ($claudeVer)" } elseif ($script:ClaudeInstallStatus -match "needs_restart") { "已安装但需重开终端" } else { "未安装" })
+Claude Code: $(if ($script:TestSafeMode) { "测试安全模式未执行真实安装" } elseif ($claudeVer) { "已安装 ($claudeVer)" } elseif (($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart"))) { "已安装但需重开终端" } else { "未安装" })
 Claude Code 安装位置: $claudeInstallLocation
 Node.js: $(if ($nodeInfo.Installed) { "$($nodeInfo.Version)" } else { "未安装" })
 npm: $(if ($npmInfo.Installed) { "$($npmInfo.Version)" } else { "不可用" })
@@ -1061,7 +1061,7 @@ User PATH: $userPathStatus
 Fresh PowerShell 验证: $freshShellResult
 整体状态: $overallStatus
 $(if ($script:TestSafeMode) { "测试安全模式流程完成，不代表真实安装/API 已验证。" } else { "" })
-$(if ($script:ClaudeInstallStatus -match "needs_restart") { "NEEDS_RESTART - 需要关闭窗口重新运行「00-点我开始安装.cmd」继续安装。" } else { "" })
+$(if (($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart"))) { "NEEDS_RESTART - 需要关闭窗口重新运行「00-点我开始安装.cmd」继续安装。" } else { "" })
 
 一、系统信息
 --------------------------------------
@@ -1120,7 +1120,7 @@ $testSafeNotice
 $(if ($script:TestSafeMode) {
 "测试安全模式未执行真实安装，也未验证真实 API。
 本结果只代表沙盒配置流程通过。"
-} elseif ($script:ClaudeInstallStatus -match "needs_restart") {
+} elseif (($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart"))) {
 "关闭该窗口后重新双击「00-点我开始安装.cmd」继续安装流程。
 脚本会继续安装 Claude Code 并配置 DeepSeek。"
 } elseif ($script:ClaudeInstalled -and $script:ConfigWritten) {
@@ -1287,7 +1287,7 @@ function Show-CompletionPage {
         Write-Warning "DeepSeek 配置未完成。"
         Write-Info "请稍后运行 configure-deepseek.ps1 或在主菜单选择高级选项配置 API Key。"
     }
-    elseif ($script:ClaudeInstallStatus -match "needs_restart") {
+    elseif ($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart")) {
         Write-Host "==============================================================" -ForegroundColor Yellow
         Write-Host "            需要重开终端后继续                                " -ForegroundColor Yellow
         Write-Host "==============================================================" -ForegroundColor Yellow
@@ -1424,7 +1424,7 @@ function Show-CompletionMenu {
                 # 检查 fresh shell 验证状态
                 $nativeClaudeExe = Get-NativeClaudeExePath
                 $freshOk = $false
-                if (Test-Path $nativeClaudeExe -or $script:ClaudeInstalled) {
+                if ((Test-Path $nativeClaudeExe) -or $script:ClaudeInstalled) {
                     $freshCheck = Test-ClaudeCommandInFreshShell
                     $freshOk = $freshCheck.Success
                 }
@@ -1544,7 +1544,7 @@ function Start-LazyInstall {
     # Step 2: 安装 Claude Code
     $claudeOk = Step-InstallClaudeCode
     if (-not $claudeOk) {
-        if ($script:ClaudeInstallStatus -match "needs_restart") {
+        if (($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart"))) {
             Write-Warning "当前需要重开终端后继续，已跳过后续配置步骤。"
         }
         else {
@@ -1592,7 +1592,8 @@ function Start-LazyInstall {
             }
         }
         # needs_restart 分支仍然需要 return
-        if ($script:ClaudeInstallStatus -match "needs_restart") {
+        # v1.3.3 P0-3: installed_needs_restart_or_path_fix 表示已安装完毕仅需手动验证，不应阻断后续流程
+        if ($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart")) {
             Show-CompletionPage
             return
         }

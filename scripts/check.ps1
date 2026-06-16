@@ -3112,4 +3112,59 @@ if ($bootstrapTextForP9 -match 'Initialize-CcdiScript[\s\S]{0,500}Initialize-Con
 
 Write-Host "[check] P9 anti-regression OK"
 
+# ============================================================
+# P0 v1.3.3 fix anti-regression: fresh shell, completion page, doctor node/npm
+# ============================================================
+Write-Host "[check] P0 v1.3.3 fix anti-regression"
+
+$startHereText = Get-Content -Path (Join-Path $RootDir "Start-Here.ps1") -Raw -Encoding UTF8
+$commonText = Get-Content -Path (Join-Path $RootDir "lib\common.ps1") -Raw -Encoding UTF8
+$doctorText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+
+# 1. Start-Here.ps1 must NOT contain incorrect Test-Path syntax
+if ($startHereText -match 'Test-Path\s+\$nativeClaudeExe\s+-or') {
+    throw "Start-Here.ps1 still contains broken syntax: Test-Path `$nativeClaudeExe -or"
+}
+
+# 2. Start-Here.ps1 must contain correct parenthesized form
+if ($startHereText -notmatch '\(Test-Path\s+\$nativeClaudeExe\)\s+-or') {
+    throw "Start-Here.ps1 missing correct syntax: (Test-Path `$nativeClaudeExe) -or"
+}
+
+# 3. Test-ClaudeCommandInFreshShell must NOT use Invoke-CommandSafe
+# Extract function body first, then check
+$tcefFuncText = if ($commonText -match '(?s)function Test-ClaudeCommandInFreshShell\s*\{.*?\n(?=\nfunction \w|\n# =+$)') {
+    $matches[0]
+} else { "" }
+if ($tcefFuncText -and $tcefFuncText -match '\bInvoke-CommandSafe\b') {
+    throw "Test-ClaudeCommandInFreshShell still uses Invoke-CommandSafe"
+}
+
+# 4. Test-ClaudeCommandInFreshShell must use powershell.exe -File
+if ($commonText -notmatch 'powershell\.exe[\s\S]{0,200}-File[\s\S]{0,200}\$tempScript') {
+    throw "Test-ClaudeCommandInFreshShell must use powershell.exe -File"
+}
+
+# 5. Test-ClaudeCommandInFreshShell must have TestSafe/mock branch preserved
+if ($commonText -notmatch 'CCDI_MOCK_INSTALL_DECISION[\s\S]{0,500}CCDI_MOCK_FRESH_SHELL') {
+    throw "Test-ClaudeCommandInFreshShell must preserve CCDI_MOCK_INSTALL_DECISION / CCDI_MOCK_FRESH_SHELL mock branch"
+}
+
+# 6. doctor.ps1 must have Native Install gate for Node/npm
+if ($doctorText -notmatch 'isNativeInstallLikely') {
+    throw "doctor.ps1 Check-Commands must use isNativeInstallLikely for Node/npm error levelling"
+}
+
+# 7. doctor.ps1 must contain the Native Install downgrade text
+if ($doctorText -notmatch '当前为 Native Install，已不影响 Claude Code 基础使用') {
+    throw "doctor.ps1 must contain '当前为 Native Install，已不影响 Claude Code 基础使用'"
+}
+
+# 8. Start-Here.ps1 must NOT use -match "needs_restart" (too broad, catches installed_needs_restart_or_path_fix)
+if ($startHereText -match '-match\s+"needs_restart"') {
+    throw "Start-Here.ps1 must not use -match `"needs_restart`" (too broad for installed_needs_restart_or_path_fix)"
+}
+
+Write-Host "[check] P0 v1.3.3 fix anti-regression OK"
+
 Write-Host "[check] OK"

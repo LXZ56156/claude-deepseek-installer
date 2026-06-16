@@ -230,6 +230,18 @@ function Check-SystemInfo {
 function Check-Commands {
     Write-Step "诊断项目 3/8：命令检测"
 
+    # --- 先判断 Native Install 是否已成功（用于后续 Node/npm 分级）---
+    $nativeClaudeExe = Get-NativeClaudeExePath
+    $nativeBinPath = Get-NativeClaudeBinPath
+    $nativeExeExists = Test-Path $nativeClaudeExe
+    $nativePathOk = $false
+    if ($nativeExeExists) {
+        $nativePathCheck = Test-UserPathContains -TargetPath $nativeBinPath
+        $nativePathOk = $nativePathCheck.Contains
+    }
+    # 初步判断 Native Install 可用：文件存在 + PATH 已配
+    $isNativeInstallLikely = $nativeExeExists -and $nativePathOk
+
     # Node.js 检测
     $nodeInfo = Test-NodeJsInstalled
     if ($nodeInfo.IsSupported) {
@@ -240,8 +252,13 @@ function Check-Commands {
         Add-Suggestion "当前 Node.js 版本为 $($nodeInfo.Version)，Claude Code 需要 v18 或更高版本。请升级 Node.js 后重试。"
     }
     else {
-        Add-CheckResult "Node.js" "ERROR" $nodeInfo.ErrorMessage
-        Add-Suggestion "Node.js 未安装。Claude Code 需要 Node.js 18+。请从 https://nodejs.org 下载安装 LTS 版本。"
+        if ($isNativeInstallLikely) {
+            Add-CheckResult "Node.js" "INFO" "未安装；当前为 Native Install，已不影响 Claude Code 基础使用，仅影响 npm 备用安装/部分开发工具"
+        }
+        else {
+            Add-CheckResult "Node.js" "ERROR" $nodeInfo.ErrorMessage
+            Add-Suggestion "Node.js 未安装。Claude Code 需要 Node.js 18+。请从 https://nodejs.org 下载安装 LTS 版本。"
+        }
     }
 
     # npm 检测
@@ -250,8 +267,13 @@ function Check-Commands {
         Add-CheckResult "npm" "OK" $npmInfo.Version
     }
     else {
-        Add-CheckResult "npm" "ERROR" $npmInfo.ErrorMessage
-        Add-Suggestion "npm 未找到。请检查 Node.js 安装是否完整，或重新安装 Node.js。"
+        if ($isNativeInstallLikely) {
+            Add-CheckResult "npm" "INFO" "未安装；当前为 Native Install，已不影响 Claude Code 基础使用，仅影响 npm 备用安装"
+        }
+        else {
+            Add-CheckResult "npm" "ERROR" $npmInfo.ErrorMessage
+            Add-Suggestion "npm 未找到。请检查 Node.js 安装是否完整，或重新安装 Node.js。"
+        }
     }
 
     $gitVersion = Test-GitInstalled
@@ -367,7 +389,7 @@ function Check-Commands {
         }
     }
 
-    # --- Fresh Shell claude 检测 (v1.3.3 P0-4: 区分安装来源) ---
+    # --- Fresh Shell claude 检测 (v1.3.3 P0-4: 区分安装来源 + P0-3 降级误判) ---
     try {
         $freshShellCheck = Test-ClaudeCommandInFreshShell
         if ($freshShellCheck.Success) {
@@ -375,8 +397,15 @@ function Check-Commands {
         }
         else {
             if ($anyClaudeInstallExists) {
-                Add-CheckResult "Fresh PowerShell claude" "ERROR" "新 PowerShell 中无法识别 claude 命令"
-                Add-Suggestion "Claude Code 安装文件存在，但 fresh shell 中 claude 不可用。请运行「一键修复依赖」修复 PATH。"
+                # v1.3.3 P0-3: 如果 native exe 存在且 User PATH 已就绪，fresh shell 失败不应判定为 ERROR
+                if ($nativeExeExists -and $nativePathOk) {
+                    Add-CheckResult "Fresh PowerShell claude" "WARN" "自动验证未通过，但 Claude Code 文件和 PATH 均已就绪。请新开 PowerShell 手动执行 claude --version；如能显示版本号，则可以正常使用。"
+                    Add-Suggestion "关闭当前窗口并重新打开 PowerShell，输入 claude --version 手动验证。如果手动验证成功，则无需修复。如仍失败，再运行「一键修复依赖」或「一键诊断」。"
+                }
+                else {
+                    Add-CheckResult "Fresh PowerShell claude" "ERROR" "新 PowerShell 中无法识别 claude 命令"
+                    Add-Suggestion "Claude Code 安装文件存在，但 fresh shell 中 claude 不可用。请运行「一键修复依赖」修复 PATH。"
+                }
             }
             else {
                 Add-CheckResult "Fresh PowerShell claude" "INFO" "未检测到 Claude Code 安装文件，跳过 fresh shell 验证"
@@ -971,7 +1000,14 @@ function Write-QuickSummary {
             }
         }
         else {
-            Add-ReportLine "  Windows 原生 Claude Code: CLI 可用 ($claudeVer)，Node.js 需升级"
+            # v1.3.3 P0-3: Node.js 未安装但可能是 Native Install 场景
+            $nodeCheckForSummary = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "Node.js" } | Select-Object -First 1
+            if ($nodeCheckForSummary -and $nodeCheckForSummary.Status -eq "INFO") {
+                Add-ReportLine "  Windows 原生 Claude Code: 可用 ($claudeVer)，Node.js 未安装（Native Install 不影响基础使用）"
+            }
+            else {
+                Add-ReportLine "  Windows 原生 Claude Code: CLI 可用 ($claudeVer)，Node.js 需升级"
+            }
         }
     }
     elseif ($claudeStatus -eq "WARN") {
@@ -1082,7 +1118,11 @@ function Write-QuickSummary {
     }
 
     if (-not $nodeInfo.IsSupported) {
-        Add-ReportLine "    - 运行「一键修复依赖.cmd」安装 Node.js"
+        # v1.3.3 P0-3: 如果 Node.js 被分级为 INFO（Native Install 已成功），不要建议安装 Node.js
+        $nodeCheckResult = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "Node.js" } | Select-Object -First 1
+        if (-not $nodeCheckResult -or $nodeCheckResult.Status -eq "ERROR") {
+            Add-ReportLine "    - 运行「一键修复依赖.cmd」安装 Node.js"
+        }
     }
     if (-not $claudeVer) {
         Add-ReportLine "    - 运行「00-点我开始安装.cmd」安装 Claude Code"
@@ -1096,8 +1136,16 @@ function Write-QuickSummary {
     if ($userPathMissing) {
         Add-ReportLine "    - 运行「一键修复依赖.cmd」修复 User PATH"
     }
-    if ($claudeVer -and $nodeInfo.IsSupported -and $configInfo.Exists -and $coreErrorCount -eq 0 -and -not $userPathMissing) {
-        Add-ReportLine "    - 所有核心检测正常，无需额外操作"
+    if ($claudeVer -and $configInfo.Exists -and $coreErrorCount -eq 0 -and -not $userPathMissing) {
+        $nodeCheckForFinal = $script:DoctorState.CheckResults | Where-Object { $_.Name -eq "Node.js" } | Select-Object -First 1
+        $nodeDowngraded = ($nodeCheckForFinal -and $nodeCheckForFinal.Status -eq "INFO")
+        if ($nodeInfo.IsSupported -or $nodeDowngraded) {
+            Add-ReportLine "    - 所有核心检测正常，无需额外操作"
+        }
+        else {
+            Add-ReportLine "    - Claude Code 和 DeepSeek API 基本可用。"
+            Add-ReportLine "    - 存在可选环境提示，详见下方。"
+        }
     }
     Add-ReportLine ""
 }
