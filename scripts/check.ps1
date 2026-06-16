@@ -2791,7 +2791,7 @@ if ($commonTextForCheck -notmatch '命令超时[\s\S]{0,200}ConvertTo-SafeLogTex
 }
 
 # Lightweight TestSafe test: Verify Mask-ApiKey works on sk- keys in log text
-$testKey = "sk-abcdefghijklmnopqrstuvwxyz1234567890"
+$testKey = "sk-test" + ("x" * 42)
 $testLogText = "Authorization: Bearer $testKey`nANTHROPIC_AUTH_TOKEN=$testKey"
 $safeLogText = ConvertTo-SafeLogText -Text $testLogText
 if ($safeLogText -match [regex]::Escape($testKey)) {
