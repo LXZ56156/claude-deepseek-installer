@@ -1043,13 +1043,23 @@ catch {
         # 写入临时 .ps1（UTF-8 no BOM）
         [System.IO.File]::WriteAllText($tempScript, $probeScript, (New-Object System.Text.UTF8Encoding($false)))
 
+        # 解析 powershell.exe 完整路径，确保兼容性
+        $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+        if (-not (Test-Path $psExe)) { $psExe = "powershell.exe" }
+
+        # 给 $tempScript 安全加引号，防止路径含空格时被错误拆分
+        $quotedTempScript = ConvertTo-CommandLineArgument -Argument $tempScript
+        $argumentLine = "-NoProfile -ExecutionPolicy Bypass -File $quotedTempScript"
+
         # 直接使用 Start-Process + powershell.exe -File，不通过 Invoke-CommandSafe / cmd.exe
-        $proc = Start-Process -FilePath "powershell.exe" `
-            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tempScript) `
+        $proc = Start-Process -FilePath $psExe `
+            -ArgumentList $argumentLine `
             -NoNewWindow `
             -PassThru `
             -RedirectStandardOutput $tempOut `
             -RedirectStandardError $tempErr
+
+        Write-Log "DEBUG" "Test-ClaudeCommandInFreshShell: powershell probe started, psExe=$psExe, tempScript=$tempScript"
 
         # 等待子进程完成，最多 30 秒
         $finished = $proc.WaitForExit(30000)

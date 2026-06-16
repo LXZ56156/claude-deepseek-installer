@@ -3140,9 +3140,16 @@ if ($tcefFuncText -and $tcefFuncText -match '\bInvoke-CommandSafe\b') {
     throw "Test-ClaudeCommandInFreshShell still uses Invoke-CommandSafe"
 }
 
-# 4. Test-ClaudeCommandInFreshShell must use powershell.exe -File
-if ($commonText -notmatch 'powershell\.exe[\s\S]{0,200}-File[\s\S]{0,200}\$tempScript') {
-    throw "Test-ClaudeCommandInFreshShell must use powershell.exe -File"
+# 4. Test-ClaudeCommandInFreshShell must use powershell.exe -File with ConvertTo-CommandLineArgument
+if ($commonText -notmatch 'ConvertTo-CommandLineArgument[\s\S]{0,200}\$tempScript') {
+    throw "Test-ClaudeCommandInFreshShell must use ConvertTo-CommandLineArgument for $tempScript"
+}
+# Must NOT use array-style -ArgumentList @(...) with bare $tempScript
+$tcefFuncTextForR1 = if ($commonText -match '(?s)function Test-ClaudeCommandInFreshShell\s*\{.*?\n(?=function Refresh-CurrentProcessPath)') {
+    $matches[0]
+} else { "" }
+if ($tcefFuncTextForR1 -and $tcefFuncTextForR1 -match '-ArgumentList\s+@\(') {
+    throw "Test-ClaudeCommandInFreshShell must NOT use -ArgumentList @() array style (spaces in path break it)"
 }
 
 # 5. Test-ClaudeCommandInFreshShell must have TestSafe/mock branch preserved
@@ -3166,5 +3173,47 @@ if ($startHereText -match '-match\s+"needs_restart"') {
 }
 
 Write-Host "[check] P0 v1.3.3 fix anti-regression OK"
+
+# ============================================================
+# P0 v1.3.3 residue fix anti-regression: R1 (spaces in path) + R2 (WARN status + next steps)
+# ============================================================
+Write-Host "[check] P0 residue fix anti-regression (R1: path quoting, R2: WARN status)"
+
+# 9. Start-Here.ps1 must contain freshShellStatusTag for dynamic WARN/ERROR grading
+if ($startHereText -notmatch '\$freshShellStatusTag') {
+    throw "Start-Here.ps1 must contain `$freshShellStatusTag for P0-R2 WARN/ERROR grading"
+}
+
+# 10. Start-Here.ps1 must NOT hardcode [ERROR] for Fresh PowerShell when userPathOk
+if ($startHereText -match '\(\$freshShellOk\)\s*\{\s*"\[OK\]"\s*\}\s*else\s*\{\s*"\[ERROR\]"\s*\}') {
+    throw "Start-Here.ps1 must NOT hardcode else [ERROR] for Fresh PowerShell (use `$freshShellStatusTag)"
+}
+
+# 11. Start-Here.ps1 must contain the precise next-steps branch for fresh-shell-fail with userPathOk
+if ($startHereText -notmatch '安装和配置已完成，但自动启动验证未通过') {
+    throw "Start-Here.ps1 must contain '安装和配置已完成，但自动启动验证未通过' for P0-R2"
+}
+if ($startHereText -notmatch '如果能显示版本号，可以正常使用') {
+    throw "Start-Here.ps1 must contain '如果能显示版本号，可以正常使用' for manual verification guidance"
+}
+
+# 12. The precise branch must appear before the generic ConfigWritten branch
+$nextStepsSection = if ($startHereText -match '(?s)七、下一步说明.*?八、售后提示') {
+    $matches[0]
+} else { "" }
+if ($nextStepsSection) {
+    $preciseIdx = $nextStepsSection.IndexOf('安装和配置已完成，但自动启动验证未通过')
+    $genericIdx = $nextStepsSection.IndexOf('安装完成不代表 API 永久可用')
+    if ($preciseIdx -ge 0 -and $genericIdx -ge 0 -and $preciseIdx -gt $genericIdx) {
+        throw "Precise fresh-shell-fail branch must appear BEFORE generic ConfigWritten branch in next steps"
+    }
+}
+
+# 13. needs_restart match must remain precise (no regression)
+if ($startHereText -match '-match\s+"needs_restart"') {
+    throw "Start-Here.ps1 must NOT use -match `"needs_restart`" (P0-R2 regression guard)"
+}
+
+Write-Host "[check] P0 residue fix anti-regression OK"
 
 Write-Host "[check] OK"

@@ -1212,6 +1212,67 @@ x-api-key: $TestApiKey
          $freshShellFuncBody -match 'Remove-Item.*Force.*temp')
     } "Test-ClaudeCommandInFreshShell 未清理临时文件"
 
+    # --- P0-R1: fresh shell 路径空格防护 ---
+    Assert "P0-R1: Test-ClaudeCommandInFreshShell 不得使用 -ArgumentList 数组传递 -File" {
+        $freshShellFuncBody -notmatch '-ArgumentList\s+@\('
+    } "Test-ClaudeCommandInFreshShell 仍使用 -ArgumentList @() 数组，路径含空格时会拆分"
+
+    Assert "P0-R1: Test-ClaudeCommandInFreshShell 使用 ConvertTo-CommandLineArgument 加引号" {
+        $freshShellFuncBody -match 'ConvertTo-CommandLineArgument'
+    } "Test-ClaudeCommandInFreshShell 未调用 ConvertTo-CommandLineArgument 给 $tempScript 加引号"
+
+    Assert "P0-R1: Test-ClaudeCommandInFreshShell 使用 `$argumentLine 传递参数" {
+        ($freshShellFuncBody -match '\$argumentLine' -and
+         $freshShellFuncBody -match '-ArgumentList\s+\$argumentLine')
+    } "Test-ClaudeCommandInFreshShell 未使用 `$argumentLine 单字符串传参"
+
+    Assert "P0-R1: Test-ClaudeCommandInFreshShell 解析 System32 powershell.exe 路径" {
+        $freshShellFuncBody -match 'System32\\WindowsPowerShell\\v1\.0\\powershell\.exe'
+    } "Test-ClaudeCommandInFreshShell 未解析 System32\WindowsPowerShell\v1.0\powershell.exe"
+
+    # --- P0-R2: 安装报告 fresh shell 失败 WARN + 精确下一步 ---
+    Assert "P0-R2: Start-Here.ps1 含 `$freshShellStatusTag 分级变量" {
+        $startHereText -match '\$freshShellStatusTag'
+    } "Start-Here.ps1 缺失 `$freshShellStatusTag 分级变量"
+
+    Assert "P0-R2: Start-Here.ps1 Fresh PowerShell 验证不再硬编码 [ERROR]" {
+        $startHereText -notmatch '\(`$freshShellOk\)\s*\{\s*"\[OK\]"\s*\}\s*else\s*\{\s*"\[ERROR\]"\s*\}.*Fresh PowerShell'
+    } "Start-Here.ps1 Fresh PowerShell 验证行仍硬编码 else [ERROR]"
+
+    Assert "P0-R2: Start-Here.ps1 含 fresh-shell-fail 精确下一步分支" {
+        $startHereText -match '\$script:ClaudeInstalled -and \$script:ConfigWritten -and \$script:ApiTestPassed -and \$userPathOk -and -not \$freshShellOk'
+    } "Start-Here.ps1 缺失 installed+configured+apiPassed+pathOk+freshFail 精确分支"
+
+    Assert "P0-R2: 精确分支出现在通用分支之前" {
+        # 精确分支（含 ApiTestPassed+userPathOk+freshShellOk）必须在纯 ConfigWritten 分支之前
+        # 在"七、下一步说明"区块中，含 ApiTestPassed 的 elseif 应出现在纯 ConfigWritten 的 elseif 之前
+        $nextStepsBlock = if ($startHereText -match '(?s)七、下一步说明\r?\n.*?(?=八、售后提示)') {
+            $matches[0]
+        } else { "" }
+        # 搜索精确分支标记：包含 freshShellOk 的 elseif 行
+        $preciseMatch = $nextStepsBlock -match 'ApiTestPassed.*userPathOk.*freshShellOk'
+        # 搜索通用分支标记（elseif 中的 ConfigWritten 条件，无引导号）
+        $genericMatch = $nextStepsBlock -match 'ClaudeInstalled -and \$script:ConfigWritten\)\s*\{'
+        # 精确分支的整个 condition 文本应在通用分支的条件文本之前出现
+        if ($preciseMatch -and $genericMatch) {
+            $freshShellOkIdx = $nextStepsBlock.IndexOf('freshShellOk')
+            $genericBranchIdx = $nextStepsBlock.IndexOf('安装完成不代表 API 永久可用')
+            ($freshShellOkIdx -gt 0 -and $genericBranchIdx -gt 0 -and $freshShellOkIdx -lt $genericBranchIdx)
+        } else {
+            $preciseMatch -and $genericMatch
+        }
+    } "精确分支必须在通用 ConfigWritten 分支之前（freshShellOk 出现早于'安装完成不代表 API 永久可用'）"
+
+    Assert "P0-R2: 精确分支含 claude --version 手动验证指引" {
+        ($startHereText -match '安装和配置已完成，但自动启动验证未通过' -and
+         $startHereText -match '如果能显示版本号，可以正常使用' -and
+         $startHereText -match '如果仍失败，请运行')
+    } "精确分支缺失 claude --version 手动验证指引或降级文案"
+
+    Assert "P0-R2: needs_restart 精确匹配逻辑未回退" {
+        $startHereText -notmatch '-match\s+"needs_restart"'
+    } "Start-Here.ps1 回退到 -match needs_restart 通配逻辑"
+
     # --- P0-3: doctor Node/npm 错误级别 ---
     Assert "P0-3: doctor.ps1 Node.js 检测根据 Native Install 降级" {
         $doctorText -match 'isNativeInstallLikely.*Add-CheckResult\s+"Node\.js"\s+"INFO"' -or

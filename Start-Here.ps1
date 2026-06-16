@@ -991,6 +991,26 @@ function Step-GenerateReport {
         $userPathOk = $true
     }
 
+    # v1.3.3 P0-R2: fresh shell 状态分级（userPathOk+freshShellFail → WARN 而非 ERROR）
+    $freshShellStatusTag = if ($freshShellOk) {
+        "[OK]"
+    }
+    elseif ($script:ClaudeInstalled -and $userPathOk) {
+        "[WARN]"
+    }
+    else {
+        "[ERROR]"
+    }
+    $freshShellStatusText = if ($freshShellOk) {
+        "通过 - $freshShellResult"
+    }
+    elseif ($script:ClaudeInstalled -and $userPathOk) {
+        "$($freshShellResult)（自动验证未通过；请新开 PowerShell 手动验证）"
+    }
+    else {
+        $freshShellResult
+    }
+
     $claudeCommandUsable = if ($claudeVer) {
         if ($freshShellOk) { "可直接运行" }
         elseif ($userPathOk) { "PATH 已配置，但需重启终端验证" }
@@ -1058,7 +1078,7 @@ npm: $(if ($npmInfo.Installed) { "$($npmInfo.Version)" } else { "不可用" })
 DeepSeek 配置: $(if ($script:ConfigWritten) { "已配置" } else { "未配置" })
 API 测试: $apiTestStatus$(if ($script:ApiTestFailed) { " ($script:ApiTestFailReason)" } elseif ($script:ApiTestSkipped) { " - 未验证 API 是否可用" } else { "" })
 User PATH: $userPathStatus
-Fresh PowerShell 验证: $freshShellResult
+Fresh PowerShell 验证: $freshShellStatusText
 整体状态: $overallStatus
 $(if ($script:TestSafeMode) { "测试安全模式流程完成，不代表真实安装/API 已验证。" } else { "" })
 $(if (($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart"))) { "NEEDS_RESTART - 需要关闭窗口重新运行「00-点我开始安装.cmd」继续安装。" } else { "" })
@@ -1109,7 +1129,7 @@ $deepSeekConfigSummary
 $apiTestSummary
 $claudeLaunchSummary
 	$(if ($userPathOk) { "[OK]" } else { "[ERROR]" }) User PATH: $userPathStatus
-	$(if ($freshShellOk) { "[OK]" } else { "[ERROR]" }) Fresh PowerShell 验证: $freshShellResult
+	$freshShellStatusTag Fresh PowerShell 验证: $freshShellStatusText
 
 Claude 命令可用性: $claudeCommandUsable
 $overallStatus
@@ -1123,6 +1143,19 @@ $(if ($script:TestSafeMode) {
 } elseif (($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart"))) {
 "关闭该窗口后重新双击「00-点我开始安装.cmd」继续安装流程。
 脚本会继续安装 Claude Code 并配置 DeepSeek。"
+} elseif ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestPassed -and $userPathOk -and -not $freshShellOk) {
+"安装和配置已完成，但自动启动验证未通过。
+
+请关闭当前窗口，新开 PowerShell 手动执行：
+claude --version
+
+如果能显示版本号，可以正常使用。
+
+如果仍失败，请运行：
+1. 「一键修复依赖.cmd」
+2. 「一键诊断.cmd」
+
+如需售后，只发送 report.txt，不要发送 logs、backup、settings.json 或完整 API Key。"
 } elseif ($script:ClaudeInstalled -and $script:ConfigWritten) {
 "安装完成不代表 API 永久可用。
 如果 Claude Code 能启动但模型调用失败，请优先检查：
