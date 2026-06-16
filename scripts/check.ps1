@@ -1312,11 +1312,11 @@ if ($claudeInstallText -match 'function Install-ClaudeCodeAuto[\s\S]{0,5000}Invo
 }
 
 # 28. Native Install failure must show user-friendly message, NOT PowerShell stack traces
-if ($claudeInstallText -notmatch 'Claude 官方安装通道执行失败，正在自动切换国内 npm 镜像安装') {
-    throw "Native Install failure must show user-friendly message about automatic npm mirror fallback"
+if ($claudeInstallText -notmatch 'Claude 官方安装通道执行失败，正在自动切换备用安装通道') {
+    throw "Native Install failure must show user-friendly message about fallback to alternate channel"
 }
-if ($claudeInstallText -notmatch '这通常是官方下载通道不稳定或被网络拦截，不代表安装失败') {
-    throw "Native Install failure must reassure user that install has not failed"
+if ($claudeInstallText -notmatch '这通常是官方下载通道不稳定或被网络拦截，不代表整体安装失败') {
+    throw "Native Install failure must reassure user that this is not an overall failure"
 }
 
 # 29. Native Install error detail must be logged, not displayed to user
@@ -2834,5 +2834,125 @@ if ($safeLogText -notmatch 'sk\*{4,}') {
 }
 
 Write-Host "[check] P6 anti-regression OK"
+
+# ============================================================
+# P7 v1.3.2 最终补修 (Timeout, Native fallback verify, wording, config check)
+# ============================================================
+Write-Host "[check] P7 anti-regression: v1.3.2 final patches"
+
+$claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+$startHereText = Get-Content -Path (Join-Path $RootDir "Start-Here.ps1") -Raw -Encoding UTF8
+
+# --- 测试 1: Invoke-VisibleFileDownload 必须真正使用 TimeoutSec ---
+
+# 1a. 必须定义 New-CcdiTimeoutWebClient 或等价 timeout web client
+if ($claudeInstallText -notmatch 'New-CcdiTimeoutWebClient') {
+    throw "claude-install.ps1 must define New-CcdiTimeoutWebClient for download timeout support"
+}
+
+# 1b. 必须设置 request.Timeout
+if ($claudeInstallText -notmatch '\.Timeout\s*=') {
+    throw "claude-install.ps1 downloader must set timeout from TimeoutSec"
+}
+
+# 1c. 必须设置 ReadWriteTimeout
+if ($claudeInstallText -notmatch 'ReadWriteTimeout') {
+    throw "claude-install.ps1 downloader must set ReadWriteTimeout to avoid stalled downloads"
+}
+
+# 1d. 必须返回 failed_download_timeout 状态
+if ($claudeInstallText -notmatch 'failed_download_timeout') {
+    throw "claude-install.ps1 Invoke-VisibleFileDownload must return failed_download_timeout on timeout"
+}
+
+# 1e. 不再使用未经 timeout 设置的 plain WebClient.DownloadFile
+if ($claudeInstallText -match 'New-Object\s+System\.Net\.WebClient[\s\S]{0,300}DownloadFile' -and
+    $claudeInstallText -notmatch 'New-CcdiTimeoutWebClient') {
+    throw "claude-install.ps1 Invoke-VisibleFileDownload still uses plain WebClient.DownloadFile without timeout"
+}
+
+# --- 测试 2: Native failed branch 必须后验验证 ---
+
+# 2a. 必须包含后验验证日志文本
+if ($claudeInstallText -notmatch 'Native Install 失败后验验证') {
+    throw "claude-install.ps1 Native failed branch must perform post-install claude verification"
+}
+
+# 2b. 必须处理 claude 已可用的情况
+if ($claudeInstallText -notmatch 'Native Install returned failure but claude is usable') {
+    throw "claude-install.ps1 Native failed branch must treat usable claude as success"
+}
+
+# 2c. 后验成功必须写 claudeInstallMethod = "official_native"
+# 匹配 Native failed 分支中后验成功的 Update-CcdiState 块
+$nativeFailedBranch = [regex]::Match($claudeInstallText, '(?s)Native Install 失败后验验证.*?\breturn \$result\b')
+if ($nativeFailedBranch.Success) {
+    if ($nativeFailedBranch.Value -notmatch 'claudeInstallMethod\s*=\s*"official_native"') {
+        throw "claude-install.ps1 Native post-verification success must write claudeInstallMethod=official_native"
+    }
+}
+
+# 2d. 后验验证必须在进入 winget fallback 之前执行
+# (顺序: Native failed → 后验验证 → winget. 不应先 winget 后验)
+$nativeToWinget = [regex]::Match($claudeInstallText, '(?s)Native Install 失败后验验证.*?尝试通过 winget 安装 Claude Code')
+if (-not $nativeToWinget.Success) {
+    throw "claude-install.ps1 native failed branch post-verification must appear before winget fallback"
+}
+
+# --- 测试 3: 文案不能误导为直接切换 npm ---
+
+$badPhrases = @(
+    'Claude 官方安装通道执行失败，正在自动切换国内 npm 镜像安装',
+    '官方 Native Install 和 npm 镜像安装均失败'
+)
+
+foreach ($p in $badPhrases) {
+    if ($claudeInstallText -match [regex]::Escape($p)) {
+        throw "claude-install.ps1 misleading fallback wording remains: $p"
+    }
+}
+
+# 必须出现"备用安装通道"
+if ($claudeInstallText -notmatch '备用安装通道') {
+    throw "claude-install.ps1 fallback wording should mention 备用安装通道"
+}
+
+# 必须出现 winget 在 npm 之前（winget.*npmmirror 或 winget.*npm）
+if ($claudeInstallText -notmatch 'winget.*npmmirror|winget.*npm.*镜像') {
+    throw "claude-install.ps1 fallback wording should mention winget before npmmirror/npm"
+}
+
+# --- 测试 4: 完成页必须用 Get-DeepSeekConfigStatus 判断配置完整性 ---
+
+# 4a. Start-Here.ps1 Show-CompletionPage 不能继续用 HasEnv 判断 API Key
+#  匹配 "HasEnv[\s\S]{0,200}DeepSeek API Key 尚未配置" — HasEnv 和 DeepSeek 提示在同一上下文
+if ($startHereText -match 'HasEnv[\s\S]{0,400}DeepSeek API Key 尚未配置') {
+    throw "Start-Here.ps1 completion page must NOT use HasEnv as API Key configured signal"
+}
+
+# 4b. Start-Here.ps1 必须调用 Get-DeepSeekConfigStatus
+if ($startHereText -notmatch 'Get-DeepSeekConfigStatus') {
+    throw "Start-Here.ps1 completion/fallback must use Get-DeepSeekConfigStatus for API Key configuration status"
+}
+
+# 4c. 必须出现 IsConfigured
+if ($startHereText -notmatch 'IsConfigured') {
+    throw "Start-Here.ps1 must check IsConfigured from Get-DeepSeekConfigStatus"
+}
+
+# --- 测试 5: 空 env 场景验证 ---
+
+# 5a. Get-DeepSeekConfigStatus 必须检测空 env 对象
+$configWriterText = Get-Content -Path (Join-Path $RootDir "lib\config-writer.ps1") -Raw -Encoding UTF8
+if ($configWriterText -notmatch 'env 字段为空对象|env 字段为空（null）') {
+    throw "config-writer.ps1 Get-DeepSeekConfigStatus must detect empty/null env field"
+}
+
+# 5b. 必须检测 ANTHROPIC_AUTH_TOKEN 为空
+if ($configWriterText -notmatch '未设置 API Key|ANTHROPIC_AUTH_TOKEN[\s\S]{0,200}IsConfigured') {
+    throw "config-writer.ps1 Get-DeepSeekConfigStatus must detect missing ANTHROPIC_AUTH_TOKEN"
+}
+
+Write-Host "[check] P7 anti-regression OK"
 
 Write-Host "[check] OK"

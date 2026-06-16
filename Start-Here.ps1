@@ -506,8 +506,12 @@ function Step-InstallClaudeCode {
             Write-Success "最终验证: Claude Code 已安装可用: $($finalCheck.Version)"
             Write-Log "INFO" "兜底检测通过: claude 可用, 覆盖安装结果 Success=true"
 
-            if (-not $configInfo.Exists -or -not $configInfo.HasEnv) {
-                Write-Warning "Claude Code 已安装，但 DeepSeek API Key 尚未配置。"
+            $configStatus = Get-DeepSeekConfigStatus
+            if (-not $configStatus.IsConfigured) {
+                Write-Warning "Claude Code 已安装，但 DeepSeek API Key 尚未配置或配置不完整。"
+                if ($configStatus.ErrorMessage) {
+                    Write-Info "原因: $($configStatus.ErrorMessage)"
+                }
                 Write-Info "下一步：继续配置 DeepSeek API Key。"
             }
             return $true
@@ -1171,8 +1175,12 @@ function Show-CompletionPage {
             Write-Host ""
             Write-Success "Claude Code 已安装: $($finalClaude.Version)"
             Write-Success "安装来源: $($finalClaude.Source)"
-            if (-not $finalConfig.Exists -or -not $finalConfig.HasEnv) {
-                Write-Warning "DeepSeek API Key 尚未配置。"
+            $configStatus = Get-DeepSeekConfigStatus
+            if (-not $configStatus.IsConfigured) {
+                Write-Warning "DeepSeek API Key 尚未配置或配置不完整。"
+                if ($configStatus.ErrorMessage) {
+                    Write-Info "原因: $($configStatus.ErrorMessage)"
+                }
                 Write-Info "请运行 configure-deepseek.ps1 配置 API Key，"
                 Write-Info "或在主菜单中选择 [1] 一键安装后配置。"
             }

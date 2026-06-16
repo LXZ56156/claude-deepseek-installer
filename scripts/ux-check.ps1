@@ -794,6 +794,69 @@ x-api-key: $TestApiKey
     Write-Host ""
 
     # ============================================================
+    # 20. v1.3.2 最终补修 UX 检查（Timeout/后验/文案/配置状态）
+    # ============================================================
+    Write-CheckHeader "20. v1.3.2 最终补修 UX 检查"
+
+    $claudeInstallPath = Join-Path $ScriptRoot "lib\claude-install.ps1"
+    $claudeInstallText = Get-Content $claudeInstallPath -Raw -Encoding UTF8
+
+    # 20a. 下载超时友好提示
+    Assert "Invoke-VisibleFileDownload 提示超时而非长时间无响应" {
+        $claudeInstallText -match '如果下载超时，将自动切换备用安装通道'
+    } "下载超时提示文案未更新"
+
+    # 20b. Native 失败后不再误导"直接切换npm"
+    Assert "Native Install 失败不写'自动切换国内 npm 镜像安装'" {
+        $claudeInstallText -notmatch 'Claude 官方安装通道执行失败，正在自动切换国内 npm 镜像安装'
+    } "仍包含过时文案'自动切换国内 npm 镜像安装'"
+
+    # 20c. 必须写"备用安装通道"
+    Assert "Native Install 失败使用'备用安装通道'措辞" {
+        $claudeInstallText -match '备用安装通道'
+    } "未出现'备用安装通道'措辞"
+
+    # 20d. 必须提到 winget 在 npmmirror 之前
+    Assert "fallback 说明 winget 优先于 npm" {
+        $claudeInstallText -match 'winget.*npmmirror|winget.*npm 镜像'
+    } "fallback 文案未体现 winget → npm 顺序"
+
+    # 20e. 全失败时提到三个通道
+    Assert "全部失败时提到 Native/winget/npm 三个通道" {
+        $claudeInstallText -notmatch '官方 Native Install 和 npm 镜像安装均失败'
+    } "仍写'官方 Native Install 和 npm 镜像安装均失败'，遗漏 winget"
+
+    # 20f. 完成页配置状态检查
+    $startHerePath = Join-Path $ScriptRoot "Start-Here.ps1"
+    $startHereText = Get-Content $startHerePath -Raw -Encoding UTF8
+
+    Assert "完成页不再用 HasEnv 判断 API Key" {
+        $startHereText -notmatch 'HasEnv[\s\S]{0,200}DeepSeek API Key 尚未配置'
+    } "完成页仍用 HasEnv 判断 API Key 状态"
+
+    Assert "完成页使用 Get-DeepSeekConfigStatus" {
+        $startHereText -match 'Get-DeepSeekConfigStatus'
+    } "完成页未调用 Get-DeepSeekConfigStatus"
+
+    Assert "配置不完整提示更详细" {
+        $startHereText -match '尚未配置或配置不完整'
+    } "配置不完整时提示未区分具体原因"
+
+    # 20g. 空 env 对象场景
+    $configWriterPath = Join-Path $ScriptRoot "lib\config-writer.ps1"
+    $configWriterText = Get-Content $configWriterPath -Raw -Encoding UTF8
+
+    Assert "Get-DeepSeekConfigStatus 检测空 env" {
+        $configWriterText -match 'env 字段为空对象|env 字段为空（null）'
+    } "Get-DeepSeekConfigStatus 未检测空 env"
+
+    Assert "Get-DeepSeekConfigStatus 检测缺失 API Key" {
+        $configWriterText -match '未设置 API Key'
+    } "Get-DeepSeekConfigStatus 未检测缺失 ANTHROPIC_AUTH_TOKEN"
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""

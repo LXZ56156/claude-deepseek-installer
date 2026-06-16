@@ -2233,6 +2233,47 @@ function Invoke-VisibleInstallCommand {
     return $result
 }
 
+function New-CcdiTimeoutWebClient {
+    <#
+    .SYNOPSIS
+        创建带超时控制的 WebClient 子类。
+        解决默认 WebClient.DownloadFile 不设 Timeout 导致半连通/TLS 阻塞时
+        长期卡死的隐患。
+    .PARAMETER TimeoutSec
+        超时秒数，默认 30。同时设置 request.Timeout 和 ReadWriteTimeout。
+    #>
+    param(
+        [int]$TimeoutSec = 30
+    )
+
+    if (-not ("CcdiTimeoutWebClient" -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Net;
+
+public class CcdiTimeoutWebClient : WebClient {
+    public int Timeout { get; set; }
+
+    protected override WebRequest GetWebRequest(Uri address) {
+        WebRequest request = base.GetWebRequest(address);
+        request.Timeout = Timeout;
+        if (request is HttpWebRequest) {
+            ((HttpWebRequest)request).ReadWriteTimeout = Timeout;
+            ((HttpWebRequest)request).AllowAutoRedirect = true;
+            ((HttpWebRequest)request).MaximumAutomaticRedirections = 3;
+        }
+        return request;
+    }
+}
+"@ -ErrorAction Stop
+    }
+
+    $client = New-Object CcdiTimeoutWebClient
+    $client.Timeout = [Math]::Max(1, $TimeoutSec) * 1000
+    $client.Headers.Add("User-Agent", "Mozilla/5.0 CCDI")
+    return $client
+}
+
 function Invoke-VisibleFileDownload {
     <#
     .SYNOPSIS
@@ -2276,7 +2317,7 @@ function Invoke-VisibleFileDownload {
 
     Write-Info "正在下载 Claude 官方安装脚本..."
     Write-Info "下载地址: $Url"
-    Write-Info "如果长时间无响应，将自动切换 npm 镜像安装。"
+    Write-Info "如果下载超时，将自动切换备用安装通道（winget → npm 镜像）。"
     Write-Log "INFO" "Invoke-VisibleFileDownload: Url=$Url, OutputPath=$OutputPath, TimeoutSec=$TimeoutSec"
     Write-Host ""
 
@@ -2292,8 +2333,7 @@ function Invoke-VisibleFileDownload {
         # 使用 WebClient.DownloadFile 进行二进制安全下载。
         # 不能用 Invoke-WebRequest 把 response.Content 当 string 再 [IO.File]::WriteAllText，
         # 某些 Windows 环境下会导致文件内容变成十进制字节串（如 "112 97 114 97 109 40 ..."）。
-        $client = New-Object System.Net.WebClient
-        $client.Headers.Add("User-Agent", "Mozilla/5.0 CCDI")
+        $client = New-CcdiTimeoutWebClient -TimeoutSec $TimeoutSec
         $client.DownloadFile($Url, $OutputPath)
 
         $sw.Stop()
@@ -2357,6 +2397,8 @@ function Invoke-VisibleFileDownload {
         if ($_.Exception -is [System.Net.WebException]) {
             $webEx = $_.Exception
             if ($webEx.Status -eq [System.Net.WebExceptionStatus]::Timeout) {
+                $result.Error = "下载超时 (${TimeoutSec}秒): $Url"
+                $result.Status = "failed_download_timeout"
                 Write-Log "ERROR" "Invoke-VisibleFileDownload 超时: Url=$Url, TimeoutSec=$TimeoutSec"
             }
             elseif ($webEx.Status -eq [System.Net.WebExceptionStatus]::NameResolutionFailure) {
@@ -2671,8 +2713,9 @@ function Install-ClaudeCodeAuto {
             }
         }
         else {
-            Write-Warning "Claude 官方安装通道执行失败，正在自动切换国内 npm 镜像安装。"
-            Write-Info "这通常是官方下载通道不稳定或被网络拦截，不代表安装失败。"
+            Write-Warning "Claude 官方安装通道执行失败，正在自动切换备用安装通道。"
+            Write-Info "下一步将优先尝试 winget；如果 winget 不可用或验证失败，再切换 npmmirror 镜像。"
+            Write-Info "这通常是官方下载通道不稳定或被网络拦截，不代表整体安装失败。"
             Write-Log "WARN" "Native Install 详细错误: $($nativeResult.Error)"
 
             # 文件占用检测（使用 RawError 保留原始错误特征）
@@ -2690,12 +2733,38 @@ function Install-ClaudeCodeAuto {
                 Write-Info "不要删除 %USERPROFILE%\.claude\settings.json。"
             }
 
-            Write-Info "将自动切换 npmmirror 镜像安装..."
+            # 后验验证：官方安装器可能实际已成功安装 claude，但 ExitCode 异常或子进程
+            # 返回非零，导致脚本误判。在进入 winget 之前先检测 claude 是否其实已可用。
+            Refresh-CurrentProcessPath
+            $nativeFailedVerify = Test-ClaudeCommandExisting
+            Write-Log "INFO" "Native Install 失败后验验证: Exists=$($nativeFailedVerify.Exists), Usable=$($nativeFailedVerify.Usable), Version=$($nativeFailedVerify.Version), Path=$($nativeFailedVerify.Path)"
+
+            if ($nativeFailedVerify.Exists -and $nativeFailedVerify.Usable) {
+                Write-Success "Native Install 后验验证通过: $($nativeFailedVerify.Version)"
+                Write-Log "INFO" "Native Install returned failure but claude is usable; treating as success."
+
+                $result.Success = $true
+                $result.Method = "official_native"
+                $result.Status = "installed"
+                $result.Version = $nativeFailedVerify.Version
+                $result.WasAlreadyInstalled = $false
+
+                Update-CcdiState -Updates @{
+                    claudeWasAlreadyInstalled = $false
+                    claudeInstallMethod       = "official_native"
+                    claudeInstallStatus       = "installed"
+                    claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                } | Out-Null
+
+                return $result
+            }
+
+            Write-Info "Native Install 后验验证未通过，继续备用安装通道..."
         }
     }
     else {
         Write-Warning "Claude 官方安装通道不可用: $($officialNetwork.Details)"
-        Write-Info "将自动切换 npmmirror 国内镜像安装..."
+        Write-Info "将自动切换备用安装通道（winget → npmmirror 镜像）。"
     }
 
     # ============================================================
@@ -2836,7 +2905,7 @@ function Install-ClaudeCodeAuto {
                     Write-Host ""
                     $mirrorResult = Install-ClaudeCodeNpmMirror
                     if (-not $mirrorResult.Success) {
-                        Write-Error-Msg "官方 Native Install 和 npm 镜像安装均失败。"
+                        Write-Error-Msg "官方 Native Install、winget 和 npm 镜像安装均未通过验证。"
                         Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
                         $result.Method = "none"
                         $result.Status = "failed_official_and_mirror"
@@ -3057,7 +3126,7 @@ function Install-ClaudeCodeAuto {
     $mirrorResult = Install-ClaudeCodeNpmMirror
 
     if (-not $mirrorResult.Success) {
-        Write-Error-Msg "官方 Native Install 和 npm 镜像安装均失败。"
+        Write-Error-Msg "官方 Native Install、winget 和 npm 镜像安装均未通过验证。"
         Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
         $result.Method = "none"
         $result.Status = "failed_official_and_mirror"
