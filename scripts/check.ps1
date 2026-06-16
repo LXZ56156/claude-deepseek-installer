@@ -1285,8 +1285,8 @@ if ($claudeInstallText -notmatch 'Install-NodeJsViaWinget[\s\S]{0,800}Invoke-Vis
 if ($claudeInstallText -match 'Install-ClaudeCodeNpmMirror[\s\S]{0,800}Invoke-CommandSafe\s+-Command\s+"npm"') {
     throw "Install-ClaudeCodeNpmMirror must NOT use Invoke-CommandSafe for npm install; use Invoke-VisibleInstallCommand or Invoke-InstallCommandCaptured"
 }
-if ($claudeInstallText -notmatch 'Install-ClaudeCodeNpmMirror[\s\S]{0,3000}Invoke-VisibleInstallCommand') {
-    throw "Install-ClaudeCodeNpmMirror must use Invoke-VisibleInstallCommand for npm install"
+if ($claudeInstallText -notmatch 'Install-ClaudeCodeNpmMirror[\s\S]{0,3000}Invoke-(VisibleInstallCommand|InstallCommandCaptured)') {
+    throw "Install-ClaudeCodeNpmMirror must use Invoke-VisibleInstallCommand or Invoke-InstallCommandCaptured for npm install"
 }
 
 # 23. Install-ClaudeCodeNative execution phase must NOT use Invoke-CommandSafe
@@ -1348,11 +1348,11 @@ if ($claudeInstallText -match 'function Install-ClaudeCodeAuto[\s\S]{0,5000}Invo
 
 # 28. v1.3.3: Native Install 始终先做后验验证，只有后验验证失败才显示备用通道提示。
 # 旧版直接根据 ExitCode 判断失败，v1.3.3 改为后验优先。
-if ($claudeInstallText -notmatch 'Claude 官方安装通道未成功，正在自动切换备用安装通道' -and
+if ($claudeInstallText -notmatch '官方安装方式未完成验证，正在切换备用安装方式' -and
     $claudeInstallText -notmatch '官方安装包执行结束，正在验证安装结果') {
     throw "Native Install flow must do post-install verification before declaring failure (v1.3.3)"
 }
-if ($claudeInstallText -notmatch '这通常是官方下载通道不稳定或被网络拦截，不代表整体安装失败') {
+if ($claudeInstallText -notmatch '这通常是网络或系统环境导致，不代表整个安装失败') {
     throw "Native Install failure must reassure user that this is not an overall failure"
 }
 
@@ -2063,8 +2063,8 @@ if ($claudeInstallText -notmatch 'npm\.cmd') {
 # 5. Invoke-VisibleInstallCommand in Install-ClaudeCodeNpmMirror must use npm.cmd path
 #    (v1.3.2: 不再手动包 cmd.exe /c，改为传 npm.cmd 路径给 Invoke-VisibleInstallCommand，
 #     由它内部统一处理 .cmd 执行兼容性，避免引号嵌套错误)
-if ($claudeInstallText -notmatch 'npmResolved\.Path[\s\S]{0,200}Invoke-VisibleInstallCommand') {
-    throw "Install-ClaudeCodeNpmMirror must use Resolve-NpmCmdPath result with Invoke-VisibleInstallCommand"
+if ($claudeInstallText -notmatch 'npmResolved\.Path[\s\S]{0,200}Invoke-(VisibleInstallCommand|InstallCommandCaptured)') {
+    throw "Install-ClaudeCodeNpmMirror must use Resolve-NpmCmdPath result with Invoke-VisibleInstallCommand or Invoke-InstallCommandCaptured"
 }
 
 # 6. Node.js winget install branch must include secondary verification (not just installResult.Success)
@@ -2930,7 +2930,7 @@ if ($claudeInstallText -notmatch 'claudeInstallMethod\s*=\s*"official_native"') 
 
 # 2d. v1.3.3: 后验验证必须在备用通道之前执行
 # (顺序: Native Install → 后验验证 → 通道切换判断 → winget. 不应先 winget 后验)
-$nativeToFallback = [regex]::Match($claudeInstallText, '(?s)官方安装包执行结束，正在验证安装结果.*?正在自动切换备用安装通道')
+$nativeToFallback = [regex]::Match($claudeInstallText, '(?s)官方安装包执行结束，正在验证安装结果.*?官方安装方式未完成验证，正在切换备用安装方式')
 if (-not $nativeToFallback.Success) {
     throw "claude-install.ps1 post-install verification must appear before alternate channel fallback"
 }
@@ -2948,8 +2948,8 @@ foreach ($p in $badPhrases) {
     }
 }
 
-# 必须出现"备用安装通道"
-if ($claudeInstallText -notmatch '备用安装通道') {
+# 必须出现"备用安装通道"或"备用安装方式"
+if ($claudeInstallText -notmatch '备用安装通道' -and $claudeInstallText -notmatch '备用安装方式') {
     throw "claude-install.ps1 fallback wording should mention 备用安装通道"
 }
 

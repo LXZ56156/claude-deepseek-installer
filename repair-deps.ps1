@@ -555,6 +555,13 @@ function Generate-Report {
     Add-RL "  本报告不包含 API Key 或敏感信息。"
     Add-RL "  如需完整诊断，请运行 [一键诊断.cmd]。"
     Add-RL ""
+    Add-RL "【售后提示】"
+    Add-RL "  如需售后，请运行「一键诊断.cmd」。"
+    Add-RL "  只发送生成的 report.txt。"
+    Add-RL "  不要发送 backup/、logs/、reports/full-report-*、settings.json。"
+    Add-RL "  不要发送完整 API Key。"
+    Add-RL "  如果截图，请先确认截图里没有完整 API Key。"
+    Add-RL ""
     Add-RL ("=" * 73)
     Add-RL "  报告结束"
     Add-RL ("=" * 73)

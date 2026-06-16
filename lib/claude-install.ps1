@@ -836,6 +836,50 @@ function Test-IsClaudeNativeFileLockError {
     )
 }
 
+function Write-NativeInstallUserMessage {
+    <#
+    .SYNOPSIS
+        v1.3.3 UX: 统一 Native Install 用户可见文案。
+        确保后验验证前不显示"失败"，ExitCode 异常只写日志。
+    .PARAMETER Phase
+        阶段: Start | Heartbeat | Verify | Success | Partial | Fallback
+    .PARAMETER Detail
+        附加信息（如版本号）
+    #>
+    param(
+        [ValidateSet("Start", "Heartbeat", "Verify", "Success", "Partial", "Fallback")]
+        [string]$Phase,
+        [string]$Detail = ""
+    )
+
+    switch ($Phase) {
+        "Start" {
+            Write-Info "正在执行 Claude 官方安装包。"
+            Write-Info "此步骤可能持续数分钟，中途没有新文字也正常，请不要关闭窗口。"
+            Write-Info "安装完成后，本工具会自动验证结果。"
+        }
+        "Heartbeat" {
+            Write-Info "仍在安装 Claude Code，请继续等待，不要关闭窗口。"
+        }
+        "Verify" {
+            Write-Info "官方安装包执行结束，正在验证安装结果..."
+        }
+        "Success" {
+            Write-Success "Claude Code 已安装：$Detail"
+            Write-Success "已确认新 PowerShell 可直接运行 claude"
+        }
+        "Partial" {
+            Write-Warning "Claude Code 已安装，但新 PowerShell 验证暂未通过。"
+            Write-Info "本工具会继续完成配置。安装结束后请按完成页提示验证或修复。"
+        }
+        "Fallback" {
+            Write-Warning "官方安装方式未完成验证，正在切换备用安装方式。"
+            Write-Info "这通常是网络或系统环境导致，不代表整个安装失败。"
+            Write-Info "将继续尝试 winget / npm 镜像方式。"
+        }
+    }
+}
+
 function Invoke-InstallCommandCaptured {
     <#
     .SYNOPSIS
@@ -860,22 +904,36 @@ function Invoke-InstallCommandCaptured {
         [string[]]$Arguments = @(),
         [int]$TimeoutSec = 600,
         [int]$HeartbeatSec = 30,
-        [string]$FriendlyName = "安装命令"
+        [string]$FriendlyName = "安装命令",
+        [string]$StartMessage = "",
+        [string]$HeartbeatMessage = "",
+        [string]$TimeoutMessage = ""
     )
 
     $result = @{
-        Success    = $false
-        ExitCode   = -1
-        Output     = ""
-        Error      = ""
-        StdOutPath = ""
-        StdErrPath = ""
+        Success         = $false
+        ExitCode        = -1
+        Output          = ""
+        Error           = ""
+        SanitizedOutput = ""
+        SanitizedError  = ""
+        TimedOut        = $false
+        DurationMs      = 0
+        StdOutPath      = ""
+        StdErrPath      = ""
     }
 
     $stdout = Join-Path $env:TEMP "ccdi_captured_stdout_${PID}_$(Get-Random).log"
     $stderr = Join-Path $env:TEMP "ccdi_captured_stderr_${PID}_$(Get-Random).log"
     $result.StdOutPath = $stdout
     $result.StdErrPath = $stderr
+
+    # 默认消息
+    if (-not $StartMessage) { $StartMessage = "正在执行 $FriendlyName..." }
+    if (-not $HeartbeatMessage) { $HeartbeatMessage = "仍在执行 $FriendlyName，请继续等待，不要关闭窗口。" }
+    if (-not $TimeoutMessage) { $TimeoutMessage = "$FriendlyName 超时，已停止。请运行一键诊断。" }
+
+    if ($StartMessage) { Write-Info $StartMessage }
 
     try {
         $proc = Start-Process -FilePath $FilePath `
@@ -894,7 +952,7 @@ function Invoke-InstallCommandCaptured {
             Start-Sleep -Seconds $nextHeartbeat
             if (-not $proc.HasExited) {
                 $elapsed = [Math]::Round($sw.Elapsed.TotalSeconds, 0)
-                Write-Info "仍在执行 $FriendlyName（已等待 $elapsed 秒），请继续等待，不要关闭窗口。"
+                if ($HeartbeatMessage) { Write-Info "$HeartbeatMessage（已等待 $elapsed 秒）" }
                 $nextHeartbeat = $HeartbeatSec
             }
             if ($sw.Elapsed.TotalSeconds -gt $TimeoutSec) {
@@ -904,15 +962,18 @@ function Invoke-InstallCommandCaptured {
                     $proc.WaitForExit(5000) | Out-Null
                 }
                 catch { }
+                $result.TimedOut = $true
                 $result.Error = "timeout: ${TimeoutSec}s"
-                Write-Warning "$FriendlyName 超时（${TimeoutSec} 秒），已终止。"
-                Write-Info "详细错误已写入日志，请运行「一键诊断」排查。"
+                $result.DurationMs = [Math]::Round($sw.Elapsed.TotalMilliseconds, 0)
+                Write-Warning $TimeoutMessage
+                Write-Info "详细错误已写入日志，请运行「一键诊断.cmd」排查。"
                 return $result
             }
         }
 
         $result.ExitCode = $proc.ExitCode
         $result.Success = ($proc.ExitCode -eq 0)
+        $result.DurationMs = [Math]::Round($sw.Elapsed.TotalMilliseconds, 0)
 
         # 读取捕获的输出
         if (Test-Path $stdout) {
@@ -930,17 +991,19 @@ function Invoke-InstallCommandCaptured {
             catch { }
         }
 
-        # 原始输出写入日志
+        # 脱敏和 ANSI 清理后写入日志
         if ($result.Output) {
+            $result.SanitizedOutput = Sanitize-SecretLikeText -Text (Remove-AnsiEscape -Text $result.Output)
             Write-Log "INFO" "Invoke-InstallCommandCaptured($FriendlyName): stdout ($($result.Output.Length) chars)"
-            Write-Log "DEBUG" "Captured stdout: $($result.Output)"
+            Write-Log "DEBUG" "Captured stdout: $($result.SanitizedOutput)"
         }
         if ($result.Error) {
+            $result.SanitizedError = Sanitize-SecretLikeText -Text (Remove-AnsiEscape -Text $result.Error)
             Write-Log "INFO" "Invoke-InstallCommandCaptured($FriendlyName): stderr ($($result.Error.Length) chars)"
-            Write-Log "DEBUG" "Captured stderr: $($result.Error)"
+            Write-Log "DEBUG" "Captured stderr: $($result.SanitizedError)"
         }
 
-        Write-Log "INFO" "Invoke-InstallCommandCaptured($FriendlyName): ExitCode=$($result.ExitCode), DurationMs=$($sw.ElapsedMilliseconds)"
+        Write-Log "INFO" "Invoke-InstallCommandCaptured($FriendlyName): ExitCode=$($result.ExitCode), DurationMs=$($result.DurationMs)"
     }
     catch {
         $result.Error = "Invoke-InstallCommandCaptured 异常: $($_.Exception.Message)"
@@ -997,9 +1060,7 @@ function Install-ClaudeCodeNative {
         return $result
     }
 
-    Write-Info "正在执行 Claude 官方安装包。"
-    Write-Info "此步骤可能持续数分钟，中途没有新文字也正常，请不要关闭窗口。"
-    Write-Info "安装完成后，本工具会自动验证结果。"
+    Write-NativeInstallUserMessage -Phase "Start"
     Write-Log "INFO" "下载 Claude 官方安装脚本: https://claude.ai/install.ps1"
 
     try {
@@ -1017,19 +1078,21 @@ function Install-ClaudeCodeNative {
         }
 
         Write-Info "官方安装脚本已下载，开始安装..."
-        Write-Info "此步骤可能持续数分钟，中途没有新文字也正常，请不要关闭窗口。"
-        Write-Info "安装完成后，本工具会自动验证结果。"
+        Write-NativeInstallUserMessage -Phase "Start"
         Write-Host ""
 
         # v1.3.3 P1-2: 默认使用捕获模式，英文输出写入日志，控制台只显示中文心跳
         $installResult = Invoke-InstallCommandCaptured -FilePath "powershell" -Arguments @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tempInstallScript
-        ) -TimeoutSec 600 -HeartbeatSec 30 -FriendlyName "Claude 官方安装包"
+        ) -TimeoutSec 600 -HeartbeatSec 30 -FriendlyName "Claude 官方安装包" `
+            -StartMessage "" -HeartbeatMessage "仍在安装 Claude Code，请继续等待，不要关闭窗口。"
 
         # 清理临时脚本
         Remove-Item $tempInstallScript -Force -ErrorAction SilentlyContinue
 
         # 安装脚本执行结束，记录 ExitCode 状态到日志（不向用户展示）
+        Write-NativeInstallUserMessage -Phase "Verify"
+
         if ($installResult.Success) {
             Write-Log "INFO" "Native Install 安装脚本 ExitCode=0"
         }
@@ -1096,8 +1159,9 @@ function Install-ClaudeCodeNpmMirror {
         return $result
     }
 
-    Write-Info "正在使用 npm.cmd + npmmirror 镜像安装 Claude Code..."
-    Write-Info "此步骤可能需要几分钟，请耐心等待，不要关闭窗口。"
+    Write-Info "正在使用 npm 镜像安装 Claude Code。"
+    Write-Info "这一步会下载 Anthropic 官方 Claude Code 包，可能需要数分钟。"
+    Write-Info "仍在安装 Claude Code，请继续等待，不要关闭窗口。"
 
     # 解析 npm.cmd（禁止使用 npm.ps1，会导致 "%1 is not a valid Win32 application"）
     $npmResolved = Resolve-NpmCmdPath
@@ -1112,30 +1176,26 @@ function Install-ClaudeCodeNpmMirror {
 
     Write-Log "INFO" "执行: $($npmResolved.Path) install -g @anthropic-ai/claude-code --registry=https://registry.npmmirror.com"
 
-    # 直接传 npm.cmd 路径 + 参数数组给 Invoke-VisibleInstallCommand，
-    # 由它内部统一处理 .cmd 的执行兼容性（不再手动包 cmd.exe /c，
-    # 避免引号嵌套导致 '\"C:\Program Files\nodejs\npm.cmd\"' is not recognized）
-    $installResult = Invoke-VisibleInstallCommand -FilePath $npmResolved.Path -Arguments @(
+    # v1.3.3 UX: 使用捕获模式，英文输出写入日志，控制台只显示中文心跳
+    $installResult = Invoke-InstallCommandCaptured -FilePath $npmResolved.Path -Arguments @(
         "install",
         "-g",
         "@anthropic-ai/claude-code",
         "--registry=https://registry.npmmirror.com"
-    ) -TimeoutSec 900 -TestSafe:$TestSafe
+    ) -TimeoutSec 900 -HeartbeatSec 30 -FriendlyName "npm 镜像安装 Claude Code" `
+        -StartMessage "正在使用 npm 镜像安装 Claude Code。" `
+        -HeartbeatMessage "仍在安装 Claude Code，请继续等待，不要关闭窗口。"
 
     if ($installResult.Success) {
-        Write-Success "npm 镜像安装 Claude Code 成功！"
+        Write-Success "npm 镜像安装 Claude Code 完成。"
         Write-Log "INFO" "npm mirror 安装成功"
         $result.Success = $true
     }
     else {
-        $result.Error = "npm 镜像安装失败: $($installResult.Error)"
-        Write-Error-Msg "npm 镜像安装过程中出现错误:"
-        Write-Host $installResult.Error -ForegroundColor Red
-
-        if ($installResult.Error -match "EACCES|permission|权限") {
-            Write-Warning "可能是 npm 全局安装权限问题。"
-            Write-Warning "建议使用 nvm 管理 Node.js，或使用官方 Native Install 方式。"
-        }
+        $result.Error = "npm 镜像安装未完成验证: $($installResult.Error)"
+        Write-Warning "npm 镜像安装未完成验证。"
+        Write-Info "可能原因：Node.js/npm 不完整、镜像网络不可达、npm 全局 PATH 异常。"
+        Write-Info "请运行「一键诊断.cmd」生成 report.txt 发给技术支持。"
         Write-Log "ERROR" $result.Error
     }
 
@@ -2578,8 +2638,9 @@ function Install-NodeJsViaWinget {
         return @{ Success = $false; ExitCode = -1; Error = "skipped_test_safe" }
     }
 
-    Write-Info "正在使用 winget 安装 Node.js LTS，安装进度将直接显示在下方。"
-    Write-Info "下载约 80MB，请耐心等待（通常 3-8 分钟）..."
+    Write-Info "正在通过 Windows 官方 winget 安装 Node.js LTS。"
+    Write-Info "这是备用安装方式所需依赖，下载约几十 MB。"
+    Write-Info "安装完成后可能需要关闭窗口重新运行本工具。"
     Write-Host ""
 
     return Invoke-VisibleInstallCommand -FilePath "winget" -Arguments @(
@@ -2609,7 +2670,7 @@ function Install-ClaudeCodeViaWinget {
         return @{ Success = $false; ExitCode = -1; Error = "skipped_test_safe" }
     }
 
-    Write-Info "正在尝试通过 winget 安装 Claude Code..."
+    Write-Info "正在使用 winget 安装 Claude Code（Windows 官方包管理器方式）..."
     Write-Log "INFO" "执行: winget install Anthropic.ClaudeCode"
 
     return Invoke-VisibleInstallCommand -FilePath "winget" -Arguments @(
@@ -2869,8 +2930,7 @@ function Install-ClaudeCodeAuto {
         # 无论安装器 ExitCode 如何，始终先做后验验证
         # Native Install 失败或返回异常 ExitCode 时不向用户展示失败信息，
         # 由后验验证决定最终结论（避免"失败→成功"的矛盾提示）。
-        Write-Info ""
-        Write-Info "官方安装包执行结束，正在验证安装结果..."
+        Write-Host ""
         Refresh-CurrentProcessPath
         $verifyResult = Test-ClaudeCommandExisting
         Write-Log "INFO" "Native Install 后验验证: Exists=$($verifyResult.Exists), Usable=$($verifyResult.Usable), Version=$($verifyResult.Version), Path=$($verifyResult.Path)"
@@ -2940,8 +3000,7 @@ function Install-ClaudeCodeAuto {
             # --- v1.3.3 P0-2: 最终成功条件必须以 fresh shell 为准 ---
             # 状态 1: fresh shell 通过 → 完整成功
             if ($verifyResult.Usable -and $freshCheck.Success) {
-                Write-Success "Claude Code 已安装: $($verifyResult.Version)"
-                Write-Success "已确认新 PowerShell 可直接运行 claude"
+                Write-NativeInstallUserMessage -Phase "Success" -Detail $verifyResult.Version
 
                 $result.Success = $true
                 $result.Method = "official_native"
@@ -2959,7 +3018,7 @@ function Install-ClaudeCodeAuto {
 
             # 状态 2: claude 可用 + PATH 已写入 + fresh shell 失败 → 部分成功
             if ($verifyResult.Usable -and $pathResult.Success -and -not $freshCheck.Success) {
-                Write-Warning "Claude Code 已安装，PATH 已写入，但新 PowerShell 验证暂未通过"
+                Write-NativeInstallUserMessage -Phase "Partial"
                 Write-Info "请关闭当前窗口，重新打开 PowerShell 后执行 claude --version"
                 Write-Info "如仍失败，请运行「一键修复依赖」"
 
@@ -3039,9 +3098,8 @@ function Install-ClaudeCodeAuto {
         }
 
         # 后验验证失败时才显示备用通道切换信息
-        Write-Warning "Claude 官方安装通道未成功，正在自动切换备用安装通道。"
+        Write-NativeInstallUserMessage -Phase "Fallback"
         Write-Info "下一步将优先尝试 winget；如果 winget 不可用或验证失败，再切换 npmmirror 镜像。"
-        Write-Info "这通常是官方下载通道不稳定或被网络拦截，不代表整体安装失败。"
         Write-Log "INFO" "Native Install 后验验证未通过，进入备用安装通道"
     }
     else {
@@ -3061,6 +3119,7 @@ function Install-ClaudeCodeAuto {
     if ($wingetOk) {
         Write-Info ""
         Write-Info "正在尝试通过 winget 安装 Claude Code（备用通道）..."
+        Write-Info "这是 Windows 官方包管理器方式，下载可能需要数分钟。"
         $wingetClaudeResult = Install-ClaudeCodeViaWinget
 
         # winget 在 Windows PowerShell 5.1 下 Start-Process 的 ExitCode 可能为空，
@@ -3106,8 +3165,8 @@ function Install-ClaudeCodeAuto {
     # Step 3: npm npmmirror 镜像安装
     # ============================================================
     Write-Info ""
-    Write-Info "正在使用 npmmirror 国内镜像安装 Claude Code..."
-    Write-Info "这种安装方式使用 Anthropic 官方发布的 @anthropic-ai/claude-code npm 包。"
+    Write-Info "正在使用 npm 镜像安装 Claude Code。"
+    Write-Info "这会下载 Anthropic 官方发布的 @anthropic-ai/claude-code 包。"
     Write-Host ""
 
     # 3a. 检测 Node.js 和 npm

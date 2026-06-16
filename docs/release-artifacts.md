@@ -21,6 +21,12 @@
   - ZIP required entries check: PASSED
   - ZIP sensitive scan: PASSED (0 real credentials)
   - Chinese/space path unzip TestSafe run: PASSED (Start-Here, doctor, repair-deps, uninstall-config)
+## v1.3.3 WIP
+
+- Branch: `fix/v1.3.3-native-path-doctor-ux`
+- Current HEAD: `4e46dd0`
+- Status: UX 修复第一批次，未 release
+
 - Notes:
   - Release ZIP 不包含开发者打包脚本（build-release.ps1、simulate-user-release.ps1、package-release.ps1、sandbox-full-user-simulation.ps1）。
   - Release ZIP 不包含 logs、backup、reports、release、.git、.sandbox、report.txt、CLAUDE.md、.gitignore。

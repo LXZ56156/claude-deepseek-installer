@@ -338,7 +338,7 @@ function Check-Commands {
 
         # claude doctor 不自动运行
         Add-CheckResult "claude doctor" "INFO" "未自动运行（Claude Code doctor 在脚本/重定向环境中不会稳定输出；请按需手动运行）"
-        Add-Suggestion "如需 Claude Code 官方诊断，请打开新的 PowerShell 或 Windows Terminal，手动输入：claude doctor。不要通过脚本、管道或重定向运行。运行后请截图，或复制终端中的完整输出发给售后。"
+        Add-Suggestion "如需 Claude Code 官方诊断，请打开新的 PowerShell 或 Windows Terminal，手动输入：claude doctor。不要通过脚本、管道或重定向运行。运行后请截图，截图前请确认没有完整 API Key。"
     }
     elseif ($inventory -and $inventory.Candidates.Count -gt 0) {
         $usableCount = @($inventory.Candidates | Where-Object { $_.Usable }).Count
@@ -359,7 +359,7 @@ function Check-Commands {
             Add-CheckResult "Claude Code CLI" "OK" $claudeVersion
 
             Add-CheckResult "claude doctor" "INFO" "未自动运行（Claude Code doctor 在脚本/重定向环境中不会稳定输出；请按需手动运行）"
-            Add-Suggestion "如需 Claude Code 官方诊断，请打开新的 PowerShell 或 Windows Terminal，手动输入：claude doctor。不要通过脚本、管道或重定向运行。运行后请截图，或复制终端中的完整输出发给售后。"
+            Add-Suggestion "如需 Claude Code 官方诊断，请打开新的 PowerShell 或 Windows Terminal，手动输入：claude doctor。不要通过脚本、管道或重定向运行。运行后请截图，截图前请确认没有完整 API Key。"
         }
         else {
             Add-CheckResult "Claude Code CLI" "ERROR" "claude 命令未找到或不可用"
@@ -1325,8 +1325,9 @@ function Write-ReportFooter {
     Add-ReportLine ""
     Add-ReportLine ("=" * 73)
     Add-ReportLine "  报告结束"
-    Add-ReportLine "  如需技术支持，请将此报告（report.txt）发送给服务提供者。"
-    Add-ReportLine "  请勿发送您的 API Key！"
+    Add-ReportLine "  如需售后，请只发送 report.txt。"
+    Add-ReportLine "  不要发送 backup/、logs/、reports/full-report-*、settings.json。"
+    Add-ReportLine "  不要发送完整 API Key。"
     Add-ReportLine ("=" * 73)
 }
 
@@ -1482,11 +1483,12 @@ function Main {
             Write-Info "  分享版历史: $fullHistoryPath"
             Write-Info "  完整版报告（仅本地保存）: $fullLocalPath"
             Write-Host ""
-            Write-Info "请发送 report.txt 给技术支持。"
+            Write-Info "如需售后，请发送 report.txt 给技术支持。"
             Write-Warning "不要发送 full-report-xxx.txt（包含完整路径信息）！"
         }
         Write-Warning "不要发送您的 API Key！报告中已自动脱敏处理。"
-        Write-Warning "请只发送 report.txt。不要发送 backup/、logs/ 或 reports/full-report-*.txt。"
+        Write-Info "只发送 report.txt。不要发送 backup/、logs/、reports/full-report-*、settings.json。"
+        Write-Info "如果截图，请先确认截图里没有完整 API Key。"
     }
 
     Write-Info "日志文件: $(Get-LogFilePath)"

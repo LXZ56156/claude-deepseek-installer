@@ -22,7 +22,8 @@ param(
     [switch]$StepPause,
     [switch]$TestSafe,
     [switch]$DryRun,
-    [switch]$FixDeps
+    [switch]$FixDeps,
+    [switch]$DeepWslCheck
 )
 
 # ============================================================
@@ -79,6 +80,7 @@ function Write-ResultLine {
         "WARN" { "[WARN]" }
         "ERROR" { "[ERROR]" }
         "SKIP" { "[SKIP]" }
+        "INFO" { "[INFO]" }
         default { "[$Status]" }
     }
     $color = switch ($Status) {
@@ -86,6 +88,7 @@ function Write-ResultLine {
         "WARN" { "Yellow" }
         "ERROR" { "Red" }
         "SKIP" { "Gray" }
+        "INFO" { "Cyan" }
         default { "White" }
     }
     $line = "  $icon $Label"
@@ -145,6 +148,36 @@ function Pause-ForNextStep {
     }
     Write-Host ""
     Read-Host "按回车键继续..."
+}
+
+function Write-SupportSafeGuidance {
+    <#
+    .SYNOPSIS
+        v1.3.3 UX: 统一售后安全提示。
+        所有完成页、报告、README、诊断页共用此模板。
+        只发送 report.txt，不发送 backup/logs/full-report/settings.json/API Key。
+    .PARAMETER ForReport
+        返回纯文本（用于嵌入报告），而非控制台输出。
+    #>
+    param(
+        [switch]$ForReport
+    )
+
+    $lines = @(
+        "如需售后，请运行「一键诊断.cmd」。",
+        "只发送生成的 report.txt。",
+        "不要发送 backup/、logs/、reports/full-report-*、settings.json。",
+        "不要发送完整 API Key。",
+        "如果截图，请先确认截图里没有完整 API Key。"
+    )
+
+    if ($ForReport) {
+        return ($lines -join "`r`n")
+    }
+
+    foreach ($line in $lines) {
+        Write-Info $line
+    }
 }
 
 function Write-ApiKeySkipGuidance {
@@ -394,18 +427,31 @@ function Step-CheckEnvironment {
 
     # WSL
     Write-CheckProgress -Current 9 -Total 10 -Name "WSL"
-    $wslInfo = Test-WslInstalled
-    if ($wslInfo.Installed) {
-        $ubuntuInfo = Test-UbuntuInWsl -WslInfo $wslInfo
-        if ($ubuntuInfo.Exists) {
-            Write-ResultLine "WSL Ubuntu" "OK" "已安装"
+    if ($DeepWslCheck) {
+        # 深度 WSL 检测（仅 -DeepWslCheck 或一键诊断时执行）
+        $wslInfo = Test-WslInstalled
+        if ($wslInfo.Installed) {
+            $ubuntuInfo = Test-UbuntuInWsl -WslInfo $wslInfo
+            if ($ubuntuInfo.Exists) {
+                Write-ResultLine "WSL Ubuntu" "OK" "已安装"
+            }
+            else {
+                Write-ResultLine "WSL" "OK" "已安装（无 Ubuntu 发行版）"
+            }
         }
         else {
-            Write-ResultLine "WSL" "OK" "已安装（无 Ubuntu 发行版）"
+            Write-ResultLine "WSL" "SKIP" "未启用或不可用（高级选项，不影响 Windows 原生安装）"
         }
     }
     else {
-        Write-ResultLine "WSL" "SKIP" "未启用或不可用（高级选项，不影响 Windows 原生安装）"
+        # 默认一键安装：跳过 WSL 深度检测，避免卡顿和刷屏
+        $wslInfo = @{
+            Installed = $false
+            Version   = ""
+            Status    = "skipped_default"
+            Message   = "默认一键安装跳过 WSL 深度检测（可选）"
+        }
+        Write-ResultLine "WSL" "INFO" "默认跳过深度检测（可选，不影响安装）"
     }
 
     # 配置文件
@@ -772,41 +818,38 @@ function Step-CreateTestProject {
         $readmeContent = @"
 # Claude Code 测试项目
 
-这个文件夹是安装完成后自动创建的，只用于首次验证 Claude Code + DeepSeek API 是否能正常工作。
+这个文件夹只是用来验证 Claude Code 是否安装成功。
 
-## 用途
+你可以删除这个文件夹，删除后不会影响：
+- Claude Code 安装
+- DeepSeek API 配置
+- 你的 API Key
+- 其他项目
 
-测试完成后，可以直接删除本文件夹。删除不会影响 Claude Code 安装和 DeepSeek 配置。
+## 如何测试
 
-## 验证方法
-
-在此目录中打开 PowerShell，输入：
+1. 在本文件夹打开 PowerShell
+2. 输入：
 
 ```
 claude
 ```
 
-如果可以进入 Claude Code 交互界面，说明安装成功。
-
-然后尝试：
+3. 进入 Claude Code 后，输入：
 
 ```
-请读取 README.md，并帮我生成一个简单的 hello world 网页。
+请用一句话说明当前项目是做什么的。
 ```
 
-如果 Claude Code 能理解并生成代码，说明 DeepSeek API 配置正确。
+如果 Claude Code 能正常回复，说明安装和配置基本可用。
 
-## 常见命令
+## 如果失败
 
-- `claude` - 启动 Claude Code 交互模式
-- `claude --version` - 查看版本
-- `claude doctor` - 运行诊断
+请返回安装工具，选择：
+[4] 运行一键诊断
 
-## 注意事项
-
-- API 调用费用由 DeepSeek 官方结算
-- 请勿将 API Key 分享给他人
-- 如遇问题请运行「一键诊断.cmd」
+然后只发送诊断 report.txt 给技术支持。
+不要发送 backup、logs、full-report，也不要发送完整 API Key。
 "@
         $readmePath = Join-Path $testDir "README.md"
         [System.IO.File]::WriteAllText($readmePath, $readmeContent, (New-Object System.Text.UTF8Encoding($false)))
@@ -1056,10 +1099,8 @@ $(if ($script:TestSafeMode) { "说明: 测试安全模式强制跳过真实 API 
 五、测试项目
 --------------------------------------
 路径: $(if ($script:TestProjectPath) { $script:TestProjectPath } else { "未创建" })
-下一步命令:
-
-  cd "$(if ($script:TestProjectPath) { $script:TestProjectPath } else { "桌面\ClaudeCode-Test" })"
-  claude
+说明: 测试项目只用于验证 Claude Code 是否能正常使用，可以随时删除。
+删除测试项目不会影响 Claude Code 安装和 DeepSeek 配置。
 
 六、整体状态
 --------------------------------------
@@ -1097,9 +1138,7 @@ $(if ($script:TestSafeMode) {
 
 八、售后提示
 --------------------------------------
-如遇问题，请运行「一键诊断.cmd」，把生成的 report.txt 发给技术支持。
-请不要发送完整 API Key！也不要发送 backup/、logs/ 或 reports/full-report-*。
-backup 可能包含完整 API Key，仅用于本机恢复，不要发给任何人。
+$(Write-SupportSafeGuidance -ForReport)
 API Key 始终只保存在您的本机，不会上传或分享。
 
 报告生成时间: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
@@ -1179,16 +1218,32 @@ function Show-CompletionPage {
         if ($pathOk -and $freshOk) {
             Write-Host "==============================================================" -ForegroundColor Green
             Write-Host "                                                              " -ForegroundColor Green
-            Write-Host "                 安装流程全部完成！                            " -ForegroundColor Green
+            Write-Host "                 安装流程全部完成                              " -ForegroundColor Green
             Write-Host "                                                              " -ForegroundColor Green
             Write-Host "==============================================================" -ForegroundColor Green
+            Write-Host ""
+            Write-Success "Claude Code 已安装。"
+            Write-Success "DeepSeek API 已配置。"
+            Write-Success "新 PowerShell 已验证可直接运行 claude。"
+            Write-Host ""
+            Write-Info "下一步建议："
+            Write-Info "选择 [1] 立即验证 Claude Code 是否能正常使用。"
         }
         elseif ($pathOk -and -not $freshOk) {
             Write-Host "==============================================================" -ForegroundColor Yellow
             Write-Host "                                                              " -ForegroundColor Yellow
-            Write-Host "    Claude Code 已安装，PATH 已配置，但新终端验证暂未通过      " -ForegroundColor Yellow
+            Write-Host "   安装基本完成，但命令启动还需要验证                        " -ForegroundColor Yellow
             Write-Host "                                                              " -ForegroundColor Yellow
             Write-Host "==============================================================" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Success "Claude Code 文件已安装。"
+            Write-Success "DeepSeek API 已配置。"
+            Write-Warning "但新 PowerShell 暂未确认能直接运行 claude。"
+            Write-Host ""
+            Write-Info "下一步建议："
+            Write-Info "先关闭当前窗口，重新打开 PowerShell，执行："
+            Write-Host "  claude --version" -ForegroundColor Cyan
+            Write-Info "如仍失败，运行 [4] 一键诊断或「一键修复依赖」。"
         }
         else {
             Write-Host "==============================================================" -ForegroundColor Yellow
@@ -1196,73 +1251,30 @@ function Show-CompletionPage {
             Write-Host "        Claude Code 已安装，但 claude 命令未加入 PATH          " -ForegroundColor Yellow
             Write-Host "                                                              " -ForegroundColor Yellow
             Write-Host "==============================================================" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Success "Claude Code 文件已安装。"
+            Write-Success "DeepSeek API 已配置。"
+            Write-Warning "但 claude 命令暂时无法直接运行。"
+            Write-Host ""
+            Write-Info "请运行「一键修复依赖」或重新运行安装工具修复 PATH。"
         }
-
-        Write-Host ""
-        Write-Success "Claude Code 已安装"
-        Write-Success "DeepSeek 配置已写入"
-        Write-Success "API 测试通过"
-        Write-Success "测试项目已创建"
-        Write-Host ""
-
-        if ($pathOk -and $freshOk) {
-            Write-Info "您现在可以运行 claude 开始使用！"
-        }
-        elseif ($pathOk -and -not $freshOk) {
-            Write-Warning "Claude Code 和 PATH 配置已完成，但新终端验证暂未通过"
-            Write-Info "请关闭当前窗口，重新打开 PowerShell 后执行 claude --version 验证"
-            Write-Info "如仍失败，请运行「一键修复依赖」"
-        }
-        else {
-            Write-Warning "Claude Code 已安装，但 claude 命令暂时无法直接运行"
-            Write-Info "请运行「一键修复依赖」或重新运行安装工具修复 PATH"
-        }
-
-        if ($script:TestProjectPath) {
-            Write-Info "建议进入测试项目目录:"
-            Write-Host "  cd `"$($script:TestProjectPath)`"" -ForegroundColor Cyan
-            Write-Host "  claude" -ForegroundColor Cyan
-        }
-        Write-Host ""
-        Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
-        Write-Host "  【下一步说明】" -ForegroundColor Cyan
-        Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
-        Write-Host ""
-        Write-Info "安装完成不代表 API 永久可用。如果 Claude Code 能启动但模型调用失败，"
-        Write-Info "请优先检查："
-        Write-Info "  1. DeepSeek API Key 是否正确"
-        Write-Info "  2. DeepSeek 账户余额是否充足"
-        Write-Info "  3. 当前网络是否能访问 api.deepseek.com"
-        Write-Info "  4. DeepSeek 官方接口或模型名是否发生变化"
-        Write-Host ""
-        Write-Info "本工具只负责本地安装和配置，不销售 API，不保证第三方接口永久可用。"
-        Write-Host ""
-        Write-Info "安装完成报告: $($script:ReportPath)"
-        Write-Info "如遇问题请运行「一键诊断.cmd」"
     }
     elseif ($script:ClaudeInstalled -and $script:ConfigWritten) {
         Write-Host "==============================================================" -ForegroundColor Yellow
         Write-Host "                                                              " -ForegroundColor Yellow
-        Write-Host "            安装部分完成（API 测试未通过）                     " -ForegroundColor Yellow
+        Write-Host "            安装部分完成，API 测试未通过                     " -ForegroundColor Yellow
         Write-Host "                                                              " -ForegroundColor Yellow
         Write-Host "==============================================================" -ForegroundColor Yellow
         Write-Host ""
-        Write-Success "Claude Code 已安装"
-        Write-Success "DeepSeek 配置已写入"
-        Write-Warning "API 测试: $script:ApiTestFailReason"
+        Write-Success "Claude Code 已安装。"
+        Write-Success "DeepSeek 配置已写入。"
+        Write-Warning "但 API 测试失败，可能是 Key、余额、网络或 DeepSeek 服务问题。"
         Write-Host ""
         Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
         Write-Host "  【下一步说明】" -ForegroundColor Cyan
         Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
         Write-Host ""
-        Write-Warning "当前未完全验证可用，请确认:"
-        Write-Info "  1. API Key 是否正确（到 platform.deepseek.com 重新获取）"
-        Write-Info "  2. DeepSeek 账户余额是否充足"
-        Write-Info "  3. 网络是否正常（能否访问 api.deepseek.com）"
-        Write-Info "  4. DeepSeek 官方服务是否正常"
-        Write-Info "  5. 运行「一键诊断.cmd」获取详细信息"
-        Write-Host ""
-        Write-Info "本工具只负责本地安装和配置，不销售 API，不保证第三方接口永久可用。"
+        Write-Info "运行 [4] 一键诊断，只发送 report.txt。"
         Write-Host ""
         Write-Info "安装完成报告: $($script:ReportPath)"
     }
@@ -1271,9 +1283,9 @@ function Show-CompletionPage {
         Write-Host "            安装部分完成                                      " -ForegroundColor Yellow
         Write-Host "==============================================================" -ForegroundColor Yellow
         Write-Host ""
-        Write-Success "Claude Code 已安装"
-        Write-Warning "DeepSeek 配置未完成"
-        Write-Info "请稍后运行 configure-deepseek.ps1 配置 API Key。"
+        Write-Success "Claude Code 已安装。"
+        Write-Warning "DeepSeek 配置未完成。"
+        Write-Info "请稍后运行 configure-deepseek.ps1 或在主菜单选择高级选项配置 API Key。"
     }
     elseif ($script:ClaudeInstallStatus -match "needs_restart") {
         Write-Host "==============================================================" -ForegroundColor Yellow
@@ -1327,7 +1339,8 @@ function Show-CompletionPage {
             Write-Host "==============================================================" -ForegroundColor Red
             Write-Host ""
             Write-Error-Msg "Claude Code 安装未成功。"
-            Write-Info "下一步: 运行「一键诊断.cmd」生成 report.txt，并将报告发给技术支持。"
+            Write-Info "请运行「一键诊断.cmd」，只发送 report.txt。"
+            Write-Info "不要发送 backup/、logs/ 或完整 API Key。"
         }
     }
 
@@ -1344,7 +1357,9 @@ function Show-CompletionPage {
 function Show-CompletionMenu {
     <#
     .SYNOPSIS
-        完成页快捷操作菜单。循环显示直到用户选择退出。
+        v1.3.3 UX: 完成页快捷操作菜单。循环显示直到用户选择退出。
+        第一项为"立即验证 Claude Code 是否能正常使用（推荐）"。
+        不自动启动 claude，引导用户手动在终端输入。
     #>
     while ($true) {
         Write-Host ""
@@ -1352,20 +1367,20 @@ function Show-CompletionMenu {
         Write-Host "  请选择下一步：" -ForegroundColor Cyan
         Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
 
-        # 选项 1: 打开测试项目并查看使用说明（推荐）
+        # 选项 1: 立即验证 Claude Code 是否能正常使用（推荐）
         $testProjectAvailable = ($script:TestProjectPath -and (Test-Path $script:TestProjectPath))
         if ($testProjectAvailable) {
-            Write-Host "  [1] 打开测试项目并查看使用说明（推荐）" -ForegroundColor White
-            Write-Host "      该项目只用于首次验证，测试完成后可以删除。" -ForegroundColor DarkGray
+            Write-Host "  [1] 立即验证 Claude Code 是否能正常使用（推荐）" -ForegroundColor Green
+            Write-Host "      打开测试文件夹，手动打开终端，输入 claude 验证。" -ForegroundColor DarkGray
         }
         else {
-            Write-Host "  [1] 打开测试项目（不可用）" -ForegroundColor DarkGray
+            Write-Host "  [1] 立即验证 Claude Code（测试项目未创建）" -ForegroundColor DarkGray
         }
 
-        # 选项 2: 打开测试项目文件夹（仅查看）
+        # 选项 2: 打开测试项目文件夹
         if ($testProjectAvailable) {
             Write-Host "  [2] 打开测试项目文件夹" -ForegroundColor White
-            Write-Host "      仅查看 README.md / CLAUDE.md / hello.md，不自动启动 claude。" -ForegroundColor DarkGray
+            Write-Host "      仅浏览文件夹内容，不启动 claude。" -ForegroundColor DarkGray
         }
         else {
             Write-Host "  [2] 打开测试项目文件夹（不可用）" -ForegroundColor DarkGray
@@ -1397,15 +1412,45 @@ function Show-CompletionMenu {
         switch ($choice) {
             "1" {
                 if (-not $testProjectAvailable) {
-                    Write-Info "测试项目未创建。"
-                    continue
+                    Write-Info "测试项目未创建，正在自动创建..."
+                    $created = Step-CreateTestProject
+                    if (-not $created) {
+                        Write-Warning "无法自动创建测试项目。"
+                        Write-Info "请手动在任意位置新建文件夹，然后在文件夹中打开 PowerShell 输入 claude。"
+                        continue
+                    }
                 }
+
+                # 检查 fresh shell 验证状态
+                $nativeClaudeExe = Get-NativeClaudeExePath
+                $freshOk = $false
+                if (Test-Path $nativeClaudeExe -or $script:ClaudeInstalled) {
+                    $freshCheck = Test-ClaudeCommandInFreshShell
+                    $freshOk = $freshCheck.Success
+                }
+
+                if (-not $freshOk -and $script:ClaudeInstalled) {
+                    Write-Warning "当前新 PowerShell 尚未确认能直接运行 claude。"
+                    Write-Info "建议先运行 [4] 一键诊断 或「一键修复依赖」。"
+                    Write-Info "也可以关闭当前窗口后重新打开 PowerShell，执行 claude --version。"
+                    Write-Host ""
+                }
+
                 Write-Info "正在打开测试项目..."
                 Write-Info "该项目只用于首次验证 Claude Code 能正常使用，测试完成后可以删除。"
                 try {
                     explorer.exe $script:TestProjectPath
                     Write-Info "已打开测试项目文件夹: $($script:TestProjectPath)"
-                    Write-Info "在文件夹中打开 PowerShell，输入 claude 即可开始测试。"
+                    Write-Host ""
+                    Write-Info "请在打开的文件夹空白处右键 → 在终端中打开"
+                    Write-Info "然后输入："
+                    Write-Host ""
+                    Write-Host "  claude" -ForegroundColor Green
+                    Write-Host ""
+                    Write-Info "进入 Claude Code 后，可以复制下面这句话测试："
+                    Write-Host ""
+                    Write-Host "  请用一句话说明当前项目是做什么的。" -ForegroundColor Cyan
+                    Write-Host ""
                 }
                 catch {
                     Write-Warning "无法自动打开文件夹，请手动打开: $($script:TestProjectPath)"
@@ -1416,7 +1461,7 @@ function Show-CompletionMenu {
                     Write-Info "测试项目未创建。"
                     continue
                 }
-                Write-Info "正在打开测试项目文件夹（仅查看文件，不启动 claude）..."
+                Write-Info "正在打开测试项目文件夹（仅浏览文件，不启动 claude）..."
                 try {
                     explorer.exe $script:TestProjectPath
                     Write-Info "已打开: $($script:TestProjectPath)"

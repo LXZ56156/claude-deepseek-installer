@@ -811,9 +811,9 @@ x-api-key: $TestApiKey
         $claudeInstallText -notmatch 'Claude 官方安装通道执行失败，正在自动切换国内 npm 镜像安装'
     } "仍包含过时文案'自动切换国内 npm 镜像安装'"
 
-    # 20c. 必须写"备用安装通道"
+    # 20c. 必须写"备用安装通道"或"备用安装方式"
     Assert "Native Install 失败使用'备用安装通道'措辞" {
-        $claudeInstallText -match '备用安装通道'
+        ($claudeInstallText -match '备用安装通道') -or ($claudeInstallText -match '备用安装方式')
     } "未出现'备用安装通道'措辞"
 
     # 20d. 必须提到 winget 在 npmmirror 之前
