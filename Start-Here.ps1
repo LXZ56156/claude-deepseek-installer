@@ -1859,13 +1859,11 @@ function Main {
         if ($pathRisk.IsBlocked) {
             Write-Host ""
             Write-Host "==============================================================" -ForegroundColor Red
-            Write-Host "  [ERROR] 检测到 ZIP 临时目录运行" -ForegroundColor Red
+            Write-Host "  [ERROR] 检测到你可能正在压缩包预览窗口中直接运行" -ForegroundColor Red
             Write-Host "==============================================================" -ForegroundColor Red
             Write-Host ""
-            Write-Warning "当前运行路径疑似在压缩包临时目录中。"
-            Write-Warning "请先完整解压 ZIP 到普通文件夹，例如："
-            Write-Host "  D:\ClaudeDeepSeek" -ForegroundColor Cyan
-            Write-Warning "然后再双击 [00-点我开始安装.cmd]。"
+            Write-Warning "请先右键 ZIP 文件 -> 全部解压缩。"
+            Write-Warning "然后打开解压后的文件夹，再双击 00-点我开始安装.cmd。"
             Write-Warning "不要在压缩包预览窗口中直接运行。"
             Write-Host ""
             Write-Info "本次运行日志: $(Get-LogFilePath)"
@@ -1875,31 +1873,6 @@ function Main {
                 Read-Host "按回车键退出..."
             }
             exit 1
-        }
-
-        if ($pathRisk.RiskLevel -eq "WARN") {
-            Write-Host ""
-            Write-Host "==============================================================" -ForegroundColor Yellow
-            Write-Host "  [WARN] 当前运行路径存在风险" -ForegroundColor Yellow
-            Write-Host "==============================================================" -ForegroundColor Yellow
-            Write-Host ""
-            foreach ($item in $pathRisk.RiskItems) {
-                Write-Warning "  - $item"
-            }
-            Write-Host ""
-            foreach ($sg in $pathRisk.Suggestions) {
-                Write-Info $sg
-            }
-            Write-Host ""
-            Write-Info "这些风险不会阻止安装，但建议移动项目文件夹以避免潜在问题。"
-            if (-not $NonInteractive) {
-                $continueAnyway = Read-Host "按回车继续（风险自担），或输入 Q 退出"
-                if ($continueAnyway -eq "Q" -or $continueAnyway -eq "q") {
-                    Write-Info "已退出。请移动项目文件夹后重新运行。"
-                    exit 0
-                }
-            }
-            Write-Log "WARN" "路径风险警告已确认继续: $($pathRisk.Path)"
         }
 
         # 日志路径前置：交互模式下尽早显示

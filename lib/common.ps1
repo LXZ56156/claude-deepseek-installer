@@ -155,7 +155,7 @@ function Test-IsZipInternalPath {
     .RETURNS
         包含 IsZipTemp, IsTempPath, Reason, Path 的哈希表。
         IsZipTemp = true  → 明确压缩包临时目录，必须 BLOCK
-        IsTempPath = true → 普通 TEMP 目录，只 WARN
+        IsTempPath = true → 普通 TEMP 目录（仅写日志，不再前台 WARN）
     #>
     param(
         [string]$PathToCheck = $null
@@ -219,11 +219,11 @@ function Test-IsZipInternalPath {
     }
 
     # ============================================================
-    # 第 2 遍：普通 TEMP 目录 → IsTempPath = true（WARN，不 BLOCK）
+    # 第 2 遍：普通 TEMP 目录 → IsTempPath = true（仅写日志，不前台 WARN）
     # ============================================================
     if ($isUnderTemp) {
         $result.IsTempPath = $true
-        $result.Reason = "当前路径在系统临时目录中，文件可能被自动清理导致数据丢失。建议移动到 D:\\ClaudeDeepSeek。"
+        $result.Reason = "当前路径在系统临时目录中。"
         return $result
     }
 
@@ -237,7 +237,7 @@ function Test-IsZipInternalPath {
 function Test-UserPathRisk {
     <#
     .SYNOPSIS
-        检测项目运行路径中存在的风险因素。
+        仅阻断 ZIP 预览/临时解压路径；常见用户目录（桌面、下载、OneDrive、微信/QQ接收目录）默认允许，不在前台警告。
     .PARAMETER PathToCheck
         要检测的路径。默认使用当前目录。
     .RETURNS
@@ -261,81 +261,27 @@ function Test-UserPathRisk {
     }
     $result.Path = $PathToCheck
 
-    # 先检测 ZIP 临时目录（这是 BLOCK 级别的）
+    # ZIP 临时目录（BLOCK 级别，必须阻断）
     $zipCheck = Test-IsZipInternalPath -PathToCheck $PathToCheck
     if ($zipCheck.IsZipTemp) {
         $result.RiskLevel = "BLOCK"
         $result.IsBlocked = $true
         [void]$result.RiskItems.Add("ZIP临时目录: $($zipCheck.Reason)")
-        [void]$result.Suggestions.Add("请先完整解压 ZIP 到普通文件夹，例如 D:\ClaudeDeepSeek，然后再双击00-点我开始安装.cmd。不要在压缩包预览窗口中直接运行。")
+        [void]$result.Suggestions.Add("请先右键 ZIP 文件 -> 全部解压缩，然后在解压后的文件夹里双击 00-点我开始安装.cmd。不要在压缩包预览窗口中直接运行。")
         return $result
     }
 
-    # 普通 TEMP 目录：只 WARN，不 BLOCK
+    # 普通 TEMP 目录：仅写日志，不前台 WARN
     if ($zipCheck.IsTempPath) {
+        Write-Log "DEBUG" "Project path is under TEMP but not ZIP temp; allowed without user warning: $PathToCheck"
+    }
+
+    # WSL 文件系统路径（从 Windows 访问 WSL 文件系统运行 Windows 脚本不适合小白）
+    if ($PathToCheck.ToLowerInvariant().Contains("\wsl.localhost") -or
+        $PathToCheck.ToLowerInvariant().Contains("\wsl$")) {
         $result.RiskLevel = "WARN"
-        [void]$result.RiskItems.Add("临时目录: $($zipCheck.Reason)")
-        [void]$result.Suggestions.Add("建议将项目移动到 D:\ClaudeDeepSeek 等普通文件夹。")
-    }
-
-    $risks = [System.Collections.ArrayList]::new()
-
-    # 空格检测
-    if ($PathToCheck.Contains(" ")) {
-        [void]$risks.Add("路径包含空格，可能影响某些脚本执行")
-    }
-
-    # 特殊字符检测
-    if ($PathToCheck -match '[&^!()]') {
-        [void]$risks.Add("路径包含特殊字符 (& ^ ! 括号)，可能导致命令行解析异常")
-    }
-
-    # OneDrive 检测
-    if ($PathToCheck.ToLowerInvariant().Contains("onedrive")) {
-        [void]$risks.Add("路径在 OneDrive 同步目录中，可能因同步冲突导致文件锁定或版本异常")
-    }
-
-    # Desktop/Downloads/微信/QQ 等常见接收目录
-    $desktopLower = [Environment]::GetFolderPath("Desktop").ToLowerInvariant()
-    if ($PathToCheck.ToLowerInvariant().StartsWith($desktopLower)) {
-        [void]$risks.Add("路径在桌面目录中，桌面路径可能包含空格或特殊字符")
-    }
-
-    $userProfile = (Get-UserProfilePath).ToLowerInvariant()
-    if ($PathToCheck.ToLowerInvariant().StartsWith("$userProfile\downloads")) {
-        [void]$risks.Add("路径在下载目录中，部分安全软件可能拦截脚本运行")
-    }
-
-    if ($PathToCheck -match '(微信|WeChat|QQ|Tencent Files|钉钉|DingTalk)') {
-        [void]$risks.Add("路径包含即时通讯软件接收目录，可能因文件锁定或权限问题导致运行失败")
-    }
-
-    # 路径长度检测
-    $pathLen = $PathToCheck.Length
-    if ($pathLen -gt 240) {
-        [void]$risks.Add("路径过长 ($pathLen 字符，超过 240)，可能导致 Windows 路径长度限制问题")
-    }
-    elseif ($pathLen -gt 180) {
-        [void]$risks.Add("路径较长 ($pathLen 字符)，建议使用更短的路径")
-    }
-
-    # UNC 路径检测
-    if ($PathToCheck.StartsWith("\\")) {
-        [void]$risks.Add("当前使用 UNC 网络路径，可能导致脚本执行权限问题。建议复制到本地磁盘。")
-    }
-
-    # WSL 路径（从 Windows 访问 WSL 文件系统）
-    if ($PathToCheck.ToLowerInvariant().Contains("\\wsl.localhost") -or
-        $PathToCheck.ToLowerInvariant().Contains("\\wsl$")) {
-        [void]$risks.Add("当前在 WSL 文件系统路径中运行 Windows 脚本。请在 Windows 本地磁盘中解压运行，或在 WSL 内使用 install_wsl.sh。")
-    }
-
-    # 评估风险级别
-    if ($risks.Count -gt 0) {
-        $result.RiskLevel = "WARN"
-        foreach ($r in $risks) { [void]$result.RiskItems.Add($r) }
-
-        [void]$result.Suggestions.Add("建议将项目文件夹移动到 D:\ClaudeDeepSeek（或类似不含空格、特殊字符的路径），可以避免大多数路径相关问题。")
+        [void]$result.RiskItems.Add("当前在 WSL 文件系统路径中运行 Windows 脚本。请把安装包解压到 Windows 桌面、下载目录或 D 盘文件夹后再运行。")
+        [void]$result.Suggestions.Add("建议复制到 Windows 本地文件夹后运行，例如桌面或 D:\ClaudeDeepSeek。")
     }
 
     return $result

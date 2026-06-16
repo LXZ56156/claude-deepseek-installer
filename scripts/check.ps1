@@ -133,10 +133,10 @@ $pathRiskCases = @(
         ExpectedLevel = "INFO"
     },
     @{
-        Name          = "Normal temp path"
+        Name          = "Normal temp path (no longer WARN)"
         Path          = Join-Path $pathRiskTempRoot "ClaudeDeepSeek"
         ShouldBlock   = $false
-        ExpectedLevel = "WARN"
+        ExpectedLevel = $null
     },
     @{
         Name          = "WinRAR temp path"
@@ -163,10 +163,10 @@ $pathRiskCases = @(
         ExpectedLevel = "INFO"
     },
     @{
-        Name          = "Space path"
+        Name          = "Space path (no longer WARN)"
         Path          = "D:\中文 路径\Claude"
         ShouldBlock   = $false
-        ExpectedLevel = "WARN"
+        ExpectedLevel = $null
     },
     @{
         Name          = "WSL UNC path"
@@ -177,6 +177,48 @@ $pathRiskCases = @(
     @{
         Name          = "Non-temp 7zip-like folder"
         Path          = "D:\tools\7zip-helper\Claude"
+        ShouldBlock   = $false
+        ExpectedLevel = $null
+    },
+    @{
+        Name          = "Desktop path (now allowed)"
+        Path          = Join-Path ([Environment]::GetFolderPath("Desktop")) "ClaudeCode-DeepSeek"
+        ShouldBlock   = $false
+        ExpectedLevel = "INFO"
+    },
+    @{
+        Name          = "Downloads path (now allowed)"
+        Path          = Join-Path ([Environment]::GetFolderPath("UserProfile")) "Downloads\ClaudeCode-DeepSeek"
+        ShouldBlock   = $false
+        ExpectedLevel = "INFO"
+    },
+    @{
+        Name          = "OneDrive path (now allowed)"
+        Path          = Join-Path ([Environment]::GetFolderPath("UserProfile")) "OneDrive\ClaudeCode-DeepSeek"
+        ShouldBlock   = $false
+        ExpectedLevel = "INFO"
+    },
+    @{
+        Name          = "Space + parentheses path (now allowed)"
+        Path          = Join-Path ([Environment]::GetFolderPath("UserProfile")) "Desktop\Claude Code (DeepSeek)"
+        ShouldBlock   = $false
+        ExpectedLevel = "INFO"
+    },
+    @{
+        Name          = "WeChat receive path (now allowed)"
+        Path          = Join-Path ([Environment]::GetFolderPath("UserProfile")) "Documents\WeChat Files\FileStorage\File\ClaudeCode-DeepSeek"
+        ShouldBlock   = $false
+        ExpectedLevel = "INFO"
+    },
+    @{
+        Name          = "QQ receive path (now allowed)"
+        Path          = Join-Path ([Environment]::GetFolderPath("UserProfile")) "Documents\Tencent Files\123456\FileRecv\ClaudeCode-DeepSeek"
+        ShouldBlock   = $false
+        ExpectedLevel = "INFO"
+    },
+    @{
+        Name          = "Long path 250+ chars (no longer WARN)"
+        Path          = "D:\" + ("a" * 240) + "\ClaudeCode-DeepSeek"
         ShouldBlock   = $false
         ExpectedLevel = $null
     }

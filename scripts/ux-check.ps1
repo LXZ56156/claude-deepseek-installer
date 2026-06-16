@@ -1039,6 +1039,101 @@ x-api-key: $TestApiKey
     Write-Host ""
 
     # ============================================================
+    # 24. P10 路径 UX 反回归：常见用户目录允许，ZIP 临时目录阻断
+    # ============================================================
+    Write-CheckHeader "24. 路径 UX 反回归：常见目录允许 + ZIP 临时阻断"
+
+    $realDesktop = [Environment]::GetFolderPath("Desktop")
+    $realUserProfile = [Environment]::GetFolderPath("UserProfile")
+
+    # 24a: 桌面路径允许
+    $desktopPath = Join-Path $realDesktop "ClaudeCode-DeepSeek-本地配置助手"
+    $r = Test-UserPathRisk -PathToCheck $desktopPath
+    Assert "桌面路径允许: IsBlocked=false" { $r.IsBlocked -eq $false } "桌面路径被阻断: $($r.RiskLevel)"
+    Assert "桌面路径 RiskLevel=INFO" { $r.RiskLevel -eq "INFO" } "桌面路径 RiskLevel 异常: $($r.RiskLevel)"
+    Assert "桌面路径 RiskItems 为空" { $r.RiskItems.Count -eq 0 } "桌面路径仍有风险项: $($r.RiskItems -join '; ')"
+
+    # 24b: 下载目录允许
+    $downloadsPath = Join-Path $realUserProfile "Downloads\ClaudeCode-DeepSeek"
+    $r2 = Test-UserPathRisk -PathToCheck $downloadsPath
+    Assert "下载目录允许: IsBlocked=false" { $r2.IsBlocked -eq $false } "下载目录被阻断"
+    Assert "下载目录 RiskLevel=INFO" { $r2.RiskLevel -eq "INFO" } "下载目录 RiskLevel 异常: $($r2.RiskLevel)"
+
+    # 24c: OneDrive 路径允许
+    $oneDrivePath = Join-Path $realUserProfile "OneDrive\Desktop\ClaudeCode-DeepSeek"
+    $r3 = Test-UserPathRisk -PathToCheck $oneDrivePath
+    Assert "OneDrive 路径允许: IsBlocked=false" { $r3.IsBlocked -eq $false } "OneDrive 路径被阻断"
+    Assert "OneDrive 路径 RiskLevel=INFO" { $r3.RiskLevel -eq "INFO" } "OneDrive 路径 RiskLevel 异常: $($r3.RiskLevel)"
+
+    # 24d: 微信路径允许
+    $wechatPath = Join-Path $realUserProfile "Documents\WeChat Files\FileStorage\File\ClaudeCode-DeepSeek"
+    $r4 = Test-UserPathRisk -PathToCheck $wechatPath
+    Assert "微信路径允许: IsBlocked=false" { $r4.IsBlocked -eq $false } "微信路径被阻断"
+    Assert "微信路径 RiskLevel=INFO" { $r4.RiskLevel -eq "INFO" } "微信路径 RiskLevel 异常: $($r4.RiskLevel)"
+
+    # 24e: QQ 路径允许
+    $qqPath = Join-Path $realUserProfile "Documents\Tencent Files\123456\FileRecv\ClaudeCode-DeepSeek"
+    $r5 = Test-UserPathRisk -PathToCheck $qqPath
+    Assert "QQ 路径允许: IsBlocked=false" { $r5.IsBlocked -eq $false } "QQ 路径被阻断"
+    Assert "QQ 路径 RiskLevel=INFO" { $r5.RiskLevel -eq "INFO" } "QQ 路径 RiskLevel 异常: $($r5.RiskLevel)"
+
+    # 24f: 空格+括号路径允许
+    $spaceParenPath = Join-Path $realDesktop "Claude Code (DeepSeek)"
+    $r6 = Test-UserPathRisk -PathToCheck $spaceParenPath
+    Assert "空格+括号路径允许: IsBlocked=false" { $r6.IsBlocked -eq $false } "空格+括号路径被阻断"
+    Assert "空格+括号路径 RiskLevel=INFO" { $r6.RiskLevel -eq "INFO" } "空格+括号路径 RiskLevel 异常: $($r6.RiskLevel)"
+
+    # 24g: ZIP 临时目录仍 BLOCK
+    $zipTempPath = Join-Path $env:TEMP "Temp1_ClaudeCode.zip\ClaudeCode-DeepSeek"
+    $r7 = Test-UserPathRisk -PathToCheck $zipTempPath
+    Assert "ZIP 临时目录 BLOCK: IsBlocked=true" { $r7.IsBlocked -eq $true } "ZIP 临时目录未被阻断"
+    Assert "ZIP 临时目录 RiskLevel=BLOCK" { $r7.RiskLevel -eq "BLOCK" } "ZIP 临时目录 RiskLevel 异常: $($r7.RiskLevel)"
+    Assert "ZIP 临时目录包含全部解压提示" {
+        ($r7.Suggestions -join ' ') -match '全部解压|不要在压缩包预览窗口中直接运行'
+    } "ZIP 临时目录建议缺少解压提示: $($r7.Suggestions -join ' ')"
+
+    # 24h: 7-Zip 临时目录仍 BLOCK
+    $sevenZipTempPath = Join-Path $env:TEMP "7zABC123\ClaudeCode-DeepSeek"
+    $r8 = Test-UserPathRisk -PathToCheck $sevenZipTempPath
+    Assert "7-Zip 临时目录 BLOCK: IsBlocked=true" { $r8.IsBlocked -eq $true } "7-Zip 临时目录未被阻断"
+    Assert "7-Zip 临时目录 RiskLevel=BLOCK" { $r8.RiskLevel -eq "BLOCK" } "7-Zip 临时目录 RiskLevel 异常: $($r8.RiskLevel)"
+
+    # 24i: WinRAR 临时目录仍 BLOCK
+    $rarTempPath = Join-Path $env:TEMP "Rar`$ABC123.456\ClaudeCode-DeepSeek"
+    $r9 = Test-UserPathRisk -PathToCheck $rarTempPath
+    Assert "WinRAR 临时目录 BLOCK: IsBlocked=true" { $r9.IsBlocked -eq $true } "WinRAR 临时目录未被阻断"
+    Assert "WinRAR 临时目录 RiskLevel=BLOCK" { $r9.RiskLevel -eq "BLOCK" } "WinRAR 临时目录 RiskLevel 异常: $($r9.RiskLevel)"
+
+    # 24j: 文案反回归——用户文档不再包含旧误导文案
+    $userDocsToCheck = @(
+        (Join-Path $ScriptRoot "README.md"),
+        (Join-Path $ScriptRoot "QUICK_START.md"),
+        (Join-Path $ScriptRoot "docs\用户使用教程.md")
+    )
+    $forbiddenPhrases = @(
+        "不要解压到桌面",
+        "不要解压到下载目录",
+        "不要解压到 OneDrive",
+        "不要解压到微信/QQ",
+        "风险自担",
+        "路径包含空格，可能影响某些脚本执行",
+        "路径在桌面目录中",
+        "建议将项目文件夹移动到 D:\\ClaudeDeepSeek（或类似不含空格、特殊字符的路径）"
+    )
+    foreach ($docPath in $userDocsToCheck) {
+        if (-not (Test-Path $docPath)) { continue }
+        $docContent = Get-Content $docPath -Raw -Encoding UTF8
+        foreach ($phrase in $forbiddenPhrases) {
+            $docName = Split-Path -Leaf $docPath
+            Assert "文档 $docName 不含: $phrase" {
+                $docContent -notmatch [regex]::Escape($phrase)
+            } "文档 $docName 仍然包含旧路径限制文案: $phrase"
+        }
+    }
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""
