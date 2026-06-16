@@ -894,6 +894,31 @@ x-api-key: $TestApiKey
     Write-Host ""
 
     # ============================================================
+    # 22. 编码初始化单一入口检查
+    # ============================================================
+    Write-CheckHeader "22. 编码初始化单一入口检查"
+
+    $bootstrapPath = Join-Path $ScriptRoot "lib\bootstrap.ps1"
+    $bootstrapText = Get-Content $bootstrapPath -Raw -Encoding UTF8
+    $loggerPath = Join-Path $ScriptRoot "lib\logger.ps1"
+    $loggerText = Get-Content $loggerPath -Raw -Encoding UTF8
+
+    Assert "Initialize-Logger 负责调用 Initialize-ConsoleEncodingSafe" {
+        $loggerText -match 'function Initialize-Logger' -and
+        $loggerText -match 'Initialize-ConsoleEncodingSafe'
+    } "logger.ps1 的 Initialize-Logger 必须负责统一编码初始化"
+
+    Assert "Initialize-CcdiScript 不重复调用 Initialize-ConsoleEncodingSafe" {
+        $bootstrapText -notmatch 'Initialize-CcdiScript[\s\S]{0,500}Initialize-ConsoleEncodingSafe'
+    } "bootstrap.ps1 不应重复调用 Initialize-ConsoleEncodingSafe，避免同一入口重复编码初始化"
+
+    Assert "doctor.ps1 仍通过 Initialize-CcdiScript 初始化" {
+        $doctorText -match 'Initialize-CcdiScript\s+-ScriptName\s+"doctor"'
+    } "doctor.ps1 必须继续通过 Initialize-CcdiScript 初始化"
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""

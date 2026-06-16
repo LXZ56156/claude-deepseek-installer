@@ -3039,4 +3039,28 @@ if ($claudeInstallText -notmatch 'finally[\s\S]{0,300}\$client\.Dispose\(\)') {
 
 Write-Host "[check] P8 anti-regression OK"
 
+# ============================================================
+# P9: 编码初始化单一入口 (Initialize-Logger, not duplicate)
+# ============================================================
+Write-Host "[check] P9 anti-regression: single encoding init entry"
+
+$bootstrapTextForP9 = Get-Content -Path (Join-Path $RootDir "lib\bootstrap.ps1") -Raw -Encoding UTF8
+$loggerTextForP9 = Get-Content -Path (Join-Path $RootDir "lib\logger.ps1") -Raw -Encoding UTF8
+
+# P9a. Initialize-Logger must call Initialize-ConsoleEncodingSafe
+$initLoggerMatch = [regex]::Match($loggerTextForP9, '(?s)function Initialize-Logger\s*\{.*?\n\}')
+if (-not $initLoggerMatch.Success) {
+    throw "logger.ps1 must define Initialize-Logger"
+}
+if ($initLoggerMatch.Value -notmatch 'Initialize-ConsoleEncodingSafe') {
+    throw "Initialize-Logger must call Initialize-ConsoleEncodingSafe"
+}
+
+# P9b. Initialize-CcdiScript must NOT call Initialize-ConsoleEncodingSafe directly (already handled by Initialize-Logger)
+if ($bootstrapTextForP9 -match 'Initialize-CcdiScript[\s\S]{0,500}Initialize-ConsoleEncodingSafe') {
+    throw "Initialize-CcdiScript must not call Initialize-ConsoleEncodingSafe directly; avoid duplicate encoding init. Initialize-Logger already handles it."
+}
+
+Write-Host "[check] P9 anti-regression OK"
+
 Write-Host "[check] OK"
