@@ -1,5 +1,5 @@
 ﻿# ============================================================
-# repair-deps.ps1 - 一键修复依赖 (v1.3.2)
+# repair-deps.ps1 - 一键修复依赖 (v1.3.3)
 #
 # 用法:
 #   powershell -ExecutionPolicy Bypass -File .\repair-deps.ps1
@@ -275,22 +275,26 @@ function Start-RepairDeps {
 
                 if ($pathFix.Success -and $pathFix.Changed) {
                     Write-Success "PATH 修复完成"
+                    Write-Info "正在验证新 PowerShell 是否可直接运行 claude..."
 
-                    # 刷新后重新检测
-                    Refresh-CurrentProcessPath
-                    $claudeVer = Test-ClaudeInstalled
-                    if ($claudeVer) {
-                        Add-CR "Native Install PATH 修复" "OK" "修复成功，claude 已可识别: $claudeVer"
+                    # v1.3.3 P1-1: fresh shell 验证（模拟用户新开窗口）
+                    $freshCheck = Test-ClaudeCommandInFreshShell
+
+                    if ($freshCheck.Success) {
+                        Add-CR "Native Install PATH 修复" "OK" "修复成功，新 PowerShell 可直接运行 claude: $($freshCheck.Output)"
+                        Write-Success "PATH 修复完成，新 PowerShell 已可识别 claude"
                         # 更新 Claude Code 检测结果为 OK
                         foreach ($cr in $script:CheckResults) {
                             if ($cr.Name -eq "Claude Code" -and $cr.Status -eq "ERROR") {
                                 $cr.Status = "OK"
-                                $cr.Detail = $claudeVer
+                                $cr.Detail = $freshCheck.Output
                             }
                         }
                     }
                     else {
-                        Add-CR "Native Install PATH 修复" "WARN" "PATH 已写入，但当前进程仍无法识别 claude（可关闭重开终端）"
+                        Add-CR "Native Install PATH 修复" "WARN" "PATH 已写入注册表，但 fresh shell 验证未通过。请关闭当前窗口重开 PowerShell 后执行 claude --version"
+                        Write-Warning "PATH 已写入，但新 PowerShell 验证仍未通过。"
+                        Write-Info "请关闭当前窗口，重新打开 PowerShell 后执行 claude --version 验证。"
                     }
                 }
                 else {

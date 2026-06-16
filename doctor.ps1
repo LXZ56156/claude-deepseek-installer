@@ -272,39 +272,54 @@ function Check-Commands {
         Add-Suggestion "在 VS Code 中按 Ctrl+Shift+P，搜索并执行 'Shell Command: Install code command in PATH'。"
     }
     # WSL 检测已统一移至 Check-WSL（避免全流程两次 wsl --version 探测），此处不提前调用
-    # --- Claude Code 安装文件检测 (v1.3.3) ---
+    # --- Claude Code 安装文件检测 (v1.3.3 P0-4: 区分 native/npm 安装来源) ---
     $nativeClaudeExe = Get-NativeClaudeExePath
     $nativeBinPath = Get-NativeClaudeBinPath
-    $claudeExeExists = Test-Path $nativeClaudeExe
+    $nativeExeExists = Test-Path $nativeClaudeExe
 
-    if ($claudeExeExists) {
+    $npmClaudePath = $null
+    $npmGlobalBin = $null
+    if ($env:APPDATA) {
+        $npmGlobalBin = Join-Path $env:APPDATA "npm"
+        $npmClaudePath = Join-Path $npmGlobalBin "claude.cmd"
+    }
+    $npmExeExists = ($npmClaudePath -and (Test-Path $npmClaudePath))
+
+    $anyClaudeInstallExists = $nativeExeExists -or $npmExeExists
+
+    if ($nativeExeExists) {
         Add-CheckResult "Claude Code 安装文件" "OK" $nativeClaudeExe
     }
+    elseif ($npmExeExists) {
+        Add-CheckResult "Claude Code 安装文件" "OK" $npmClaudePath
+    }
     else {
-        # 也检查 npm 全局安装路径
-        $npmClaudePath = if ($env:APPDATA) { Join-Path $env:APPDATA "npm\claude.cmd" } else { $null }
-        if ($npmClaudePath -and (Test-Path $npmClaudePath)) {
-            Add-CheckResult "Claude Code 安装文件" "OK" $npmClaudePath
-            $claudeExeExists = $true
-        }
-        else {
-            Add-CheckResult "Claude Code 安装文件" "WARN" "未找到 claude 安装文件"
-        }
+        Add-CheckResult "Claude Code 安装文件" "WARN" "未找到 claude 安装文件"
     }
 
-    # --- User PATH 检测 (v1.3.3) ---
-    $userPathCheck = Test-UserPathContains -TargetPath $nativeBinPath
-    if ($userPathCheck.Contains) {
-        Add-CheckResult "User PATH" "OK" "已包含 Claude Code 安装目录"
-    }
-    else {
-        if ($claudeExeExists) {
-            Add-CheckResult "User PATH" "ERROR" "未包含 Claude Code 安装目录，普通 PowerShell 无法直接运行 claude"
-            Add-Suggestion "请运行「一键修复依赖」或重新运行安装工具修复 PATH。也可以手动将以下路径加入用户 PATH：$nativeBinPath"
+    # --- User PATH 检测 (v1.3.3 P0-4: 区分 native/npm 安装来源) ---
+    if ($nativeExeExists) {
+        $nativePathCheck = Test-UserPathContains -TargetPath $nativeBinPath
+        if ($nativePathCheck.Contains) {
+            Add-CheckResult "User PATH" "OK" "已包含 Native Install 目录: $nativeBinPath"
         }
         else {
-            Add-CheckResult "User PATH" "INFO" "未包含 Native Install 目录（Claude Code 可能以 npm 方式安装）"
+            Add-CheckResult "User PATH" "ERROR" "未包含 Native Install 目录，普通 PowerShell 可能无法直接运行 claude"
+            Add-Suggestion "请运行「一键修复依赖」或手动将以下路径加入 User PATH：$nativeBinPath"
         }
+    }
+    elseif ($npmExeExists) {
+        $npmPathCheck = Test-UserPathContains -TargetPath $npmGlobalBin
+        if ($npmPathCheck.Contains) {
+            Add-CheckResult "User PATH" "OK" "已包含 npm 全局目录: $npmGlobalBin"
+        }
+        else {
+            Add-CheckResult "User PATH" "ERROR" "未包含 npm 全局目录，普通 PowerShell 可能无法直接运行 claude"
+            Add-Suggestion "请将以下路径加入 User PATH：$npmGlobalBin"
+        }
+    }
+    else {
+        Add-CheckResult "User PATH" "INFO" "未检测到 Claude Code 安装文件，跳过 PATH 安装目录检查"
     }
 
     # --- Claude Code CLI + 命令来源（只调用一次 Get-ClaudeCommandInventory）---
@@ -352,19 +367,19 @@ function Check-Commands {
         }
     }
 
-    # --- Fresh Shell claude 检测 (v1.3.3) ---
+    # --- Fresh Shell claude 检测 (v1.3.3 P0-4: 区分安装来源) ---
     try {
         $freshShellCheck = Test-ClaudeCommandInFreshShell
         if ($freshShellCheck.Success) {
             Add-CheckResult "Fresh PowerShell claude" "OK" $freshShellCheck.Output
         }
         else {
-            if ($claudeExeExists) {
+            if ($anyClaudeInstallExists) {
                 Add-CheckResult "Fresh PowerShell claude" "ERROR" "新 PowerShell 中无法识别 claude 命令"
-                Add-Suggestion "Claude Code 已安装但 new shell 中 claude 不可用。请运行「一键修复依赖」修复 PATH。"
+                Add-Suggestion "Claude Code 安装文件存在，但 fresh shell 中 claude 不可用。请运行「一键修复依赖」修复 PATH。"
             }
             else {
-                Add-CheckResult "Fresh PowerShell claude" "INFO" "未检测到 claude 安装文件，跳过 fresh shell 验证"
+                Add-CheckResult "Fresh PowerShell claude" "INFO" "未检测到 Claude Code 安装文件，跳过 fresh shell 验证"
             }
         }
     }

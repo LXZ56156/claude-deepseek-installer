@@ -4,7 +4,7 @@
 # All repair actions use sandbox only. No real config modification.
 # ============================================================
 
-param([string]$Version = "1.3.2")
+param([string]$Version = "1.3.3")
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"

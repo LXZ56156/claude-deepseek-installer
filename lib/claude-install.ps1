@@ -836,6 +836,128 @@ function Test-IsClaudeNativeFileLockError {
     )
 }
 
+function Invoke-InstallCommandCaptured {
+    <#
+    .SYNOPSIS
+        v1.3.3 P1-2: 执行安装命令，捕获 stdout/stderr 写入日志，控制台只显示中文心跳。
+        用于减少 Native Install/npm 等安装过程中的英文输出，提升小白用户体验。
+    .PARAMETER FilePath
+        要执行的可执行文件路径
+    .PARAMETER Arguments
+        命令行参数数组
+    .PARAMETER TimeoutSec
+        超时秒数，默认 600
+    .PARAMETER HeartbeatSec
+        心跳输出间隔秒数，默认 30
+    .PARAMETER FriendlyName
+        友好名称，用于心跳提示
+    .RETURNS
+        包含 Success, ExitCode, Output, Error, StdOutPath, StdErrPath 的哈希表
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [string[]]$Arguments = @(),
+        [int]$TimeoutSec = 600,
+        [int]$HeartbeatSec = 30,
+        [string]$FriendlyName = "安装命令"
+    )
+
+    $result = @{
+        Success    = $false
+        ExitCode   = -1
+        Output     = ""
+        Error      = ""
+        StdOutPath = ""
+        StdErrPath = ""
+    }
+
+    $stdout = Join-Path $env:TEMP "ccdi_captured_stdout_${PID}_$(Get-Random).log"
+    $stderr = Join-Path $env:TEMP "ccdi_captured_stderr_${PID}_$(Get-Random).log"
+    $result.StdOutPath = $stdout
+    $result.StdErrPath = $stderr
+
+    try {
+        $proc = Start-Process -FilePath $FilePath `
+            -ArgumentList $Arguments `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr
+
+        Write-Log "INFO" "Invoke-InstallCommandCaptured: started PID=$($proc.Id), FriendlyName=$FriendlyName"
+
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $nextHeartbeat = [Math]::Max(1, $HeartbeatSec)
+
+        while (-not $proc.HasExited) {
+            Start-Sleep -Seconds $nextHeartbeat
+            if (-not $proc.HasExited) {
+                $elapsed = [Math]::Round($sw.Elapsed.TotalSeconds, 0)
+                Write-Info "仍在执行 $FriendlyName（已等待 $elapsed 秒），请继续等待，不要关闭窗口。"
+                $nextHeartbeat = $HeartbeatSec
+            }
+            if ($sw.Elapsed.TotalSeconds -gt $TimeoutSec) {
+                Write-Log "WARN" "Invoke-InstallCommandCaptured: timeout ${TimeoutSec}s, killing PID=$($proc.Id)"
+                try {
+                    & taskkill.exe /PID $proc.Id /T /F 2>$null
+                    $proc.WaitForExit(5000) | Out-Null
+                }
+                catch { }
+                $result.Error = "timeout: ${TimeoutSec}s"
+                Write-Warning "$FriendlyName 超时（${TimeoutSec} 秒），已终止。"
+                Write-Info "详细错误已写入日志，请运行「一键诊断」排查。"
+                return $result
+            }
+        }
+
+        $result.ExitCode = $proc.ExitCode
+        $result.Success = ($proc.ExitCode -eq 0)
+
+        # 读取捕获的输出
+        if (Test-Path $stdout) {
+            try {
+                $result.Output = Get-Content $stdout -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                if (-not $result.Output) { $result.Output = "" }
+            }
+            catch { }
+        }
+        if (Test-Path $stderr) {
+            try {
+                $result.Error = Get-Content $stderr -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                if (-not $result.Error) { $result.Error = "" }
+            }
+            catch { }
+        }
+
+        # 原始输出写入日志
+        if ($result.Output) {
+            Write-Log "INFO" "Invoke-InstallCommandCaptured($FriendlyName): stdout ($($result.Output.Length) chars)"
+            Write-Log "DEBUG" "Captured stdout: $($result.Output)"
+        }
+        if ($result.Error) {
+            Write-Log "INFO" "Invoke-InstallCommandCaptured($FriendlyName): stderr ($($result.Error.Length) chars)"
+            Write-Log "DEBUG" "Captured stderr: $($result.Error)"
+        }
+
+        Write-Log "INFO" "Invoke-InstallCommandCaptured($FriendlyName): ExitCode=$($result.ExitCode), DurationMs=$($sw.ElapsedMilliseconds)"
+    }
+    catch {
+        $result.Error = "Invoke-InstallCommandCaptured 异常: $($_.Exception.Message)"
+        Write-Log "ERROR" $result.Error
+    }
+    finally {
+        # 清理临时文件
+        foreach ($tmp in @($stdout, $stderr)) {
+            if ($tmp -and (Test-Path $tmp)) {
+                Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    return $result
+}
+
 function Install-ClaudeCodeNative {
     <#
     .SYNOPSIS
@@ -895,12 +1017,14 @@ function Install-ClaudeCodeNative {
         }
 
         Write-Info "官方安装脚本已下载，开始安装..."
-        Write-Info "下方是 Claude 官方安装器输出，可能包含英文提示。本工具会在结束后自动判断是否成功。"
+        Write-Info "此步骤可能持续数分钟，中途没有新文字也正常，请不要关闭窗口。"
+        Write-Info "安装完成后，本工具会自动验证结果。"
         Write-Host ""
 
-        $installResult = Invoke-VisibleInstallCommand -FilePath "powershell" -Arguments @(
+        # v1.3.3 P1-2: 默认使用捕获模式，英文输出写入日志，控制台只显示中文心跳
+        $installResult = Invoke-InstallCommandCaptured -FilePath "powershell" -Arguments @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tempInstallScript
-        ) -TimeoutSec 600 -TestSafe:$TestSafe
+        ) -TimeoutSec 600 -HeartbeatSec 30 -FriendlyName "Claude 官方安装包"
 
         # 清理临时脚本
         Remove-Item $tempInstallScript -Force -ErrorAction SilentlyContinue
@@ -972,7 +1096,8 @@ function Install-ClaudeCodeNpmMirror {
         return $result
     }
 
-    Write-Info "正在使用 npm.cmd + npmmirror 镜像安装 Claude Code，安装进度将直接显示在下方..."
+    Write-Info "正在使用 npm.cmd + npmmirror 镜像安装 Claude Code..."
+    Write-Info "此步骤可能需要几分钟，请耐心等待，不要关闭窗口。"
 
     # 解析 npm.cmd（禁止使用 npm.ps1，会导致 "%1 is not a valid Win32 application"）
     $npmResolved = Resolve-NpmCmdPath
@@ -2587,10 +2712,110 @@ function Install-ClaudeCodeAuto {
     $existingCheck = Test-ClaudeCommandExisting
     if ($existingCheck.Exists) {
         if ($existingCheck.Usable) {
-            # claude 存在且可用 → 跳过
+            # claude 存在且可用
             Write-Success "Claude Code 已安装: $($existingCheck.Version)"
             Write-Info "已安装时不覆盖、不重装、不自动更新。"
 
+            # --- v1.3.3 P0-1: 已有 Native Install 也必须检查 User PATH 和 fresh shell ---
+            $nativeExe = Get-NativeClaudeExePath
+            $nativeBin = Get-NativeClaudeBinPath
+
+            # 判断是否为 Native Install 来源
+            $isNativeInstall = $false
+            if ($existingCheck.Source -eq "native_local_bin") {
+                $isNativeInstall = $true
+            }
+            elseif ($existingCheck.Path) {
+                try {
+                    $existingPathNorm = [IO.Path]::GetFullPath($existingCheck.Path).TrimEnd('\').ToLowerInvariant()
+                    $nativeExeNorm = [IO.Path]::GetFullPath($nativeExe).TrimEnd('\').ToLowerInvariant()
+                    if ($existingPathNorm -eq $nativeExeNorm) {
+                        $isNativeInstall = $true
+                    }
+                }
+                catch { }
+            }
+            if (-not $isNativeInstall -and (Test-Path $nativeExe)) {
+                # Native exe 存在，即使 Source 没有标准化，也要检查 PATH
+                $isNativeInstall = $true
+            }
+
+            if ($isNativeInstall) {
+                Write-Info "检测到 Claude Code 已通过 Native Install 安装，正在检查 PowerShell 命令可用性..."
+
+                # 检查 User PATH
+                $pathCheck = Test-UserPathContains -TargetPath $nativeBin
+                if (-not $pathCheck.Contains) {
+                    Write-Warning "Claude Code 已安装，但安装目录未加入用户 PATH。"
+                    Write-Info "正在自动修复 User PATH..."
+                    $pathFix = Ensure-UserPathEntry -PathToAdd $nativeBin
+                }
+                else {
+                    $pathFix = @{ Success = $true; Changed = $false; Error = "" }
+                    Write-Info "Claude Code 安装目录已在 User PATH 中。"
+                }
+
+                # Fresh shell 验证
+                $freshCheck = Test-ClaudeCommandInFreshShell
+
+                if ($freshCheck.Success) {
+                    Write-Success "新 PowerShell 可直接运行 claude: $($freshCheck.Output)"
+                    $result.Success = $true
+                    $result.Method = "existing_native"
+                    $result.Status = "skipped_existing"
+                    $result.Version = $existingCheck.Version
+                    $result.WasAlreadyInstalled = $true
+
+                    Update-CcdiState -Updates @{
+                        claudeWasAlreadyInstalled = $true
+                        claudeInstallMethod       = "existing_native"
+                        claudeInstallStatus       = "skipped_existing"
+                    } | Out-Null
+
+                    Write-Log "INFO" "Claude Code 已存在(Native)，PATH 和 fresh shell 均通过，跳过安装: $($existingCheck.Version)"
+                    return $result
+                }
+
+                if ($pathFix.Success) {
+                    Write-Warning "PATH 已写入，但 fresh shell 验证仍未通过。"
+                    Write-Info "请关闭当前窗口，重新打开 PowerShell 后执行 claude --version 验证。"
+
+                    $result.Success = $true
+                    $result.Method = "existing_native"
+                    $result.Status = "installed_needs_restart_or_path_fix"
+                    $result.Version = $existingCheck.Version
+                    $result.WasAlreadyInstalled = $true
+
+                    Update-CcdiState -Updates @{
+                        claudeWasAlreadyInstalled = $true
+                        claudeInstallMethod       = "existing_native"
+                        claudeInstallStatus       = "installed_needs_restart_or_path_fix"
+                    } | Out-Null
+
+                    Write-Log "INFO" "Claude Code 已存在(Native)，PATH 已写入但 fresh shell 未通过"
+                    return $result
+                }
+
+                Write-Warning "Claude Code 已安装，但 PATH 自动修复失败。"
+                Write-Info "请运行「一键修复依赖」或手动将以下路径加入 User PATH：$nativeBin"
+
+                $result.Success = $true
+                $result.Method = "existing_native"
+                $result.Status = "installed_needs_path_fix"
+                $result.Version = $existingCheck.Version
+                $result.WasAlreadyInstalled = $true
+
+                Update-CcdiState -Updates @{
+                    claudeWasAlreadyInstalled = $true
+                    claudeInstallMethod       = "existing_native"
+                    claudeInstallStatus       = "installed_needs_path_fix"
+                } | Out-Null
+
+                Write-Log "INFO" "Claude Code 已存在(Native)，PATH 修复失败"
+                return $result
+            }
+
+            # 非 Native Install (npm/winget/其他路径)，走原有 existing 逻辑
             # claude doctor is diagnostic-only; not called during install
 
             $result.Success = $true
@@ -2712,25 +2937,70 @@ function Install-ClaudeCodeAuto {
                 }
             }
 
-            # 最终成功标准：claude 文件存在 + 可用 + (PATH 已写入 或 fresh shell 通过)
-            $ultimateSuccess = $verifyResult.Usable -and ($pathResult.Success -or $freshCheck.Success)
+            # --- v1.3.3 P0-2: 最终成功条件必须以 fresh shell 为准 ---
+            # 状态 1: fresh shell 通过 → 完整成功
+            if ($verifyResult.Usable -and $freshCheck.Success) {
+                Write-Success "Claude Code 已安装: $($verifyResult.Version)"
+                Write-Success "已确认新 PowerShell 可直接运行 claude"
 
-            if ($ultimateSuccess) {
                 $result.Success = $true
                 $result.Method = "official_native"
-                $result.Status = if ($freshCheck.Success) { "installed" } else { "installed_path_fixed" }
+                $result.Status = "installed"
                 $result.Version = $verifyResult.Version
 
                 Update-CcdiState -Updates @{
                     claudeWasAlreadyInstalled = $false
                     claudeInstallMethod       = "official_native"
-                    claudeInstallStatus       = $result.Status
+                    claudeInstallStatus       = "installed"
                     claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
                 } | Out-Null
                 return $result
             }
 
-            # claude 可用但 PATH 修复和 fresh shell 都失败 → 部分成功
+            # 状态 2: claude 可用 + PATH 已写入 + fresh shell 失败 → 部分成功
+            if ($verifyResult.Usable -and $pathResult.Success -and -not $freshCheck.Success) {
+                Write-Warning "Claude Code 已安装，PATH 已写入，但新 PowerShell 验证暂未通过"
+                Write-Info "请关闭当前窗口，重新打开 PowerShell 后执行 claude --version"
+                Write-Info "如仍失败，请运行「一键修复依赖」"
+
+                $result.Success = $true
+                $result.Method = "official_native"
+                $result.Status = "installed_needs_restart_or_path_fix"
+                $result.Version = $verifyResult.Version
+
+                Update-CcdiState -Updates @{
+                    claudeWasAlreadyInstalled = $false
+                    claudeInstallMethod       = "official_native"
+                    claudeInstallStatus       = "installed_needs_restart_or_path_fix"
+                    claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                } | Out-Null
+                return $result
+            }
+
+            # 状态 3: claude 可用 + PATH 写入失败 + fresh shell 失败 → 需要修复
+            if ($verifyResult.Usable -and -not $pathResult.Success -and -not $freshCheck.Success) {
+                Write-Warning "Claude Code 已安装，但 PATH 自动写入失败"
+                Write-Info "请运行「一键修复依赖」或手动将以下路径加入 User PATH："
+                Write-Info "  $nativeBinPath"
+
+                $result.Success = $true
+                $result.Method = "official_native"
+                $result.Status = "installed_needs_path_fix"
+                $result.Version = $verifyResult.Version
+
+                Update-CcdiState -Updates @{
+                    claudeWasAlreadyInstalled = $false
+                    claudeInstallMethod       = "official_native"
+                    claudeInstallStatus       = "installed_needs_path_fix"
+                    claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                } | Out-Null
+                return $result
+            }
+
+            # 状态 4: claude 可用但逻辑未覆盖的兜底
+            Write-Warning "Claude Code 已安装，但 claude 命令暂时无法直接运行"
+            Write-Info "请运行「一键修复依赖」或重新运行安装工具修复 PATH"
+
             $result.Success = $true
             $result.Method = "official_native"
             $result.Status = "installed_needs_path_fix"
@@ -2742,9 +3012,6 @@ function Install-ClaudeCodeAuto {
                 claudeInstallStatus       = "installed_needs_path_fix"
                 claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
             } | Out-Null
-
-            Write-Warning "Claude Code 已安装，但 claude 命令暂时无法直接运行"
-            Write-Info "请运行「一键修复依赖」或重新运行安装工具修复 PATH"
             return $result
         }
 

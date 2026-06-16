@@ -7,11 +7,11 @@
 #
 # Usage:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\sandbox-full-user-simulation.ps1
-#   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\sandbox-full-user-simulation.ps1 -Version "1.3.2" -KeepTemp
+#   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\sandbox-full-user-simulation.ps1 -Version "1.3.3" -KeepTemp
 # ============================================================
 
 param(
-    [string]$Version = "1.3.2",
+    [string]$Version = "1.3.3",
     [switch]$KeepTemp
 )
 

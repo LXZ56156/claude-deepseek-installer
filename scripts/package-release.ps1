@@ -3,7 +3,7 @@
 # ============================================================
 
 param(
-    [string]$Version = "1.3.2",
+    [string]$Version = "1.3.3",
     [string]$OutputDir = $null,
     [switch]$SkipSha256
 )

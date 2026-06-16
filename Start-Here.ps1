@@ -1,5 +1,5 @@
 ﻿# ============================================================
-# Start-Here.ps1 - Claude Code + DeepSeek 一键安装总控入口 (v1.3.2)
+# Start-Here.ps1 - Claude Code + DeepSeek 一键安装总控入口 (v1.3.3)
 #
 # 用法:
 #   双击 "00-点我开始安装.cmd" 或:
@@ -910,15 +910,33 @@ function Step-GenerateReport {
     }
     else { "N/A（非 Native Install）" }
 
+    # v1.3.3 P0-3: 动态 fresh shell 状态，用于报告和完成页
+    $freshShellOk = $false
     $freshShellResult = if ($claudeVer -and (Test-Path $nativeClaudeExe)) {
         $fs = Test-ClaudeCommandInFreshShell
+        $freshShellOk = $fs.Success
         if ($fs.Success) { "通过 - $($fs.Output)" } else { "失败" }
     }
-    elseif ($claudeVer) { "通过（非 Native Install）" }
+    elseif ($claudeVer) {
+        $fs2 = Test-ClaudeCommandInFreshShell
+        $freshShellOk = $fs2.Success
+        if ($fs2.Success) { "通过 - $($fs2.Output)" } else { "失败" }
+    }
     else { "N/A（Claude Code 未安装）" }
 
+    $userPathOk = $false
+    if (Test-Path $nativeClaudeExe) {
+        $userPathCheck = Test-UserPathContains -TargetPath $nativeBinPath
+        $userPathOk = $userPathCheck.Contains
+    }
+    elseif ($claudeVer) {
+        # 非 Native Install 的 PATH 状态不适用于 Native PATH
+        $userPathOk = $true
+    }
+
     $claudeCommandUsable = if ($claudeVer) {
-        if ($freshShellResult -match "^通过") { "可直接运行" }
+        if ($freshShellOk) { "可直接运行" }
+        elseif ($userPathOk) { "PATH 已配置，但需重启终端验证" }
         elseif (Test-Path $nativeClaudeExe) { "需要修复 PATH" }
         else { "可运行（需验证）" }
     }
@@ -926,12 +944,15 @@ function Step-GenerateReport {
 
     $overallStatus = if ($script:TestSafeMode -and $script:ConfigWritten) { "测试安全模式完成" }
         elseif ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestPassed) {
-            # v1.3.3: 完整成功还需要 PATH 和 fresh shell 验证
-            if ($freshShellResult -match "^通过" -or (-not (Test-Path $nativeClaudeExe))) {
+            # v1.3.3 P0-3: 完整成功还需要 User PATH OK 且 fresh shell 通过
+            if ($userPathOk -and $freshShellOk) {
                 "完整成功"
             }
+            elseif ($userPathOk -and -not $freshShellOk) {
+                "部分成功：Claude Code 已安装，PATH 已配置，但新 PowerShell 验证未通过"
+            }
             else {
-                "部分成功：Claude Code 已安装，但 claude 命令未加入 PATH"
+                "部分成功：Claude Code 已安装，但 PATH 未正确配置"
             }
         }
         elseif ($script:ClaudeInstalled -and $script:ConfigWritten) { "部分成功" }
@@ -1023,8 +1044,8 @@ $claudeInstallSummary
 $deepSeekConfigSummary
 $apiTestSummary
 $claudeLaunchSummary
-[OK] User PATH: $userPathStatus
-[OK] Fresh PowerShell 验证: $freshShellResult
+	$(if ($userPathOk) { "[OK]" } else { "[ERROR]" }) User PATH: $userPathStatus
+	$(if ($freshShellOk) { "[OK]" } else { "[ERROR]" }) Fresh PowerShell 验证: $freshShellResult
 
 Claude 命令可用性: $claudeCommandUsable
 $overallStatus
@@ -1119,20 +1140,32 @@ function Show-CompletionPage {
         Write-Info "报告: $($script:ReportPath)"
     }
     elseif ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestPassed) {
-        # v1.3.3: 检查 PATH 是否也成功
+        # v1.3.3 P0-3: 完整成功必须 User PATH OK 且 fresh shell 通过
         $nativeExeOk = Test-Path (Get-NativeClaudeExePath)
         $pathOk = $true
+        $freshOk = $false
         if ($nativeExeOk) {
-            $pathCheck = Test-UserPathContains -TargetPath (Get-NativeClaudeBinPath)
-            $pathOk = $pathCheck.Contains
+            $pathCheckLocal = Test-UserPathContains -TargetPath (Get-NativeClaudeBinPath)
+            $pathOk = $pathCheckLocal.Contains
         }
 
-        if ($pathOk -or -not $nativeExeOk) {
+        # Fresh shell 验证（所有安装方式都应该验证）
+        $freshCheckLocal = Test-ClaudeCommandInFreshShell
+        $freshOk = $freshCheckLocal.Success
+
+        if ($pathOk -and $freshOk) {
             Write-Host "==============================================================" -ForegroundColor Green
             Write-Host "                                                              " -ForegroundColor Green
             Write-Host "                 安装流程全部完成！                            " -ForegroundColor Green
             Write-Host "                                                              " -ForegroundColor Green
             Write-Host "==============================================================" -ForegroundColor Green
+        }
+        elseif ($pathOk -and -not $freshOk) {
+            Write-Host "==============================================================" -ForegroundColor Yellow
+            Write-Host "                                                              " -ForegroundColor Yellow
+            Write-Host "    Claude Code 已安装，PATH 已配置，但新终端验证暂未通过      " -ForegroundColor Yellow
+            Write-Host "                                                              " -ForegroundColor Yellow
+            Write-Host "==============================================================" -ForegroundColor Yellow
         }
         else {
             Write-Host "==============================================================" -ForegroundColor Yellow
@@ -1149,8 +1182,13 @@ function Show-CompletionPage {
         Write-Success "测试项目已创建"
         Write-Host ""
 
-        if ($pathOk -or -not $nativeExeOk) {
+        if ($pathOk -and $freshOk) {
             Write-Info "您现在可以运行 claude 开始使用！"
+        }
+        elseif ($pathOk -and -not $freshOk) {
+            Write-Warning "Claude Code 和 PATH 配置已完成，但新终端验证暂未通过"
+            Write-Info "请关闭当前窗口，重新打开 PowerShell 后执行 claude --version 验证"
+            Write-Info "如仍失败，请运行「一键修复依赖」"
         }
         else {
             Write-Warning "Claude Code 已安装，但 claude 命令暂时无法直接运行"

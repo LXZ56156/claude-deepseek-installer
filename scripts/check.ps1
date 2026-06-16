@@ -1283,7 +1283,7 @@ if ($claudeInstallText -notmatch 'Install-NodeJsViaWinget[\s\S]{0,800}Invoke-Vis
 
 # 22. Install-ClaudeCodeNpmMirror must NOT use Invoke-CommandSafe for npm install
 if ($claudeInstallText -match 'Install-ClaudeCodeNpmMirror[\s\S]{0,800}Invoke-CommandSafe\s+-Command\s+"npm"') {
-    throw "Install-ClaudeCodeNpmMirror must NOT use Invoke-CommandSafe for npm install; use Invoke-VisibleInstallCommand"
+    throw "Install-ClaudeCodeNpmMirror must NOT use Invoke-CommandSafe for npm install; use Invoke-VisibleInstallCommand or Invoke-InstallCommandCaptured"
 }
 if ($claudeInstallText -notmatch 'Install-ClaudeCodeNpmMirror[\s\S]{0,3000}Invoke-VisibleInstallCommand') {
     throw "Install-ClaudeCodeNpmMirror must use Invoke-VisibleInstallCommand for npm install"
@@ -1291,10 +1291,10 @@ if ($claudeInstallText -notmatch 'Install-ClaudeCodeNpmMirror[\s\S]{0,3000}Invok
 
 # 23. Install-ClaudeCodeNative execution phase must NOT use Invoke-CommandSafe
 if ($claudeInstallText -match 'Install-ClaudeCodeNative[\s\S]{0,3000}Invoke-CommandSafe\s+-Command\s+"powershell"[\s\S]{0,300}-File\s+\$tempInstallScript') {
-    throw "Install-ClaudeCodeNative execution must NOT use Invoke-CommandSafe; use Invoke-VisibleInstallCommand"
+    throw "Install-ClaudeCodeNative execution must NOT use Invoke-CommandSafe; use Invoke-VisibleInstallCommand or Invoke-InstallCommandCaptured"
 }
-if ($claudeInstallText -notmatch 'Install-ClaudeCodeNative[\s\S]{0,3000}Invoke-VisibleInstallCommand') {
-    throw "Install-ClaudeCodeNative must use Invoke-VisibleInstallCommand for script execution"
+if ($claudeInstallText -notmatch 'Install-ClaudeCodeNative[\s\S]{0,3000}Invoke-(VisibleInstallCommand|InstallCommandCaptured)') {
+    throw "Install-ClaudeCodeNative must use Invoke-VisibleInstallCommand or Invoke-InstallCommandCaptured for script execution"
 }
 
 # 24. No double-assignment: else branch of winget install if-expression must NOT have "$installResult ="
@@ -2000,12 +2000,13 @@ try {
 
     # All valid Method values
     $validMethods = @("existing", "official_native", "npm_npmmirror", "none",
-        "node-via-winget", "winget")
+        "node-via-winget", "winget", "existing_native")
     $validStatuses = @("skipped_existing", "skipped_test_safe_existing", "skipped_test_safe_missing",
         "skipped_test_safe_broken", "installed", "installed_needs_restart",
         "node_installed_needs_restart", "failed_missing_node_or_npm",
         "failed_npmmirror_unreachable", "failed_official_and_mirror", "failed_missing_npm_cmd",
-        "failed_claude_unusable", "installed_path_fixed", "installed_needs_path_fix")
+        "failed_claude_unusable", "installed_path_fixed", "installed_needs_path_fix",
+        "installed_needs_restart_or_path_fix")
     Write-Host "[check]     Valid Methods: $($validMethods -join ', ')"
     Write-Host "[check]     Valid Statuses: $($validStatuses -join ', ')"
 
