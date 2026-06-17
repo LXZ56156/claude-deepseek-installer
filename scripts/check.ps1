@@ -3425,6 +3425,29 @@ if ($claudeInstallText -notmatch '可能原因：Node\.js/npm 不完整') {
     throw "Post-verify failure paths must include possible causes explanation"
 }
 
+# E. installed_needs_restart must be guarded by mirrorResult.Success
+# When npm install fails AND claude is not found, must return failed_official_and_mirror
+# NOT installed_needs_restart (which falsely suggests "just reopen terminal").
+# E1. The installed_needs_restart branch must check mirrorResult.Success
+if ($claudeInstallText -notmatch 'if\s*\(\s*\$mirrorResult\.Success\s*\)\s*\{
+\s*Write-Warning\s+"Claude Code 可能已安装') {
+    throw "installed_needs_restart must be guarded by if (`$mirrorResult.Success)"
+}
+# E2. When mirrorResult.Success is false + claude not found, must return failed_official_and_mirror
+if ($claudeInstallText -notmatch 'npm 安装命令未确认成功，且未检测到可用的 claude 命令') {
+    throw "mirrorResult.Success=false must trigger real failure message: 'npm 安装命令未确认成功'"
+}
+# E3. Must NOT unconditionally set installed_needs_restart at end of npm post-verify failure
+# (The installed_needs_restart must appear ONLY inside `if ($mirrorResult.Success)` block)
+if ($claudeInstallText -notmatch 'failed_official_and_mirror') {
+    throw "failed_official_and_mirror status must exist (for mirrorResult.Success=false fallback)"
+}
+# E4. Both npm call sites must have the mirrorResult.Success guard
+$mirrorSuccessGuards = @([regex]::Matches($claudeInstallText, 'if\s*\(\s*\$mirrorResult\.Success\s*\)\s*\{'))
+if ($mirrorSuccessGuards.Count -lt 2) {
+    throw "Both npm mirror call sites must guard installed_needs_restart with if (`$mirrorResult.Success) (found $($mirrorSuccessGuards.Count))"
+}
+
 Write-Host "[check] P0-UX anti-regression OK"
 
 Write-Host "[check] OK"

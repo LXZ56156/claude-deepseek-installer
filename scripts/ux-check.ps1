@@ -1884,6 +1884,29 @@ x-api-key: $TestApiKey
         $claudeInstallText -match '安装命令返回异常但后验验证通过'
     } "后验验证通过时必须写入日志说明命令返回异常"
 
+    # --- 29e: installed_needs_restart 必须受 mirrorResult.Success 控制 ---
+    Assert "29e: installed_needs_restart 必须受 if (`$mirrorResult.Success) 守卫" {
+        $claudeInstallText -match 'if\s*\(\s*\$mirrorResult\.Success\s*\)\s*\{
+\s*Write-Warning\s+"Claude Code 可能已安装'
+    } "installed_needs_restart 必须仅在 mirrorResult.Success=true 时使用"
+
+    Assert "29e: mirrorResult.Success=false 必须返回真实失败文案" {
+        $claudeInstallText -match 'npm 安装命令未确认成功，且未检测到可用的 claude 命令'
+    } "mirrorResult.Success=false 时必须输出真实失败原因"
+
+    Assert "29e: 两个 npm 调用点都受 mirrorResult.Success 控制" {
+        ([regex]::Matches($claudeInstallText, 'if\s*\(\s*\$mirrorResult\.Success\s*\)\s*\{')).Count -ge 2
+    } "两个 npm 调用点都必须有 mirrorResult.Success 守卫"
+
+    Assert "29e: failed_official_and_mirror 状态仍存在（用于 mirrorResult.Success=false）" {
+        $claudeInstallText -match 'failed_official_and_mirror'
+    } "failed_official_and_mirror 必须保留用于真实失败场景"
+
+    Assert "29e: 不得在 else 分支中无条件设置 installed_needs_restart" {
+        $claudeInstallText -notmatch 'else\s*\{[\s\S]{0,50}Write-Warning\s+"Claude Code 可能已安装' `
+            -or $claudeInstallText -match 'if\s*\(\s*\$mirrorResult\.Success\s*\)\s*\{[\s\S]{0,300}installed_needs_restart'
+    } "installed_needs_restart 不得在无条件 else 分支中出现"
+
     Write-Host ""
 
     # ============================================================

@@ -3412,26 +3412,41 @@ function Install-ClaudeCodeAuto {
                             } | Out-Null
                             return $result
                         }
-                        Write-Warning "Claude Code 可能已安装，但当前终端还没有刷新 PATH。"
-                        Write-Info "请关闭此窗口后重新双击 [00-点我开始安装.cmd]。"
-                        Write-Info "如果仍不行，请运行 [一键诊断.cmd] 获取诊断报告。"
-                        $npmResolvedForPrefix = Resolve-NpmCmdPath
-                        $npmPrefixResult = if ($npmResolvedForPrefix.Found) {
-                            Invoke-CommandSafe -Command $npmResolvedForPrefix.Path -Arguments @("prefix", "-g") -TimeoutSec 8
-                        } else {
-                            @{ Success = $false; Output = ""; Error = "npm.cmd not resolved for prefix check" }
+                        if ($mirrorResult.Success) {
+                            Write-Warning "Claude Code 可能已安装，但当前终端还没有刷新 PATH。"
+                            Write-Info "请关闭此窗口后重新双击 [00-点我开始安装.cmd]。"
+                            Write-Info "如果仍不行，请运行 [一键诊断.cmd] 获取诊断报告。"
+                            $npmResolvedForPrefix = Resolve-NpmCmdPath
+                            $npmPrefixResult = if ($npmResolvedForPrefix.Found) {
+                                Invoke-CommandSafe -Command $npmResolvedForPrefix.Path -Arguments @("prefix", "-g") -TimeoutSec 8
+                            } else {
+                                @{ Success = $false; Output = ""; Error = "npm.cmd not resolved for prefix check" }
+                            }
+                            if ($npmPrefixResult.Success) {
+                                Write-Info "npm 全局安装路径: $($npmPrefixResult.Output.Trim())"
+                            }
+                            $result.Method = "npm_npmmirror"
+                            $result.Status = "installed_needs_restart"
+                            Update-CcdiState -Updates @{
+                                claudeInstallMethod = "npm_npmmirror"
+                                claudeInstallStatus = "installed_needs_restart"
+                                claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                            } | Out-Null
+                            return $result
                         }
-                        if ($npmPrefixResult.Success) {
-                            Write-Info "npm 全局安装路径: $($npmPrefixResult.Output.Trim())"
+                        else {
+                            Write-Warning "npm 镜像安装未完成验证。"
+                            Write-Info "npm 安装命令未确认成功，且未检测到可用的 claude 命令。"
+                            Write-Info "请运行「一键诊断.cmd」生成 report.txt。"
+                            $result.Method = "npm_npmmirror"
+                            $result.Status = "failed_official_and_mirror"
+                            $result.Success = $false
+                            Update-CcdiState -Updates @{
+                                claudeInstallMethod = "npm_npmmirror"
+                                claudeInstallStatus = "failed_official_and_mirror"
+                            } | Out-Null
+                            return $result
                         }
-                        $result.Method = "npm_npmmirror"
-                        $result.Status = "installed_needs_restart"
-                        Update-CcdiState -Updates @{
-                            claudeInstallMethod = "npm_npmmirror"
-                            claudeInstallStatus = "installed_needs_restart"
-                            claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-                        } | Out-Null
-                        return $result
                     }
                 }
                 else {
@@ -3642,27 +3657,42 @@ function Install-ClaudeCodeAuto {
             return $result
         }
 
-        Write-Warning "Claude Code 可能已安装，但当前终端还没有刷新 PATH。"
-        Write-Info "请关闭此窗口后重新双击 [00-点我开始安装.cmd]。"
-        Write-Info "如果仍不行，请运行 [一键诊断.cmd] 获取诊断报告。"
+        if ($mirrorResult.Success) {
+            Write-Warning "Claude Code 可能已安装，但当前终端还没有刷新 PATH。"
+            Write-Info "请关闭此窗口后重新双击 [00-点我开始安装.cmd]。"
+            Write-Info "如果仍不行，请运行 [一键诊断.cmd] 获取诊断报告。"
 
-        $npmResolvedForPrefix = Resolve-NpmCmdPath
-        $npmPrefix = if ($npmResolvedForPrefix.Found) {
-            Invoke-CommandSafe -Command $npmResolvedForPrefix.Path -Arguments @("prefix", "-g") -TimeoutSec 8
-        } else {
-            @{ Success = $false; Output = ""; Error = "npm.cmd not resolved" }
-        }
-        if ($npmPrefix.Success) {
-            Write-Info "npm 全局安装路径: $($npmPrefix.Output.Trim())"
-        }
+            $npmResolvedForPrefix = Resolve-NpmCmdPath
+            $npmPrefix = if ($npmResolvedForPrefix.Found) {
+                Invoke-CommandSafe -Command $npmResolvedForPrefix.Path -Arguments @("prefix", "-g") -TimeoutSec 8
+            } else {
+                @{ Success = $false; Output = ""; Error = "npm.cmd not resolved" }
+            }
+            if ($npmPrefix.Success) {
+                Write-Info "npm 全局安装路径: $($npmPrefix.Output.Trim())"
+            }
 
-        $result.Method = "npm_npmmirror"
-        $result.Status = "installed_needs_restart"
-        Update-CcdiState -Updates @{
-            claudeInstallMethod = "npm_npmmirror"
-            claudeInstallStatus = "installed_needs_restart"
-            claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-        } | Out-Null
-        return $result
+            $result.Method = "npm_npmmirror"
+            $result.Status = "installed_needs_restart"
+            Update-CcdiState -Updates @{
+                claudeInstallMethod = "npm_npmmirror"
+                claudeInstallStatus = "installed_needs_restart"
+                claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+            } | Out-Null
+            return $result
+        }
+        else {
+            Write-Warning "npm 镜像安装未完成验证。"
+            Write-Info "npm 安装命令未确认成功，且未检测到可用的 claude 命令。"
+            Write-Info "请运行「一键诊断.cmd」生成 report.txt。"
+            $result.Method = "npm_npmmirror"
+            $result.Status = "failed_official_and_mirror"
+            $result.Success = $false
+            Update-CcdiState -Updates @{
+                claudeInstallMethod = "npm_npmmirror"
+                claudeInstallStatus = "failed_official_and_mirror"
+            } | Out-Null
+            return $result
+        }
     }
 }
