@@ -286,7 +286,7 @@ function Get-ClaudeCommandInventory {
                 $candidate.Risk = "OK"
                 $candidate.Note = "Claude 官方 Native Install 默认路径"
             }
-            elseif ($pathLower -match '\\appdata\\roaming\\npm\\claude\.cmd$' -or $pathLower -match '\\npm\\claude\.cmd$') {
+            elseif ($pathLower -match '\\appdata\\roaming\\npm\\claude\.(cmd|ps1)$' -or $pathLower -match '\\npm\\claude\.(cmd|ps1)$') {
                 $candidate.Source = "npm_global"
                 $candidate.Risk = "INFO"
                 $candidate.Note = "npm 全局安装 shim"

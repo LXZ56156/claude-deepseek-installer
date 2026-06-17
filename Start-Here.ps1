@@ -1966,9 +1966,6 @@ function Show-CompletionMenu {
 function Start-LazyInstall {
     Write-Log "INFO" "开始一键安装流程"
 
-    # 安全启动 terminal transcript（失败不阻断）
-    Start-CcdiTranscriptSafe -Name "start-here"
-
     # 初始化/更新状态文件
     Initialize-CcdiState -ScriptVersion $ScriptVersion | Out-Null
 
@@ -2115,9 +2112,6 @@ function Start-LazyInstall {
 
     # Step 7: 生成报告
     Step-GenerateReport -ApiKey $apiKey -EnvCheckResult $envResult
-
-    # 停止 terminal transcript
-    Stop-CcdiTranscriptSafe
 
     # 最终完成页
     Show-CompletionPage
@@ -2313,6 +2307,9 @@ function Show-AdvancedMenu {
 # ============================================================
 
 function Main {
+    # 安全启动 terminal transcript（失败不阻断，finally 兜底停止）
+    Start-CcdiTranscriptSafe -Name "start-here"
+
     try {
         # ============================================================
         # 路径安全检查（所有模式均执行）
@@ -2330,7 +2327,7 @@ function Main {
             Write-Warning "不要在压缩包预览窗口中直接运行。"
             Write-Host ""
             Write-Info "本次运行日志: $(Get-LogFilePath)"
-            Write-Info "如需排查问题，可将此日志文件发给技术支持。"
+            Write-Info "如需排查问题，请运行「一键诊断.cmd」并优先发送 support-feedback.txt。"
             Write-Host ""
             if (-not $NonInteractive) {
                 Read-Host "按回车键退出..."
@@ -2341,7 +2338,7 @@ function Main {
         # 日志路径前置：交互模式下尽早显示
         if (-not $NonInteractive) {
             Write-Info "本次运行日志: $(Get-LogFilePath)"
-            Write-Info "如果窗口异常关闭，可把此文件发给技术支持。"
+            Write-Info "窗口异常关闭时，可重新运行「一键诊断.cmd」生成 support-feedback.txt。"
             Write-Host ""
         }
 
@@ -2388,6 +2385,9 @@ function Main {
         }
 
         exit 1
+    }
+    finally {
+        Stop-CcdiTranscriptSafe
     }
 }
 

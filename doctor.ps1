@@ -1584,9 +1584,10 @@ function Main {
     Write-Host "           Claude Code 环境诊断工具 v$ScriptVersion                   " -ForegroundColor Cyan
     Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host ""
-    # 安全启动 terminal transcript（失败不阻断）
+    # 安全启动 terminal transcript（失败不阻断，finally 兜底停止）
     Start-CcdiTranscriptSafe -Name "doctor"
 
+    try {
     Write-Info "正在全面检测您的环境配置..."
     if ($SkipApiTest) {
         Write-Info "本次已按参数跳过 DeepSeek API 在线测试。"
@@ -1855,8 +1856,10 @@ function Main {
         }
     }
 
-    # 停止 terminal transcript
-    Stop-CcdiTranscriptSafe
+    }
+    finally {
+        Stop-CcdiTranscriptSafe
+    }
 
     Write-Host ""
 }

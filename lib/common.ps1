@@ -540,6 +540,7 @@ function New-SupportFeedbackReport {
                     $reportContent = Get-Content $latestReport.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
                     if ($reportContent) {
                         $safeContent = Sanitize-SecretLikeText -Text $reportContent
+                        $safeContent = Sanitize-PathForReport -Text $safeContent
                         # 只取关键摘要段（前 100 行或 5000 字符）
                         $lines = $safeContent -split "`r?`n"
                         $summaryLines = $lines | Select-Object -First 100

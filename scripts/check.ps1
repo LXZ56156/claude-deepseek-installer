@@ -1261,8 +1261,8 @@ if ($startHereText -notmatch 'function Write-CheckProgress') {
 if ($startHereText -notmatch '本次运行日志.*Get-LogFilePath') {
     throw "Start-Here.ps1 must show log path early in Main() (before disclaimer)"
 }
-if ($startHereText -notmatch '如果窗口异常关闭，可把此文件发给技术支持') {
-    throw "Start-Here.ps1 must include log path guidance text for crash scenarios"
+if ($startHereText -notmatch '窗口异常关闭.*support-feedback|窗口异常关闭.*一键诊断') {
+    throw "Start-Here.ps1 must include guidance for crash scenarios (mention 一键诊断 or support-feedback)"
 }
 
 # 54. Start-Here.ps1 WSL method B removed: no Invoke-CommandSafe + wsl in Start-WslSetup
@@ -3967,5 +3967,56 @@ if ($simulateUserReleaseText -notmatch 'docs/闲鱼商品说明|docs/测试清�
 Write-Host "[check]   11. simulate-user-release.ps1 checks for internal docs OK"
 
 Write-Host "[check] v1.3.3 feedback/report/package residuals anti-regression OK"
+
+Write-Host "[check] v1.3.3 residuals batch 2: transcript try/finally + log guidance + npm .ps1 + path sanitization"
+
+# 1. Start-Here.ps1 Main 使用 try/finally + Start-CcdiTranscriptSafe
+$mainFuncBody = if ($startHereText -match '(?s)function Main\s*\{.*?(?=^# 执行|\Z)') { $matches[0] } else { "" }
+if ($mainFuncBody -notmatch 'Start-CcdiTranscriptSafe\s+-Name\s+"start-here"') {
+    throw "Start-Here.ps1 Main must call Start-CcdiTranscriptSafe -Name start-here"
+}
+if ($mainFuncBody -notmatch 'Stop-CcdiTranscriptSafe') {
+    throw "Start-Here.ps1 Main must call Stop-CcdiTranscriptSafe (in finally)"
+}
+if ($mainFuncBody -notmatch 'finally\s*\{') {
+    throw "Start-Here.ps1 Main must have finally block for transcript cleanup"
+}
+Write-Host "[check]   1. Start-Here.ps1 Main try/finally transcript OK"
+
+# 2. Start-Here.ps1 不含 "将此日志文件发给技术支持" / "可把此文件发给技术支持"
+if ($startHereText -match '将此日志文件发给技术支持|可把此文件发给技术支持') {
+    throw "Start-Here.ps1 must NOT suggest sending log file to support"
+}
+Write-Host "[check]   2. Start-Here.ps1 does not suggest sending log files OK"
+
+# 3. doctor.ps1 Main 使用 try/finally 包裹 transcript
+$doctorMainBody = if ($doctorText -match '(?s)function Main\s*\{.*?(?=^# 执行|\Z)') { $matches[0] } else { "" }
+if ($doctorMainBody -notmatch 'Start-CcdiTranscriptSafe' -or $doctorMainBody -notmatch 'finally\s*\{') {
+    throw "doctor.ps1 Main must use try/finally for transcript"
+}
+Write-Host "[check]   3. doctor.ps1 Main try/finally transcript OK"
+
+# 4. New-SupportFeedbackReport 对 install-report 摘要调用 Sanitize-PathForReport
+$nsfrFull = if ($commonText -match '(?s)function New-SupportFeedbackReport\s*\{.*?(?=^function |\Z)') { $matches[0] } else { "" }
+if ($nsfrFull -notmatch 'Sanitize-PathForReport') {
+    throw "New-SupportFeedbackReport must call Sanitize-PathForReport for install report summary"
+}
+Write-Host "[check]   4. New-SupportFeedbackReport calls Sanitize-PathForReport OK"
+
+# 5. Get-ClaudeCommandInventory 分类 npm .ps1 为 npm_global
+$invFull = if ($claudeInstallText -match '(?s)function Get-ClaudeCommandInventory\s*\{.*?(?=^function \w+\s*\{|\Z)') { $matches[0] } else { "" }
+if ($invFull -notmatch 'npm.*claude.*cmd\|ps1' -and $invFull -notmatch 'npm.*claude.*ps1.*npm_global') {
+    throw "Get-ClaudeCommandInventory must classify npm claude.ps1 as npm_global"
+}
+Write-Host "[check]   5. Get-ClaudeCommandInventory classifies npm .ps1 as npm_global OK"
+
+# 6. Stop-CcdiTranscriptSafe 只在 Main finally 中出现（不在 Start-LazyInstall 中重复）
+$stopTranscriptCount = ([regex]::Matches($startHereText, 'Stop-CcdiTranscriptSafe')).Count
+if ($stopTranscriptCount -ne 1) {
+    throw "Start-Here.ps1 must have exactly 1 Stop-CcdiTranscriptSafe call (in Main finally), found: $stopTranscriptCount"
+}
+Write-Host "[check]   6. Stop-CcdiTranscriptSafe appears only in Main finally OK"
+
+Write-Host "[check] v1.3.3 residuals batch 2 anti-regression OK"
 
 Write-Host "[check] OK"

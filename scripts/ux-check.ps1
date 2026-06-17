@@ -760,8 +760,8 @@ x-api-key: $TestApiKey
         $startHereText -match '本次运行日志.*Get-LogFilePath'
     } "Start-Here.ps1 未前置显示日志路径"
 
-    Assert "Start-Here.ps1 包含日志路径指引文案" {
-        $startHereText -match '如果窗口异常关闭，可把此文件发给技术支持'
+    Assert "Start-Here.ps1 包含日志路径指引文案（窗口异常关闭时引导诊断）" {
+        $startHereText -match '窗口异常关闭.*一键诊断|窗口异常关闭.*support-feedback'
     } "Start-Here.ps1 缺失日志路径指引文案"
 
     # Step-CheckEnvironment 使用 Write-CheckProgress（至少 10 个进度调用）

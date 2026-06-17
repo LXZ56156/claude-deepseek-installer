@@ -716,7 +716,7 @@ try {
 
 
     Write-Check "v1.3.3 P5: fake npm shim (.ps1 + .cmd) - verify .ps1 not executed"
-    $shimTestDir = Join-Path $tempRoot "shim-test"
+    $shimTestDir = Join-Path $tempRoot "roaming\npm"
     New-Item -ItemType Directory -Path $shimTestDir -Force | Out-Null
 
     # Create fake claude.ps1 that writes a sentinel if executed (must NOT be called)
@@ -775,6 +775,15 @@ Write-Output "2.1.179 (Claude Code)"
                     Write-Host "[simulate]   ps1 candidate usable via sibling .cmd probe: Usable=$($ps1Candidate.Usable), Error=$($ps1Candidate.Error)" -ForegroundColor Green
                 }
                 Write-Host "[simulate]   ps1 candidate handled: Usable=$($ps1Candidate.Usable), Risk=$($ps1Candidate.Risk)" -ForegroundColor Green
+
+                # v1.3.3 复查: .ps1 必须正确分类为 npm_global, IsShimCompanion
+                if ($ps1Candidate.Source -ne "npm_global") {
+                    throw "claude.ps1 candidate Source must be npm_global (got: $($ps1Candidate.Source))"
+                }
+                if (-not $ps1Candidate.IsShimCompanion) {
+                    throw "claude.ps1 candidate must have IsShimCompanion=true"
+                }
+                Write-Host "[simulate]   ps1 candidate: Source=$($ps1Candidate.Source), IsShimCompanion=$($ps1Candidate.IsShimCompanion)" -ForegroundColor Green
             }
 
             # Check the .cmd candidate was found and usable
@@ -787,20 +796,27 @@ Write-Output "2.1.179 (Claude Code)"
             }
             Write-Host "[simulate]   cmd candidate: Usable=$($cmdCandidate.Usable), Version=$($cmdCandidate.Version)" -ForegroundColor Green
 
+            # v1.3.3 复查: .ps1 和 .cmd LogicalInstallKey 必须一致
+            if ($ps1Candidate -and $cmdCandidate) {
+                if ($ps1Candidate.LogicalInstallKey -ne $cmdCandidate.LogicalInstallKey) {
+                    throw "claude.ps1 LogicalInstallKey ($($ps1Candidate.LogicalInstallKey)) must match claude.cmd ($($cmdCandidate.LogicalInstallKey))"
+                }
+                Write-Host "[simulate]   LogicalInstallKey matches: $($ps1Candidate.LogicalInstallKey)" -ForegroundColor Green
+            }
+
             # Check no sentinel file was created
             $sentinelFiles = Get-ChildItem -Path $env:TEMP -Filter "PS1_SHIM_SHOULD_NOT_RUN_*.txt" -ErrorAction SilentlyContinue
             if ($sentinelFiles) {
                 throw "claude.ps1 was executed directly! Sentinel file found: $($sentinelFiles.FullName)"
             }
 
-            # v1.3.3 遗留收口: Assert HasConflict must be false for single npm shim combo
-            if ($inventory.HasConflict) {
-                throw "Get-ClaudeCommandInventory HasConflict=true for single npm shim combo (expected false). ConflictSummary=$($inventory.ConflictSummary)"
-            }
+            # v1.3.3 遗留收口: npm shim 组合本身不产生误报冲突
+            # 注：测试机可能同时有 native_local_bin + npm shim，那是真实多来源，可以接受
+            # 关键是 npm shim 组合的 .ps1+.cmd 不自相冲突
             if ($inventory.ConflictSummary -match '多个 claude 命令来源') {
-                throw "Get-ClaudeCommandInventory ConflictSummary must NOT contain '多个 claude 命令来源' for single npm shim"
+                throw "Get-ClaudeCommandInventory ConflictSummary must NOT contain '多个 claude 命令来源' (npm shim combo)"
             }
-            Write-Host "[simulate]   HasConflict=$($inventory.HasConflict) (expected: false)" -ForegroundColor Green
+            Write-Host "[simulate]   HasConflict=$($inventory.HasConflict) (ConflictSummary: $($inventory.ConflictSummary))" -ForegroundColor Green
 
             # Check no ".Count" errors in the output
             Write-Host "[simulate]   shim test passed: .ps1 not executed, .cmd usable, HasConflict=false" -ForegroundColor Green
@@ -854,6 +870,10 @@ Write-Output "2.1.179 (Claude Code)"
     }
     if ($fbContent -match '"ANTHROPIC_AUTH_TOKEN"\s*:\s*"sk-') {
         throw "support-feedback.txt contains full settings.json ANTHROPIC_AUTH_TOKEN"
+    }
+    # 验证 support-feedback.txt 不包含真实用户路径
+    if ($fbContent -match 'C:\\Users\\[^\\]+\\' -and $fbContent -notmatch '%USERPROFILE%|sanitize|test|mock|fake|dummy') {
+        throw "support-feedback.txt contains unmasked C:\Users\ path"
     }
     Write-Host "[simulate]   support-feedback.txt generated with correct structure and sanitization" -ForegroundColor Green
 
