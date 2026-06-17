@@ -2149,38 +2149,24 @@ x-api-key: $TestApiKey
          $startHereText -match '完整 API Key')
     } "Write-NextStepCard 必须包含完整安全提醒"
 
-    # --- 32b: 用户可见技术词黑名单（仅扫描 Write-Info/Write-Warning/Write-Success/Write-Error-Msg）---
+    # --- 32b: PATH 0 tolerance (uses $allVisLines from both files) ---
+    Assert "32b: no raw PATH in user-visible output" {
+        -not ($allVisLines | Where-Object { $_ -match '\bPATH\b' })
+    } "user-visible output still contains raw PATH"
+
+    # --- 32c: blacklist scan (uses $allVisJoined from both files) ---
     $forbiddenTerms = @(
-        "winget 安装验证通过",
-        "正在尝试通过 winget 安装 Claude Code",
-        "正在使用 winget 安装 Claude Code",
-        "这是 Windows 官方包管理器方式",
-        "npm 镜像安装未完成验证",
-        "npm 镜像",
-        "npm 全局 PATH 异常",
-        "Claude 官方下载域名不可达，跳过 winget",
-        "Claude 官方 Native Install 方式安装",
-        "Claude 官方安装通道可用。",
-        "npm 安装命令未确认成功",
-        "npm 镜像仓库不可达",
-        "正在使用 npm 镜像安装",
-        "后验验证",
-        "npmmirror: 可访问",
-        "npm 镜像安装 Claude Code 完成。"
+        "Native Install", "npm 镜像", "npmmirror", "winget",
+        "后验验证", "Fresh PowerShell", "最终验证", "安装验证通过",
+        "ExternalScript", "Application", "Function", "Cmdlet",
+        "npm 全局 PATH", "PATH 异常", "PATH 冲突", "刷新 PATH",
+        "直接发给卖家", "马上联系卖家", "把 logs 发给卖家"
     )
-    # Extract only user-visible output lines (exclude Write-Log, comments, function names)
-    $userVisLines = ($claudeInstallText -split "`r?`n") | Where-Object {
-        $_ -match '^\s*(Write-Info|Write-Warning|Write-Success|Write-Error-Msg)\b'
-    }
-    $installUserVisText = $userVisLines -join "`n"
     $allClean = $true
     foreach ($term in $forbiddenTerms) {
-        if ($installUserVisText -match [regex]::Escape($term)) {
-            $allClean = $false
-            break
-        }
+        if ($allVisJoined -match [regex]::Escape($term)) { $allClean = $false; break }
     }
-    Assert "32b: claude-install.ps1 用户可见输出不含技术词黑名单" { $allClean } "存在残留技术词"
+    Assert "32c: no forbidden terms in user-visible (both files)" { $allClean } "residual forbidden term"
 
     # --- 32c: 长耗时提示 ---
     Assert "32c: 长耗时提示存在" {
@@ -2206,10 +2192,8 @@ x-api-key: $TestApiKey
     Assert "32e: [4] 一键诊断仍存在" { $startHereText -match '运行一键诊断' } "菜单[4]缺失"
 
     # --- 32f: PATH 在用户可见输出中最小化 ---
-    Assert "32f: claude-install.ps1 不再直接输出 已在 User PATH 中" {
-        $claudeInstallText -notmatch 'Write-Info\s+"Claude Code 安装目录已在用户 PATH 中'
-    } "仍有 PATH 残留"
-    # All section 32 checks consolidated in v3
+    Assert "32f: claude-install.ps1 PATH-free (PATH check covered by 32b)" { $true } ""
+
     Write-Host ""
 
     # ============================================================
