@@ -3355,6 +3355,29 @@ if ($claudeInstallText -notmatch '/T\s+/F') {
     throw "Invoke-InstallCommandCaptured must retain /T /F for process tree kill"
 }
 
+# A2. Invoke-InstallCommandCaptured must support compact progress + slow notice params
+if ($claudeInstallText -notmatch '\$ProgressTitle') {
+    throw "Invoke-InstallCommandCaptured must support ProgressTitle param"
+}
+if ($claudeInstallText -notmatch '\$ProgressHint') {
+    throw "Invoke-InstallCommandCaptured must support ProgressHint param"
+}
+if ($claudeInstallText -notmatch '\$ProgressIntervalSec') {
+    throw "Invoke-InstallCommandCaptured must support ProgressIntervalSec param"
+}
+if ($claudeInstallText -notmatch '\$SlowNoticeAfterSec') {
+    throw "Invoke-InstallCommandCaptured must support SlowNoticeAfterSec param"
+}
+if ($claudeInstallText -notmatch '\$SlowNoticeMessage') {
+    throw "Invoke-InstallCommandCaptured must support SlowNoticeMessage param"
+}
+if ($claudeInstallText -notmatch '\$slowNoticeShown\s*=\s*\$false') {
+    throw "Invoke-InstallCommandCaptured must initialize `$slowNoticeShown = `$false"
+}
+if ($claudeInstallText -notmatch '(?s)SlowNoticeAfterSec.*-gt 0.*-not.*slowNoticeShown.*elapsed.*-ge.*SlowNoticeAfterSec') {
+    throw "Invoke-InstallCommandCaptured must check SlowNoticeAfterSec > 0, -not slowNoticeShown, elapsed >= SlowNoticeAfterSec"
+}
+
 # B. downloads.claude.ai unreachable → skip winget Claude Code
 if ($claudeInstallText -notmatch '\$shouldTryWingetClaude') {
     throw "Install-ClaudeCodeAuto must define `$shouldTryWingetClaude variable"
@@ -3377,6 +3400,106 @@ if ($claudeInstallText -notmatch 'Install-NodeJsViaWinget') {
 }
 if ($claudeInstallText -notmatch 'OpenJS\.NodeJS\.LTS') {
     throw "winget install Node.js LTS must still be present"
+}
+
+# D. Install-ClaudeCodeNative: compact progress + SlowNotice + 300s timeout
+if ($claudeInstallText -notmatch 'ProgressTitle.*Claude Code 官方安装中') {
+    throw "Install-ClaudeCodeNative must use ProgressTitle 'Claude Code 官方安装中'"
+}
+if ($claudeInstallText -notmatch 'ProgressHint.*如果网络较慢会自动切换备用方式') {
+    throw "Install-ClaudeCodeNative must use ProgressHint with fallback notice"
+}
+if ($claudeInstallText -notmatch 'TimeoutSec\s+300') {
+    throw "Install-ClaudeCodeNative must set TimeoutSec 300 (was 600)"
+}
+$nativeFunc = if ($claudeInstallText -match '(?s)function Install-ClaudeCodeNative\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+if ($nativeFunc -match '仍在安装 Claude Code，请继续等待，不要关闭窗口。') {
+    throw "Install-ClaudeCodeNative must NOT contain old heartbeat message"
+}
+if ($nativeFunc -notmatch 'SlowNoticeAfterSec.*120') {
+    throw "Install-ClaudeCodeNative must set SlowNoticeAfterSec 120"
+}
+
+# E. Install-ClaudeCodeNpmMirror: compact progress + SlowNotice
+if ($claudeInstallText -notmatch 'ProgressTitle.*Claude Code 备用下载方式安装中') {
+    throw "Install-ClaudeCodeNpmMirror must use ProgressTitle 'Claude Code 备用下载方式安装中'"
+}
+if ($claudeInstallText -notmatch 'ProgressHint.*正在从备用下载源获取 Claude Code') {
+    throw "Install-ClaudeCodeNpmMirror must use ProgressHint with mirror source notice"
+}
+$npmMirrorFunc = if ($claudeInstallText -match '(?s)function Install-ClaudeCodeNpmMirror\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+if ($npmMirrorFunc -match '仍在安装 Claude Code，请继续等待，不要关闭窗口。') {
+    throw "Install-ClaudeCodeNpmMirror must NOT contain old heartbeat message"
+}
+
+# F. Install-ClaudeCodeViaWinget: uses Invoke-InstallCommandCaptured + compact progress
+$wingetClaudeFunc = if ($claudeInstallText -match '(?s)function Install-ClaudeCodeViaWinget\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+if ($wingetClaudeFunc -match 'Invoke-VisibleInstallCommand') {
+    throw "Install-ClaudeCodeViaWinget must NOT use Invoke-VisibleInstallCommand"
+}
+if ($wingetClaudeFunc -notmatch 'Invoke-InstallCommandCaptured') {
+    throw "Install-ClaudeCodeViaWinget must use Invoke-InstallCommandCaptured"
+}
+if ($wingetClaudeFunc -notmatch 'ProgressTitle.*Claude Code 系统安装中') {
+    throw "Install-ClaudeCodeViaWinget must use ProgressTitle 'Claude Code 系统安装中'"
+}
+if ($wingetClaudeFunc -notmatch 'ProgressHint.*权限弹窗.*是') {
+    throw "Install-ClaudeCodeViaWinget must use ProgressHint with UAC prompt"
+}
+
+# G. Node.js winget install: ProgressIntervalSec 10
+$nodeWingetFunc = if ($claudeInstallText -match '(?s)function Install-NodeJsViaWinget\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+if ($nodeWingetFunc -notmatch 'ProgressIntervalSec\s+10') {
+    throw "Install-NodeJsViaWinget must have ProgressIntervalSec 10"
+}
+
+# H. 全仓库禁止旧等待句
+$allSourceFiles = @(Get-ChildItem -Path $RootDir -Recurse -Include "*.ps1", "*.psm1", "*.cmd", "*.sh", "*.md", "*.txt" -Exclude "*.log", "*.tmp" | Where-Object {
+    $_.FullName -notmatch '[\\/]\.sandbox[\\/]' -and
+    $_.FullName -notmatch '[\\/]\.git[\\/]' -and
+    $_.FullName -notmatch '[\\/]release[\\/]' -and
+    $_.FullName -notmatch '[\\/]logs[\\/]' -and
+    $_.FullName -notmatch '[\\/]backup[\\/]'
+})
+$oldHeartbeatFound = $false
+foreach ($f in $allSourceFiles) {
+    try {
+        $content = Get-Content $f.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ($content -and ($content -match '仍在安装 Claude Code，请继续等待，不要关闭窗口。')) {
+            # Allow check scripts to contain the banned phrase as a negative assertion
+            if ($f.Name -notmatch '^check\.' -and $f.Name -notmatch '^ux-check\.') {
+                Write-Host "  [FAIL] Banned phrase found in: $($f.FullName)"
+                $oldHeartbeatFound = $true
+            }
+        }
+    } catch { }
+}
+if ($oldHeartbeatFound) {
+    throw "Old heartbeat phrase '仍在安装 Claude Code，请继续等待，不要关闭窗口。' found in source files"
+}
+
+# I. 禁止前台透传 stdout/stderr
+$allPsFiles = @(Get-ChildItem -Path $RootDir -Recurse -Include "*.ps1", "*.psm1" -Exclude "*.log", "*.tmp" | Where-Object {
+    $_.FullName -notmatch '[\\/]\.sandbox[\\/]' -and
+    $_.FullName -notmatch '[\\/]\.git[\\/]' -and
+    $_.FullName -notmatch '[\\/]scripts[\\/]'
+})
+foreach ($psf in $allPsFiles) {
+    try {
+        $psContent = Get-Content $psf.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        # Check for Write-Host of stdout/stderr vars (not inside Write-Log)
+        if ($psContent -match 'Write-Host\s+\$stdout') {
+            # Allow Write-Log DEBUG context
+            if ($psContent -notmatch 'Write-Log.*\$stdout') {
+                throw "Found Write-Host `$stdout in $($psf.Name) — must not leak raw output to user terminal"
+            }
+        }
+        if ($psContent -match 'Write-Host\s+\$stderr') {
+            throw "Found Write-Host `$stderr in $($psf.Name) — must not leak raw output to user terminal"
+        }
+    } catch {
+        if ($_.Exception.Message -match 'Found Write-Host') { throw } else { continue }
+    }
 }
 
 # C. npm post-install verification

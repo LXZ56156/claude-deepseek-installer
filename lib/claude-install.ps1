@@ -936,7 +936,7 @@ function Write-NativeInstallUserMessage {
         附加信息（如版本号）
     #>
     param(
-        [ValidateSet("Start", "Heartbeat", "Verify", "Success", "Partial", "Fallback")]
+        [ValidateSet("Start", "Verify", "Success", "Partial", "Fallback")]
         [string]$Phase,
         [string]$Detail = ""
     )
@@ -946,9 +946,6 @@ function Write-NativeInstallUserMessage {
             Write-Info "正在执行 Claude 官方安装包。"
             Write-Info "此步骤可能持续数分钟，中途没有新文字也正常，请不要关闭窗口。"
             Write-Info "安装完成后，本工具会自动验证结果。"
-        }
-        "Heartbeat" {
-            Write-Info "仍在安装 Claude Code，请继续等待，不要关闭窗口。"
         }
         "Verify" {
             Write-Info "正在确认安装结果..."
@@ -1000,7 +997,10 @@ function Invoke-InstallCommandCaptured {
         # v1.3.3 UX: 紧凑中文进度模式
         [string]$ProgressTitle = "",
         [string]$ProgressHint = "",
-        [int]$ProgressIntervalSec = 10
+        [int]$ProgressIntervalSec = 10,
+        # v1.3.3 UX: 慢速提示（避免超过 120s 时用户误以为卡死）
+        [int]$SlowNoticeAfterSec = 0,
+        [string]$SlowNoticeMessage = ""
     )
 
     $result = @{
@@ -1063,6 +1063,7 @@ function Invoke-InstallCommandCaptured {
         $sw = [Diagnostics.Stopwatch]::StartNew()
         $pollIntervalSec = 1
         $nextHeartbeatAt = [Math]::Max(1, $effectiveHeartbeatSec)
+        $slowNoticeShown = $false
 
         while (-not $proc.HasExited) {
             Start-Sleep -Seconds $pollIntervalSec
@@ -1078,6 +1079,17 @@ function Invoke-InstallCommandCaptured {
                     Write-Info "$HeartbeatMessage（已等待 $elapsed 秒）"
                 }
                 $nextHeartbeatAt += [Math]::Max(1, $effectiveHeartbeatSec)
+            }
+
+            # v1.3.3 UX: 慢速提示（仅输出一次，避免超过阈值时间时用户误以为卡死）
+            if (
+                $SlowNoticeAfterSec -gt 0 -and
+                -not $slowNoticeShown -and
+                $elapsed -ge $SlowNoticeAfterSec -and
+                -not [string]::IsNullOrWhiteSpace($SlowNoticeMessage)
+            ) {
+                Write-Info $SlowNoticeMessage
+                $slowNoticeShown = $true
             }
 
             if ($sw.Elapsed.TotalSeconds -gt $TimeoutSec) {
@@ -1232,11 +1244,16 @@ function Install-ClaudeCodeNative {
 
         Write-Info "官方安装脚本已下载，开始安装..."
 
-        # v1.3.3 P1-2: 默认使用捕获模式，英文输出写入日志，控制台只显示中文心跳
+        # v1.3.3 P1-2: 默认使用捕获模式，英文输出写入日志，控制台只显示中文紧凑进度
         $installResult = Invoke-InstallCommandCaptured -FilePath "powershell" -Arguments @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tempInstallScript
-        ) -TimeoutSec 600 -HeartbeatSec 30 -FriendlyName "Claude 官方安装包" `
-            -StartMessage "" -HeartbeatMessage "仍在安装 Claude Code，请继续等待，不要关闭窗口。"
+        ) -TimeoutSec 300 -FriendlyName "Claude 官方安装包" `
+            -StartMessage "" `
+            -ProgressIntervalSec 10 `
+            -ProgressTitle "Claude Code 官方安装中" `
+            -ProgressHint "如果网络较慢会自动切换备用方式" `
+            -SlowNoticeAfterSec 120 `
+            -SlowNoticeMessage "官方安装较慢，工具仍在等待；如果超过约 5 分钟会自动切换备用方式。"
 
         # 清理临时脚本
         Remove-Item $tempInstallScript -Force -ErrorAction SilentlyContinue
@@ -1328,15 +1345,19 @@ function Install-ClaudeCodeNpmMirror {
 
     Write-Log "INFO" "执行: $($npmResolved.Path) install -g @anthropic-ai/claude-code --registry=https://registry.npmmirror.com"
 
-    # v1.3.3 UX: 使用捕获模式，英文输出写入日志，控制台只显示中文心跳
+    # v1.3.3 UX: 使用捕获模式，英文输出写入日志，控制台只显示中文紧凑进度
     $installResult = Invoke-InstallCommandCaptured -FilePath $npmResolved.Path -Arguments @(
         "install",
         "-g",
         "@anthropic-ai/claude-code",
         "--registry=https://registry.npmmirror.com"
-    ) -TimeoutSec 900 -HeartbeatSec 30 -FriendlyName "npm 镜像安装 Claude Code" `
+    ) -TimeoutSec 900 -FriendlyName "npm 镜像安装 Claude Code" `
         -StartMessage "正在通过备用下载方式安装 Claude Code。" `
-        -HeartbeatMessage "仍在安装 Claude Code，请继续等待，不要关闭窗口。"
+        -ProgressIntervalSec 10 `
+        -ProgressTitle "Claude Code 备用下载方式安装中" `
+        -ProgressHint "正在从备用下载源获取 Claude Code" `
+        -SlowNoticeAfterSec 120 `
+        -SlowNoticeMessage "备用下载方式较慢，工具仍在等待；如果长时间无结果，请稍后运行一键诊断。"
 
     if ($installResult.Success) {
         Write-Success "Claude Code 备用下载方式安装完成。"
@@ -2793,7 +2814,7 @@ function Install-NodeJsViaWinget {
     Write-Log "INFO" "Installing Node.js LTS via winget"
     Write-Info "正在安装 Node.js LTS，请不要关闭窗口。"
     Write-Info "这一步通常需要 1-5 分钟，取决于网络和电脑速度。"
-    Write-Info "如果弹出权限确认窗口，请选择"是"；如果没看到，请看任务栏是否闪烁。"
+    Write-Info '如果弹出权限确认窗口，请选择"是"；如果没看到，请看任务栏是否闪烁。'
     Write-Host ""
 
     return Invoke-InstallCommandCaptured -FilePath "winget" -Arguments @(
@@ -2804,7 +2825,7 @@ function Install-NodeJsViaWinget {
         "--silent"
     ) -TimeoutSec $TimeoutSec -ProgressIntervalSec 10 -FriendlyName "Node.js LTS 安装" `
         -ProgressTitle "Node.js LTS 安装中" `
-        -ProgressHint "如有权限弹窗请选择"是"" `
+        -ProgressHint '如有权限弹窗请选择"是"' `
         -StartMessage ""
 }
 
@@ -2828,15 +2849,22 @@ function Install-ClaudeCodeViaWinget {
     }
 
     Write-Log "INFO" "执行: winget install Anthropic.ClaudeCode"
-    Write-Info "正在通过备用方式安装 Claude Code。"
+    Write-Info "正在通过系统安装工具安装 Claude Code。"
     Write-Info "这一步可能需要几分钟，请不要关闭窗口。"
+    Write-Info '如果弹出权限确认窗口，请选择"是"；如果没看到，请看任务栏是否闪烁。'
 
-    return Invoke-VisibleInstallCommand -FilePath "winget" -Arguments @(
+    return Invoke-InstallCommandCaptured -FilePath "winget" -Arguments @(
         "install", "Anthropic.ClaudeCode",
         "--accept-package-agreements",
         "--accept-source-agreements",
         "--silent"
-    ) -TimeoutSec 600 -TestSafe:$TestSafe
+    ) -TimeoutSec 600 -FriendlyName "winget 安装 Claude Code" `
+        -StartMessage "" `
+        -ProgressIntervalSec 10 `
+        -ProgressTitle "Claude Code 系统安装中" `
+        -ProgressHint '如有权限弹窗请选择"是"' `
+        -SlowNoticeAfterSec 120 `
+        -SlowNoticeMessage "系统安装方式较慢，工具仍在等待；如果后续未确认成功，会自动切换备用下载方式。"
 }
 
 # ============================================================

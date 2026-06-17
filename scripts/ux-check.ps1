@@ -2346,6 +2346,50 @@ x-api-key: $TestApiKey
 
     Write-Host ""
 
+    # --- 34h: 安装进度统一对齐 ---
+    Assert "34h: 包含 'Claude Code 官方安装中'" {
+        $claudeInstallText -match [regex]::Escape('Claude Code 官方安装中')
+    } "claude-install.ps1 必须包含官方安装进度标题"
+    Assert "34h: 包含 'Claude Code 系统安装中'" {
+        $claudeInstallText -match [regex]::Escape('Claude Code 系统安装中')
+    } "claude-install.ps1 必须包含 winget 安装进度标题"
+    Assert "34h: 包含 'Claude Code 备用下载方式安装中'" {
+        $claudeInstallText -match [regex]::Escape('Claude Code 备用下载方式安装中')
+    } "claude-install.ps1 必须包含 npm 镜像安装进度标题"
+    Assert "34h: 包含 'Node.js LTS 安装中'" {
+        $claudeInstallText -match [regex]::Escape('Node.js LTS 安装中')
+    } "claude-install.ps1 必须包含 Node.js 安装进度标题"
+    Assert "34h: 包含 '已等待'" {
+        $claudeInstallText -match '已等待'
+    } "claude-install.ps1 必须显示已等待时间"
+    Assert "34h: 包含慢速提示 '官方安装较慢，工具仍在等待'" {
+        $claudeInstallText -match [regex]::Escape('官方安装较慢，工具仍在等待')
+    } "claude-install.ps1 必须包含官方安装慢速提示"
+    Assert "34h: 包含慢速提示 '如果超过约 5 分钟会自动切换备用方式'" {
+        $claudeInstallText -match [regex]::Escape('如果超过约 5 分钟会自动切换备用方式')
+    } "claude-install.ps1 必须包含 5 分钟超时说明"
+    Assert "34h: 包含 UAC 权限提示" {
+        $claudeInstallText -match [regex]::Escape('如有权限弹窗请选择"是"') -or $claudeInstallText -match [regex]::Escape('如果弹出权限确认窗口，请选择"是"')
+    } "claude-install.ps1 必须保留 UAC 权限弹窗提示"
+    Assert "34h: 包含镜像提示 '正在从备用下载源获取 Claude Code'" {
+        $claudeInstallText -match [regex]::Escape('正在从备用下载源获取 Claude Code')
+    } "claude-install.ps1 必须包含镜像下载提示"
+    # 必须不存在的禁止项
+    Assert "34h: 不含旧等待句 '仍在安装 Claude Code，请继续等待，不要关闭窗口。'" {
+        $claudeInstallText -notmatch [regex]::Escape('仍在安装 Claude Code，请继续等待，不要关闭窗口。')
+    } "claude-install.ps1 不得保留旧等待句"
+    Assert "34h: 不含前台 ExitCode=" {
+        $claudeInstallText -notmatch 'Write-Info.*ExitCode=|Write-Warning.*ExitCode=|Write-Error-Msg.*ExitCode=|Write-Success.*ExitCode='
+    } "claude-install.ps1 不得在前台文案显示 ExitCode="
+    Assert "34h: 不含前台 Success=False" {
+        $claudeInstallText -notmatch 'Write-Info.*Success=False|Write-Warning.*Success=False|Write-Error-Msg.*Success=False|Write-Success.*Success=False'
+    } "claude-install.ps1 不得在前台文案显示 Success=False"
+    Assert "34h: 不含前台 PS>TerminatingError" {
+        $claudeInstallText -notmatch 'Write-Info.*PS>TerminatingError|Write-Warning.*PS>TerminatingError'
+    } "claude-install.ps1 不得在前台文案显示 PS>TerminatingError"
+
+    Write-Host ""
+
     # ============================================================
     # 最终汇总
     # ============================================================

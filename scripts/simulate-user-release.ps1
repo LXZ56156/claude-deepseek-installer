@@ -904,6 +904,70 @@ PS>TerminatingError(Invoke-WebRequest):"操作超时。"
     }
     Write-Host "[simulate]   noise filters: spinner + PS>TerminatingError removed, valid lines kept" -ForegroundColor Green
 
+    # v1.3.3 UX: Invoke-InstallCommandCaptured compact progress parameter test
+    # Static check: verify Invoke-InstallCommandCaptured supports all required params
+    Write-Check "v1.3.3 UX: Invoke-InstallCommandCaptured compact progress params"
+
+    $ciContent = Get-Content (Join-Path $releaseRoot "lib\claude-install.ps1") -Raw -Encoding UTF8
+
+    # Extract the full Invoke-InstallCommandCaptured function body
+    $capturedFuncBody = if ($ciContent -match '(?s)function Invoke-InstallCommandCaptured\s*\{.*?(?=^function \w|\Z)') {
+        $matches[0]
+    } else {
+        throw "Cannot find Invoke-InstallCommandCaptured function"
+    }
+
+    $requiredParams = @(
+        @{Name="ProgressTitle";      Type="string"},
+        @{Name="ProgressHint";       Type="string"},
+        @{Name="ProgressIntervalSec";Type="int"},
+        @{Name="SlowNoticeAfterSec"; Type="int"},
+        @{Name="SlowNoticeMessage";  Type="string"}
+    )
+    foreach ($p in $requiredParams) {
+        if ($capturedFuncBody -notmatch "\[$($p.Type)\]\s*\`$$($p.Name)") {
+            throw "Invoke-InstallCommandCaptured missing param: `$$($p.Name)"
+        }
+    }
+    # Verify the slow notice logic exists
+    if ($capturedFuncBody -notmatch '\$slowNoticeShown\s*=\s*\$false') {
+        throw "Invoke-InstallCommandCaptured missing slowNoticeShown initialization"
+    }
+    if ($capturedFuncBody -notmatch '\$SlowNoticeAfterSec\s*-gt\s*0') {
+        throw "Invoke-InstallCommandCaptured missing slow notice guard (SlowNoticeAfterSec > 0)"
+    }
+    Write-Host "[simulate]   compact progress params OK" -ForegroundColor Green
+
+    # v1.3.3 UX: 安装路径静态检查
+    Write-Check "v1.3.3 UX: install method progress alignment static checks"
+    $claudeInstallPath = Join-Path $releaseRoot "lib\claude-install.ps1"
+    if (-not (Test-Path $claudeInstallPath)) {
+        throw "lib\claude-install.ps1 not found in release"
+    }
+    $ciContent = Get-Content $claudeInstallPath -Raw -Encoding UTF8
+
+    # Native install
+    if ($ciContent -notmatch 'Claude Code 官方安装中') {
+        throw "Install-ClaudeCodeNative must use ProgressTitle 'Claude Code 官方安装中'"
+    }
+    # npm mirror install
+    if ($ciContent -notmatch 'Claude Code 备用下载方式安装中') {
+        throw "Install-ClaudeCodeNpmMirror must use ProgressTitle 'Claude Code 备用下载方式安装中'"
+    }
+    # winget Claude install
+    if ($ciContent -notmatch 'Claude Code 系统安装中') {
+        throw "Install-ClaudeCodeViaWinget must use ProgressTitle 'Claude Code 系统安装中'"
+    }
+    # winget Claude must NOT use Invoke-VisibleInstallCommand
+    $wingetClaudeFunc = if ($ciContent -match '(?s)function Install-ClaudeCodeViaWinget\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+    if ($wingetClaudeFunc -match 'Invoke-VisibleInstallCommand') {
+        throw "Install-ClaudeCodeViaWinget must NOT use Invoke-VisibleInstallCommand"
+    }
+    if ($wingetClaudeFunc -notmatch 'Invoke-InstallCommandCaptured') {
+        throw "Install-ClaudeCodeViaWinget must use Invoke-InstallCommandCaptured"
+    }
+    Write-Host "[simulate]   install method progress alignment OK" -ForegroundColor Green
+
     Write-Host "[simulate] OK" -ForegroundColor Green
 }
 finally {
