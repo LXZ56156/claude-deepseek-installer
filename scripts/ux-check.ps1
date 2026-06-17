@@ -1800,6 +1800,93 @@ x-api-key: $TestApiKey
     Write-Host ""
 
     # ============================================================
+    # 29. P0-UX 第一批体验修复防回归 (v1.3.3 batch 1)
+    # ============================================================
+    Write-CheckHeader "29. P0-UX 第一批体验修复防回归"
+
+    # --- 29a: Invoke-InstallCommandCaptured 1秒轮询 ---
+    Assert "29a: Invoke-InstallCommandCaptured 必须使用 pollIntervalSec = 1" {
+        $claudeInstallText -match '\$pollIntervalSec\s*=\s*1'
+    } "Invoke-InstallCommandCaptured 必须设置 `$pollIntervalSec = 1"
+
+    Assert "29a: Invoke-InstallCommandCaptured 不得使用 Start-Sleep -Seconds `$nextHeartbeat" {
+        $claudeInstallText -notmatch 'Start-Sleep\s+-Seconds\s+\$nextHeartbeat'
+    } "Invoke-InstallCommandCaptured 不得睡眠 `$nextHeartbeat 秒（应改为 1 秒轮询）"
+
+    Assert "29a: Invoke-InstallCommandCaptured 必须保留 HeartbeatSec" {
+        $claudeInstallText -match '\$HeartbeatSec'
+    } "Invoke-InstallCommandCaptured 必须保留 `$HeartbeatSec 参数"
+
+    Assert "29a: Invoke-InstallCommandCaptured 必须保留 taskkill /T /F" {
+        $claudeInstallText -match 'taskkill\.exe\s+/PID' -and $claudeInstallText -match '/T\s+/F'
+    } "Invoke-InstallCommandCaptured 必须保留 taskkill /T /F 进程树终止"
+
+    # --- 29b: downloads.claude.ai 不可达时跳过 winget Claude Code ---
+    Assert "29b: Install-ClaudeCodeAuto 必须定义 `$shouldTryWingetClaude" {
+        $claudeInstallText -match '\$shouldTryWingetClaude'
+    } "Install-ClaudeCodeAuto 必须定义 `$shouldTryWingetClaude 变量"
+
+    Assert "29b: 必须读取 officialNetwork.DownloadsOk（ContainsKey 防守）" {
+        $claudeInstallText -match 'ContainsKey\("DownloadsOk"\)'
+    } "必须使用 ContainsKey 防守式读取 DownloadsOk"
+
+    Assert "29b: winget Claude Code 安装必须受 shouldTryWingetClaude 控制" {
+        $claudeInstallText -match 'if\s*\(\s*\$wingetOk\s+-and\s+\$shouldTryWingetClaude\s*\)'
+    } "winget Claude Code 安装必须由 `$wingetOk -and `$shouldTryWingetClaude 控制"
+
+    Assert "29b: 必须有跳过 winget Claude Code 的用户提示" {
+        $claudeInstallText -match '跳过 winget'
+    } "必须输出跳过 winget 安装 Claude Code 的提示"
+
+    Assert "29b: 必须说明跳过原因（避免长时间等待）" {
+        $claudeInstallText -match '避免长时间等待'
+    } "必须解释跳过原因"
+
+    Assert "29b: 不得禁用 winget 安装 Node.js LTS" {
+        $claudeInstallText -match 'OpenJS\.NodeJS\.LTS'
+    } "winget 安装 Node.js LTS 仍必须存在，不受 DownloadsOk 影响"
+
+    # --- 29c: npm 安装后验验证 ---
+    Assert "29c: Install-ClaudeCodeNpmMirror 不得直接 Write-Warning 给用户" {
+        $claudeInstallText -notmatch 'Install-ClaudeCodeNpmMirror[\s\S]{0,500}Write-Warning\s+"npm 镜像安装未完成验证'
+    } "Install-ClaudeCodeNpmMirror 不得直接输出用户可见失败（由调用方后验验证决定）"
+
+    Assert "29c: npm mirror 分支中必须有 Refresh-CurrentProcessPath + Test-ClaudeCommandExisting" {
+        $claudeInstallText -match 'Refresh-CurrentProcessPath[\s\S]{0,200}Test-ClaudeCommandExisting'
+    } "npm 安装后必须刷新 PATH 并后验验证"
+
+    Assert "29c: 后验验证必须检查 verifyResult.Usable" {
+        $claudeInstallText -match '\$verifyResult\.Usable'
+    } "后验验证必须检查 `$verifyResult.Usable 字段"
+
+    Assert "29c: 后验验证通过时必须设置 claudeInstallMethod = npm_npmmirror" {
+        $claudeInstallText -match 'claudeInstallMethod\s*=\s*"npm_npmmirror"'
+    } "后验验证通过时必须设置 claudeInstallMethod = 'npm_npmmirror'"
+
+    Assert "29c: 后验验证通过时必须设置 claudeInstallCompletedAt" {
+        $claudeInstallText -match 'claudeInstallCompletedAt'
+    } "后验验证通过时必须设置 claudeInstallCompletedAt"
+
+    # --- 29d: 失败文案必须延后到后验验证之后 ---
+    Assert "29d: 不得存在预判失败 immediate return（failed_official_and_mirror 在 npm 调用后）" {
+        $claudeInstallText -notmatch 'if\s*\(\s*-not\s+\$mirrorResult\.Success\s*\)\s*\{[\s\S]{0,200}failed_official_and_mirror'
+    } "不得在 npm 调用后直接 return failed_official_and_mirror"
+
+    Assert "29d: 失败文案 'npm 镜像安装未完成验证' 仅在后验验证失败路径中出现" {
+        ($claudeInstallText -match 'elseif\s*\(\s*\$verifyResult\.Exists\s*\)[\s\S]{0,200}npm 镜像安装未完成验证')
+    } "'npm 镜像安装未完成验证' 必须仅出现在后验验证失败路径（elseif verifyResult.Exists）"
+
+    Assert "29d: 后验验证失败时必须包含可能原因提示" {
+        $claudeInstallText -match '可能原因：Node\.js/npm 不完整'
+    } "后验验证失败时必须输出可能原因"
+
+    Assert "29d: 后验验证通过时必须记录安装命令异常（Write-Log）" {
+        $claudeInstallText -match '安装命令返回异常但后验验证通过'
+    } "后验验证通过时必须写入日志说明命令返回异常"
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""

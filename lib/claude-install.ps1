@@ -958,15 +958,20 @@ function Invoke-InstallCommandCaptured {
         Write-Log "INFO" "Invoke-InstallCommandCaptured: started PID=$($proc.Id), FriendlyName=$FriendlyName"
 
         $sw = [Diagnostics.Stopwatch]::StartNew()
-        $nextHeartbeat = [Math]::Max(1, $HeartbeatSec)
+        $pollIntervalSec = 1
+        $nextHeartbeatAt = [Math]::Max(1, $HeartbeatSec)
 
         while (-not $proc.HasExited) {
-            Start-Sleep -Seconds $nextHeartbeat
-            if (-not $proc.HasExited) {
-                $elapsed = [Math]::Round($sw.Elapsed.TotalSeconds, 0)
-                if (-not [string]::IsNullOrWhiteSpace($HeartbeatMessage)) { Write-Info "$HeartbeatMessage（已等待 $elapsed 秒）" }
-                $nextHeartbeat = $HeartbeatSec
+            Start-Sleep -Seconds $pollIntervalSec
+            $elapsed = [Math]::Round($sw.Elapsed.TotalSeconds, 0)
+
+            if ($elapsed -ge $nextHeartbeatAt) {
+                if (-not [string]::IsNullOrWhiteSpace($HeartbeatMessage)) {
+                    Write-Info "$HeartbeatMessage（已等待 $elapsed 秒）"
+                }
+                $nextHeartbeatAt += [Math]::Max(1, $HeartbeatSec)
             }
+
             if ($sw.Elapsed.TotalSeconds -gt $TimeoutSec) {
                 Write-Log "WARN" "Invoke-InstallCommandCaptured: timeout ${TimeoutSec}s, killing PID=$($proc.Id)"
                 try {
@@ -1230,11 +1235,11 @@ function Install-ClaudeCodeNpmMirror {
         $result.Success = $true
     }
     else {
-        $result.Error = "npm 镜像安装未完成验证: $($installResult.Error)"
-        Write-Warning "npm 镜像安装未完成验证。"
-        Write-Info "可能原因：Node.js/npm 不完整、镜像网络不可达、npm 全局 PATH 异常。"
-        Write-Info "请运行「一键诊断.cmd」生成 report.txt 发给技术支持。"
-        Write-Log "ERROR" $result.Error
+        # 不在此处输出失败结论，由调用方后验验证决定最终结果。
+        # npm install ExitCode 在 Windows PowerShell 5.1 下可能为空或非标准。
+        $result.Error = "npm 镜像安装命令返回异常: $($installResult.Error)"
+        Write-Log "INFO" "npm 镜像安装命令返回异常（ExitCode 可能为空或非标准），由调用方后验验证决定最终结果。"
+        Write-Log "DEBUG" "npm mirror install details: ExitCode=$($installResult.ExitCode), Error=$($installResult.Error), DurationMs=$($installResult.DurationMs)"
     }
 
     return $result
@@ -3146,7 +3151,24 @@ function Install-ClaudeCodeAuto {
     }
 
     # ============================================================
-    # Step 2.5: 尝试 winget 安装 Claude Code（Native Install 失败后的中速通道）
+    # Step 2.5: 判断是否应尝试 winget 安装 Claude Code
+    # 即使 winget 可用，如果 downloads.claude.ai 不可达，也不应尝试 winget Claude Code，
+    # 因为 winget 也会从 downloads.claude.ai 下载，会导致长时间卡住后失败。
+    # 但这不影响 winget 安装 Node.js LTS（Node.js 来源是 nodejs.org）。
+    # ============================================================
+    $downloadsOk = $false
+    if ($officialNetwork.ContainsKey("DownloadsOk")) {
+        $downloadsOk = [bool]$officialNetwork.DownloadsOk
+    }
+    $shouldTryWingetClaude = $downloadsOk
+
+    if (-not $shouldTryWingetClaude) {
+        Write-Info "Claude 官方下载域名不可达，跳过 winget 安装 Claude Code，直接尝试 npm 镜像通道。"
+        Write-Log "INFO" "已跳过 winget Claude Code：官方下载域名不可达，避免长时间等待。"
+    }
+
+    # ============================================================
+    # Step 2.6: 尝试 winget 安装 Claude Code（Native Install 失败后的中速通道）
     # ============================================================
     $wingetOk = if ($isMockDecision) {
         ($env:CCDI_MOCK_WINGET -eq "ok")
@@ -3154,7 +3176,7 @@ function Install-ClaudeCodeAuto {
     else {
         Test-CommandAvailable -CommandName "winget"
     }
-    if ($wingetOk) {
+    if ($wingetOk -and $shouldTryWingetClaude) {
         Write-Info ""
         Write-Info "正在尝试通过 winget 安装 Claude Code（备用通道）..."
         Write-Info "这是 Windows 官方包管理器方式，下载可能需要数分钟。"
@@ -3197,6 +3219,10 @@ function Install-ClaudeCodeAuto {
             Write-Log "INFO" "winget 安装后 claude 命令未找到: ExitCode=$($wingetClaudeResult.ExitCode), Error=$($wingetClaudeResult.Error)"
             Write-Info "winget 安装后暂未检测到 claude，继续尝试 npm 镜像安装..."
         }
+    }
+    elseif ($wingetOk -and -not $shouldTryWingetClaude) {
+        # 已在 Step 2.5 中提示跳过原因
+        Write-Log "INFO" "已跳过 winget Claude Code（shouldTryWingetClaude=$shouldTryWingetClaude），继续 npm 镜像通道。"
     }
 
     # ============================================================
@@ -3284,17 +3310,12 @@ function Install-ClaudeCodeAuto {
                     Write-Host ""
                     $mirrorResult = Install-ClaudeCodeNpmMirror
                     if (-not $mirrorResult.Success) {
-                        Write-Error-Msg "官方 Native Install、winget 和 npm 镜像安装均未通过验证。"
-                        Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
-                        $result.Method = "none"
-                        $result.Status = "failed_official_and_mirror"
-                        Update-CcdiState -Updates @{
-                            claudeInstallMethod = "none"
-                            claudeInstallStatus = "failed_official_and_mirror"
-                        } | Out-Null
-                        return $result
+                        # 不在此处输出失败结论，由后验验证决定最终结果。
+                        # npm install ExitCode 在 Windows PowerShell 5.1 下可能为空或非标准。
+                        Write-Log "INFO" "npm 镜像安装命令返回异常状态，将进行后验验证确认真实结果。"
+                        Write-Log "DEBUG" "npm mirror install details: Error=$($mirrorResult.Error), Status=$($mirrorResult.Status)"
                     }
-                    # 验证安装
+                    # 验证安装（无论 $mirrorResult.Success 如何，均通过后验验证确认）
                     if ($isMockDecision) {
                         Write-Log "DEBUG" "MOCK: trusting npm mirror install success"
                         $result.Success = $true
@@ -3313,6 +3334,9 @@ function Install-ClaudeCodeAuto {
                     Refresh-CurrentProcessPath
                     $verifyResult = Test-ClaudeCommandExisting
                     if ($verifyResult.Usable) {
+                        if (-not $mirrorResult.Success) {
+                            Write-Log "INFO" "npm 镜像安装命令返回异常但后验验证通过（ExitCode 可能为空或非标准），以 claude --version 为准。"
+                        }
                         Write-Success "Claude Code 安装验证通过: $($verifyResult.Version)"
                         $result.Success = $true
                         $result.Method = "npm_npmmirror"
@@ -3327,6 +3351,8 @@ function Install-ClaudeCodeAuto {
                         return $result
                     }
                     elseif ($verifyResult.Exists) {
+                        Write-Warning "npm 镜像安装未完成验证。"
+                        Write-Info "可能原因：Node.js/npm 不完整、镜像网络不可达、npm 全局 PATH 异常。"
                         Write-Warning "检测到 claude 命令存在但无法运行: $($verifyResult.Error)"
                         Write-Warning "可能是旧安装、残留 shim、WindowsApps alias 或 PATH 冲突。"
                         Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
@@ -3350,6 +3376,9 @@ function Install-ClaudeCodeAuto {
                         Refresh-CurrentProcessPath
                         $verifyResult2 = Test-ClaudeCommandExisting
                         if ($verifyResult2.Usable) {
+                            if (-not $mirrorResult.Success) {
+                                Write-Log "INFO" "npm 镜像安装命令返回异常但后验验证通过（PATH 刷新后），以 claude --version 为准。"
+                            }
                             Write-Success "Claude Code 安装验证通过: $($verifyResult2.Version)"
                             $result.Success = $true
                             $result.Method = "npm_npmmirror"
@@ -3364,6 +3393,8 @@ function Install-ClaudeCodeAuto {
                             return $result
                         }
                         elseif ($verifyResult2.Exists) {
+                            Write-Warning "npm 镜像安装未完成验证。"
+                            Write-Info "可能原因：Node.js/npm 不完整、镜像网络不可达、npm 全局 PATH 异常。"
                             Write-Warning "检测到 claude 命令存在但无法运行（PATH 刷新后）: $($verifyResult2.Error)"
                             Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
                             Write-Log "WARN" "npm mirror PATH retry: claude exists but unusable: $($verifyResult2.Error)"
@@ -3505,15 +3536,10 @@ function Install-ClaudeCodeAuto {
     $mirrorResult = Install-ClaudeCodeNpmMirror
 
     if (-not $mirrorResult.Success) {
-        Write-Error-Msg "官方 Native Install、winget 和 npm 镜像安装均未通过验证。"
-        Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
-        $result.Method = "none"
-        $result.Status = "failed_official_and_mirror"
-        Update-CcdiState -Updates @{
-            claudeInstallMethod = "none"
-            claudeInstallStatus = "failed_official_and_mirror"
-        } | Out-Null
-        return $result
+        # 不在此处输出失败结论，由后验验证决定最终结果。
+        # npm install ExitCode 在 Windows PowerShell 5.1 下可能为空或非标准。
+        Write-Log "INFO" "npm 镜像安装命令返回异常状态，将进行后验验证确认真实结果。"
+        Write-Log "DEBUG" "npm mirror install details: Error=$($mirrorResult.Error), Status=$($mirrorResult.Status)"
     }
 
     # 3c. 验证安装（mock 模式下自动信任安装结果）
@@ -3535,6 +3561,9 @@ function Install-ClaudeCodeAuto {
     Refresh-CurrentProcessPath
     $verifyResult = Test-ClaudeCommandExisting
     if ($verifyResult.Usable) {
+        if (-not $mirrorResult.Success) {
+            Write-Log "INFO" "npm 镜像安装命令返回异常但后验验证通过（ExitCode 可能为空或非标准），以 claude --version 为准。"
+        }
         Write-Success "Claude Code 安装验证通过: $($verifyResult.Version)"
         # claude doctor is diagnostic-only; not called during install
 
@@ -3551,6 +3580,8 @@ function Install-ClaudeCodeAuto {
         return $result
     }
     elseif ($verifyResult.Exists) {
+        Write-Warning "npm 镜像安装未完成验证。"
+        Write-Info "可能原因：Node.js/npm 不完整、镜像网络不可达、npm 全局 PATH 异常。"
         Write-Warning "检测到 claude 命令存在但无法运行: $($verifyResult.Error)"
         Write-Warning "可能是旧安装、残留 shim、WindowsApps alias 或 PATH 冲突。"
         Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
@@ -3574,6 +3605,9 @@ function Install-ClaudeCodeAuto {
         Refresh-CurrentProcessPath
         $verifyResult2 = Test-ClaudeCommandExisting
         if ($verifyResult2.Usable) {
+            if (-not $mirrorResult.Success) {
+                Write-Log "INFO" "npm 镜像安装命令返回异常但后验验证通过（PATH 刷新后），以 claude --version 为准。"
+            }
             Write-Success "Claude Code 安装验证通过: $($verifyResult2.Version)"
             $result.Success = $true
             $result.Method = "npm_npmmirror"
@@ -3588,6 +3622,8 @@ function Install-ClaudeCodeAuto {
             return $result
         }
         elseif ($verifyResult2.Exists) {
+            Write-Warning "npm 镜像安装未完成验证。"
+            Write-Info "可能原因：Node.js/npm 不完整、镜像网络不可达、npm 全局 PATH 异常。"
             Write-Warning "检测到 claude 命令存在但无法运行（PATH 刷新后）: $($verifyResult2.Error)"
             Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
             Write-Log "WARN" "npm mirror PATH retry: claude exists but unusable: $($verifyResult2.Error)"

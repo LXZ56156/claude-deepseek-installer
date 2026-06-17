@@ -3320,4 +3320,111 @@ if ($startHereText -match '-match\s+"needs_restart"') {
 
 Write-Host "[check] P0 residue fix anti-regression OK"
 
+# ============================================================
+# P0-UX anti-regression: v1.3.3 batch 1 UX fixes
+# ============================================================
+Write-Host "[check] P0-UX anti-regression (1s polling, winget Claude skip, npm post-verify, delayed failure)"
+
+# A. Invoke-InstallCommandCaptured polling interval
+if ($claudeInstallText -notmatch '\$pollIntervalSec\s*=\s*1') {
+    throw "Invoke-InstallCommandCaptured must have `$pollIntervalSec = 1 for per-second polling"
+}
+if ($claudeInstallText -match 'Start-Sleep\s+-Seconds\s+\$nextHeartbeat') {
+    throw "Invoke-InstallCommandCaptured must NOT sleep `$nextHeartbeat seconds (use `$pollIntervalSec = 1)"
+}
+if ($claudeInstallText -notmatch '\$nextHeartbeatAt') {
+    throw "Invoke-InstallCommandCaptured must use `$nextHeartbeatAt for heartbeat scheduling"
+}
+if ($claudeInstallText -notmatch '\$nextHeartbeatAt\s*\+=.*\$HeartbeatSec') {
+    throw "Invoke-InstallCommandCaptured must increment nextHeartbeatAt by HeartbeatSec"
+}
+if ($claudeInstallText -notmatch 'taskkill\.exe\s+/PID') {
+    throw "Invoke-InstallCommandCaptured must retain taskkill.exe /PID for timeout kill"
+}
+if ($claudeInstallText -notmatch '/T\s+/F') {
+    throw "Invoke-InstallCommandCaptured must retain /T /F for process tree kill"
+}
+
+# B. downloads.claude.ai unreachable → skip winget Claude Code
+if ($claudeInstallText -notmatch '\$shouldTryWingetClaude') {
+    throw "Install-ClaudeCodeAuto must define `$shouldTryWingetClaude variable"
+}
+if ($claudeInstallText -notmatch 'if\s*\(\s*\$officialNetwork\.ContainsKey\("DownloadsOk"\)\s*\)') {
+    throw "Install-ClaudeCodeAuto must read officialNetwork.DownloadsOk with ContainsKey guard"
+}
+if ($claudeInstallText -notmatch 'if\s*\(\s*\$wingetOk\s+-and\s+\$shouldTryWingetClaude\s*\)') {
+    throw "winget Claude Code install must be guarded by `$wingetOk -and `$shouldTryWingetClaude"
+}
+if ($claudeInstallText -notmatch '跳过 winget') {
+    throw "Install-ClaudeCodeAuto must have user-visible message about skipping winget Claude Code"
+}
+if ($claudeInstallText -notmatch '避免长时间等待') {
+    throw "Install-ClaudeCodeAuto must explain skip reason (避免长时间等待)"
+}
+# Node.js via winget must still be present
+if ($claudeInstallText -notmatch 'Install-NodeJsViaWinget') {
+    throw "Install-NodeJsViaWinget must still exist (winget Node.js is NOT disabled)"
+}
+if ($claudeInstallText -notmatch 'OpenJS\.NodeJS\.LTS') {
+    throw "winget install Node.js LTS must still be present"
+}
+
+# C. npm post-install verification
+# C1. Install-ClaudeCodeNpmMirror must NOT output user-facing failure messages directly
+if ($claudeInstallText -match 'Install-ClaudeCodeNpmMirror[\s\S]{0,500}Write-Warning\s+"npm 镜像安装未完成验证') {
+    throw "Install-ClaudeCodeNpmMirror must NOT Write-Warning user-visible failure (defer to caller)"
+}
+# C2. Each Install-ClaudeCodeNpmMirror call site must have post-verification
+$npmCalls = @([regex]::Matches($claudeInstallText, 'Install-ClaudeCodeNpmMirror\b'))
+if ($npmCalls.Count -lt 2) {
+    throw "Install-ClaudeCodeAuto must call Install-ClaudeCodeNpmMirror at least 2 times (two branches)"
+}
+# C3. After npm install, must have Refresh-CurrentProcessPath + Test-ClaudeCommandExisting
+if ($claudeInstallText -notmatch 'Refresh-CurrentProcessPath[\s\S]{0,200}Test-ClaudeCommandExisting') {
+    throw "Post-npm verification must call Refresh-CurrentProcessPath then Test-ClaudeCommandExisting"
+}
+# C4. verifyAfterMirror.Usable check must exist
+if ($claudeInstallText -notmatch '\$verifyResult\.Usable') {
+    throw "Post-npm verification must check `$verifyResult.Usable"
+}
+# C5. On post-verify success, must set claudeInstallMethod = "npm_npmmirror"
+if ($claudeInstallText -notmatch 'claudeInstallMethod\s*=\s*"npm_npmmirror"') {
+    throw "Post-npm verify success must set claudeInstallMethod = 'npm_npmmirror'"
+}
+if ($claudeInstallText -notmatch 'claudeInstallStatus\s*=\s*"installed"') {
+    throw "Post-npm verify success must set claudeInstallStatus = 'installed'"
+}
+if ($claudeInstallText -notmatch 'claudeInstallCompletedAt') {
+    throw "Post-npm verify success must set claudeInstallCompletedAt"
+}
+
+# D. Failure message placement - no "所有通道失败" before post-verification
+# The "官方 Native Install、winget 和 npm 镜像安装均未通过验证" message must NOT appear
+# between Install-ClaudeCodeNpmMirror call and post-verification.
+# Since we removed it from the premature return, it should NOT appear at all in
+# any block that runs before Test-ClaudeCommandExisting.
+# Acceptable: it may appear in Write-Log (log only) or not at all.
+$allFailedMsg = '官方 Native Install.*winget.*npm 镜像.*均未通过验证'
+if ($claudeInstallText -match $allFailedMsg) {
+    # If it still exists, it must be after post-verification, not before
+    # Check that it's not in a Write-Error-Msg or Write-Warning context
+    if ($claudeInstallText -match "Write-Error-Msg\s+`"$allFailedMsg" -or
+        $claudeInstallText -match "Write-Warning\s+`"$allFailedMsg") {
+        throw "Write-Error-Msg/Write-Warning '所有通道失败' must NOT appear (deferred to post-verify failure paths)"
+    }
+}
+# The old pattern of `if (-not $mirrorResult.Success) { return failed_official_and_mirror }` must not exist
+if ($claudeInstallText -match 'if\s*\(\s*-not\s+\$mirrorResult\.Success\s*\)\s*\{[\s\S]{0,200}failed_official_and_mirror') {
+    throw "Pre-verified failed_official_and_mirror return must NOT exist (must do post-verification first)"
+}
+# D2. npm mirror failure messages must exist in post-verify failure paths
+if ($claudeInstallText -notmatch 'npm 镜像安装未完成验证') {
+    throw "Post-verify failure paths must retain 'npm 镜像安装未完成验证' message"
+}
+if ($claudeInstallText -notmatch '可能原因：Node\.js/npm 不完整') {
+    throw "Post-verify failure paths must include possible causes explanation"
+}
+
+Write-Host "[check] P0-UX anti-regression OK"
+
 Write-Host "[check] OK"
