@@ -7,9 +7,9 @@
 ## Active Work
 
 - **Branch**: `fix/v1.3.3-native-path-doctor-ux`
-- **Status**: 超时文案对齐 fallback 流程完成，全部验收通过
+- **Status**: P0 进度格式化修复完成，全部验收通过
 - **Next**: 真机验收 → 合并到 main → 打 v1.3.3 release ZIP
-- **Latest commit**: 000ec3f fix(ux): align install timeout guidance with fallback flow
+- **Latest commit**: 23053e7 fix(ux): prevent progress formatting from aborting installers
 
 ---
 
@@ -19,6 +19,7 @@
 
 | 日期 | 内容 | Commit |
 |------|------|--------|
+| 2026-06-18 | P0 进度格式化修复 — [Math]::Floor+Double+D2→Format-CcdiElapsedTime[int]/异常降级不中断安装/异常清理子进程 | 23053e7 |
 | 2026-06-18 | 超时文案对齐 fallback — TimeoutFollowupMessage 参数化/Native/Winget 不直接让用户诊断/npm 温和 follow-up | 000ec3f |
 | 2026-06-18 | 安装进度统一对齐 — 所有安装路径紧凑进度+SlowNotice+300s 超时/winget CC 改用 Captured/删除旧等待句 | 8a3135d |
 | 2026-06-17 | 遗留收口 — npm shim 冲突修复/support-feedback 单文件反馈/terminal transcript/ZIP docs 白名单/售后口径统一 | 82e1c20 |
