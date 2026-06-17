@@ -761,34 +761,51 @@ if ($simText -notmatch 'CCDI_TEST_MODE\s*=\s*"1"') {
 if ($simText -notmatch '调用方传入的 Environment 可以覆盖默认值') {
     throw "simulate-user-release.ps1 Invoke-SimCommand must allow caller Environment to override defaults"
 }
-# .cmd 入口测试必须保留（不跳过入口验收）
-if ($simText -notmatch 'Start-Install\.cmd cancel') {
-    throw "simulate-user-release.ps1 must keep Start-Install.cmd cancel test"
-}
-if ($simText -notmatch 'Run-Diagnostics\.cmd') {
-    throw "simulate-user-release.ps1 must keep Run-Diagnostics.cmd test"
-}
-if ($simText -notmatch '一键诊断\.cmd') {
-    throw "simulate-user-release.ps1 must keep 一键诊断.cmd test"
-}
-# Invoke-SimCommand: powershell.exe 必须通过命令行参数 -WindowStyle Hidden 隐藏窗口
-# （ProcessStartInfo.WindowStyle 在 UseShellExecute=$false 时被 .NET 忽略）
-if ($simText -notmatch '-WindowStyle["\s,]+Hidden') {
-    throw "simulate-user-release.ps1 Invoke-SimCommand must prepend -WindowStyle Hidden to powershell.exe arguments"
-}
-# 注释必须解释 WindowStyle 仅在 UseShellExecute=$true 时生效
-if ($simText -notmatch '仅在\s*UseShellExecute=\$true\s*时生效') {
-    throw "simulate-user-release.ps1 must document that WindowStyle only takes effect when UseShellExecute=`$true"
-}
-# ShellExecute capability test: 不能直接调 Process.Start(string,string)（会弹窗）
-if ($simText -match '\[System\.Diagnostics\.Process\]::Start\("cmd\.exe",\s*"/c exit 0"\)') {
-    throw "simulate-user-release.ps1 ShellExecute capability test must use ProcessStartInfo with WindowStyle=Hidden (not bare Process.Start)"
-}
-# ShellExecute section: 必须包含 WindowStyle=Hidden（模拟双击但不弹窗）
-$simShellExecuteSection = if ($simText -match '(?s)ShellExecute launcher tests.*?v1\.3\.3 P5: fake npm shim') { $matches[0] } else { "" }
-if ($simShellExecuteSection -notmatch 'WindowStyle\s*=\s*\[System\.Diagnostics\.ProcessWindowStyle\]::Hidden') {
-    throw "simulate-user-release.ps1 ShellExecute section must set WindowStyle=Hidden to suppress launcher windows"
-}
+# ShellExecute launcher tests 段：提取并验证完整存在
+	$simShellExecuteSection = if ($simText -match '(?s)ShellExecute launcher tests.*?v1\.3\.3 P5: fake npm shim') {
+	    $matches[0]
+	}
+	else {
+	    ""
+	}
+	if ([string]::IsNullOrWhiteSpace($simShellExecuteSection)) {
+	    throw "simulate-user-release.ps1 must keep ShellExecute launcher tests section"
+	}
+
+	# 7 个 .cmd 入口必须全部保留在 ShellExecute 段（不跳过入口验收）
+	$requiredShellLaunchers = @(
+	    "Start-Install\.cmd",
+	    "00-点我开始安装\.cmd",
+	    "Run-Diagnostics\.cmd",
+	    "一键诊断\.cmd",
+	    "Restore-Config\.cmd",
+	    "恢复或卸载配置\.cmd",
+	    "一键修复依赖\.cmd"
+	)
+	foreach ($launcherPattern in $requiredShellLaunchers) {
+	    if ($simShellExecuteSection -notmatch $launcherPattern) {
+	        throw "simulate-user-release.ps1 must keep ShellExecute launcher coverage for $launcherPattern"
+	    }
+	}
+
+	# ShellExecute section: 必须包含 WindowStyle=Hidden（模拟双击但不弹窗）
+	if ($simShellExecuteSection -notmatch 'WindowStyle\s*=\s*\[System\.Diagnostics\.ProcessWindowStyle\]::Hidden') {
+	    throw "simulate-user-release.ps1 ShellExecute section must set WindowStyle=Hidden to suppress launcher windows"
+	}
+
+	# Invoke-SimCommand: powershell.exe 必须通过命令行参数 -WindowStyle Hidden 隐藏窗口
+	# （ProcessStartInfo.WindowStyle 在 UseShellExecute=$false 时被 .NET 忽略）
+	if ($simText -notmatch '-WindowStyle["\s,]+Hidden') {
+	    throw "simulate-user-release.ps1 Invoke-SimCommand must prepend -WindowStyle Hidden to powershell.exe arguments"
+	}
+	# 注释必须解释 WindowStyle 仅在 UseShellExecute=$true 时生效
+	if ($simText -notmatch '仅在\s*UseShellExecute=\$true\s*时生效') {
+	    throw "simulate-user-release.ps1 must document that WindowStyle only takes effect when UseShellExecute=`$true"
+	}
+	# ShellExecute capability test: 不能直接调 Process.Start(string,string)（会弹窗）
+	if ($simText -match '\[System\.Diagnostics\.Process\]::Start\("cmd\.exe",\s*"/c exit 0"\)') {
+	    throw "simulate-user-release.ps1 ShellExecute capability test must use ProcessStartInfo with WindowStyle=Hidden (not bare Process.Start)"
+	}
 
 # 18d. release-artifacts.md anti-regression checks (v1.3.2 final)
 $releaseArtifactsPath = Join-Path $RootDir "docs\release-artifacts.md"
