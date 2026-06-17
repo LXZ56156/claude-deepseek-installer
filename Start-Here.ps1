@@ -1423,8 +1423,8 @@ API Key 始终只保存在您的本机，不会上传或分享。
                 -ScriptDir $ScriptDir `
                 -IncludeLogTail:$true `
                 -IncludeTerminalTail:$true `
-                -MaxLogLines 200 `
-                -MaxTerminalLines 200 `
+                -MaxLogLines 120 `
+                -MaxTerminalLines 120 `
                 -OverallStatus $fbOverallStatus `
                 -ClaudeStatus $fbClaudeStatus `
                 -DeepSeekStatus $fbDeepSeekStatus `

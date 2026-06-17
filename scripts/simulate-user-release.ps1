@@ -877,6 +877,33 @@ Write-Output "2.1.179 (Claude Code)"
     }
     Write-Host "[simulate]   support-feedback.txt generated with correct structure and sanitization" -ForegroundColor Green
 
+    # v1.3.3 UX: 噪音过滤单元测试
+    Write-Check "v1.3.3 UX: noise filtering helpers test"
+    $fakeNoisyInput = @"
+[INFO] 正常日志行
+-
+\
+|
+/
+[WARN] 正常警告
+PS>TerminatingError(Invoke-WebRequest):"Authentication Fails (governor)"
+PS>TerminatingError(Invoke-WebRequest):"操作超时。"
+[INFO] 另一行正常日志
+"@
+    $filtered = Remove-ProgressNoiseLines -Text $fakeNoisyInput
+    $filtered = Remove-PowerShellTerminatingNoiseLines -Text $filtered
+
+    if ($filtered -match '^\\$' -or $filtered -match '^\|$' -or $filtered -match '^/$' -or $filtered -match '^-$') {
+        throw "Remove-ProgressNoiseLines failed to remove spinner chars"
+    }
+    if ($filtered -match 'PS>TerminatingError') {
+        throw "Remove-PowerShellTerminatingNoiseLines failed to remove PS>TerminatingError lines"
+    }
+    if ($filtered -notmatch '正常日志行' -or $filtered -notmatch '正常警告' -or $filtered -notmatch '另一行正常日志') {
+        throw "Noise filters removed valid log lines"
+    }
+    Write-Host "[simulate]   noise filters: spinner + PS>TerminatingError removed, valid lines kept" -ForegroundColor Green
+
     Write-Host "[simulate] OK" -ForegroundColor Green
 }
 finally {

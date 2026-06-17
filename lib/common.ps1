@@ -429,8 +429,8 @@ function New-SupportFeedbackReport {
         [string]$ScriptDir = "",
         [switch]$IncludeLogTail = $true,
         [switch]$IncludeTerminalTail = $true,
-        [int]$MaxLogLines = 200,
-        [int]$MaxTerminalLines = 200,
+        [int]$MaxLogLines = 120,
+        [int]$MaxTerminalLines = 120,
         [string]$OverallStatus = "未完成",
         [string]$ClaudeStatus = "",
         [string]$DeepSeekStatus = "",
@@ -585,6 +585,8 @@ function New-SupportFeedbackReport {
                             $logText = ($logContent -join "`r`n")
                             $safeLog = Sanitize-SecretLikeText -Text $logText
                             $safeLog = Sanitize-PathForReport -Text $safeLog
+                            $safeLog = Remove-ProgressNoiseLines -Text $safeLog
+                            $safeLog = Remove-PowerShellTerminatingNoiseLines -Text $safeLog
                             [void]$sb.AppendLine("  --- $($logFile.Name)（尾部 $MaxLogLines 行）---")
                             [void]$sb.AppendLine($safeLog)
                             [void]$sb.AppendLine("")
@@ -628,6 +630,8 @@ function New-SupportFeedbackReport {
                             $termText = ($termContent -join "`r`n")
                             $safeTerm = Sanitize-SecretLikeText -Text $termText
                             $safeTerm = Sanitize-PathForReport -Text $safeTerm
+                            $safeTerm = Remove-ProgressNoiseLines -Text $safeTerm
+                            $safeTerm = Remove-PowerShellTerminatingNoiseLines -Text $safeTerm
                             [void]$sb.AppendLine("  --- $($latestTerminal.Name)（尾部 $MaxTerminalLines 行）---")
                             [void]$sb.AppendLine($safeTerm)
                         }
@@ -2639,6 +2643,55 @@ function Normalize-ExternalCommandOutput {
     return $cleaned
 }
 
+function Remove-ProgressNoiseLines {
+    <#
+    .SYNOPSIS
+        v1.3.3 UX: 过滤进度 spinner 噪音行。
+        移除单独由 - \ | / 组成的行（安装器进度符号），保留所有有效内容。
+    .PARAMETER Text
+        原始文本
+    .RETURNS
+        过滤 spinner 噪音后的文本
+    #>
+    param([string]$Text)
+
+    if ([string]::IsNullOrEmpty($Text)) { return $Text }
+
+    $lines = $Text -split "`r?`n"
+    $filtered = foreach ($line in $lines) {
+        $trimmed = $line.Trim()
+        if ($trimmed -match '^[\\|/\-]$') {
+            continue
+        }
+        $line
+    }
+    return ($filtered -join "`r`n")
+}
+
+function Remove-PowerShellTerminatingNoiseLines {
+    <#
+    .SYNOPSIS
+        v1.3.3 UX: 过滤 PowerShell 运行时自动吐出的 PS>TerminatingError(...) 噪音行。
+        保留 [ERROR]/[WARN] 等实际日志，只移除 PS>TerminatingError 前缀的噪音。
+    .PARAMETER Text
+        原始文本
+    .RETURNS
+        过滤后的文本
+    #>
+    param([string]$Text)
+
+    if ([string]::IsNullOrEmpty($Text)) { return $Text }
+
+    $lines = $Text -split "`r?`n"
+    $filtered = foreach ($line in $lines) {
+        if ($line -match '^PS>TerminatingError\(') {
+            continue
+        }
+        $line
+    }
+    return ($filtered -join "`r`n")
+}
+
 function Convert-ToSafeReportText {
     <#
     .SYNOPSIS
@@ -2668,6 +2721,12 @@ function Convert-ToSafeReportText {
 
     # 3. 清除不可打印控制字符
     $result = Remove-ControlChars -Text $result
+
+    # 3b. 过滤进度 spinner 噪音行（单独的 - \ | / 等无意义字符行）
+    $result = Remove-ProgressNoiseLines -Text $result
+
+    # 3c. 过滤 PS>TerminatingError 噪音行
+    $result = Remove-PowerShellTerminatingNoiseLines -Text $result
 
     # 4. 过滤内部字段（GrowthBook, OAuth, feature flag 等）
     $internalFieldPatterns = @(

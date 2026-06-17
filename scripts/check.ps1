@@ -3345,8 +3345,8 @@ if ($claudeInstallText -match 'Start-Sleep\s+-Seconds\s+\$nextHeartbeat') {
 if ($claudeInstallText -notmatch '\$nextHeartbeatAt') {
     throw "Invoke-InstallCommandCaptured must use `$nextHeartbeatAt for heartbeat scheduling"
 }
-if ($claudeInstallText -notmatch '\$nextHeartbeatAt\s*\+=.*\$HeartbeatSec') {
-    throw "Invoke-InstallCommandCaptured must increment nextHeartbeatAt by HeartbeatSec"
+if ($claudeInstallText -notmatch '\$nextHeartbeatAt\s*\+=.*\$effectiveHeartbeatSec' -and $claudeInstallText -notmatch '\$nextHeartbeatAt\s*\+=.*\$HeartbeatSec') {
+    throw "Invoke-InstallCommandCaptured must increment nextHeartbeatAt by effectiveHeartbeatSec or HeartbeatSec"
 }
 if ($claudeInstallText -notmatch 'taskkill\.exe\s+/PID') {
     throw "Invoke-InstallCommandCaptured must retain taskkill.exe /PID for timeout kill"
@@ -4037,5 +4037,73 @@ if ($doctorText -match '(?m)^\s*Start-CcdiTranscriptSafe\s+-Name\s+"doctor"\s*$'
     throw "doctor.ps1 has bare Start-CcdiTranscriptSafe call that may print True/False"
 }
 Write-Host "[check]   transcript return suppression OK"
+
+Write-Host ""
+Write-Host "[check] v1.3.3 UX: Node install progress + noise filtering anti-regression"
+
+$claudeInstallText = Get-Content (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+$commonText = Get-Content (Join-Path $RootDir "lib\common.ps1") -Raw -Encoding UTF8
+
+# 1. Remove-ProgressNoiseLines 函数存在
+if ($commonText -notmatch 'function Remove-ProgressNoiseLines') {
+    throw "common.ps1 must define Remove-ProgressNoiseLines"
+}
+Write-Host "[check]   1. Remove-ProgressNoiseLines exists OK"
+
+# 2. Remove-PowerShellTerminatingNoiseLines 函数存在
+if ($commonText -notmatch 'function Remove-PowerShellTerminatingNoiseLines') {
+    throw "common.ps1 must define Remove-PowerShellTerminatingNoiseLines"
+}
+Write-Host "[check]   2. Remove-PowerShellTerminatingNoiseLines exists OK"
+
+# 3. New-SupportFeedbackReport 对日志尾部调用 Remove-ProgressNoiseLines
+$nsfrFull = if ($commonText -match '(?s)function New-SupportFeedbackReport\s*\{.*?(?=^function |\Z)') { $matches[0] } else { "" }
+if ($nsfrFull -notmatch 'Remove-ProgressNoiseLines') {
+    throw "New-SupportFeedbackReport must call Remove-ProgressNoiseLines on log/terminal tails"
+}
+Write-Host "[check]   3. New-SupportFeedbackReport filters progress noise OK"
+
+# 4. New-SupportFeedbackReport 对日志尾部调用 Remove-PowerShellTerminatingNoiseLines
+if ($nsfrFull -notmatch 'Remove-PowerShellTerminatingNoiseLines') {
+    throw "New-SupportFeedbackReport must call Remove-PowerShellTerminatingNoiseLines on log/terminal tails"
+}
+Write-Host "[check]   4. New-SupportFeedbackReport filters PS>TerminatingError OK"
+
+# 5. Convert-ToSafeReportText 也调用噪音过滤
+$ctsrFunc = if ($commonText -match '(?s)function Convert-ToSafeReportText\s*\{.*?(?=^function |\Z)') { $matches[0] } else { "" }
+if ($ctsrFunc -notmatch 'Remove-ProgressNoiseLines' -or $ctsrFunc -notmatch 'Remove-PowerShellTerminatingNoiseLines') {
+    throw "Convert-ToSafeReportText must also call noise filtering helpers"
+}
+Write-Host "[check]   5. Convert-ToSafeReportText also filters noise OK"
+
+# 6. Node.js 安装不得使用旧长句 heartbeat
+if ($claudeInstallText -match 'Node\.js 仍在安装中，请不要关闭窗口。如有权限确认窗口') {
+    throw "Install-NodeJsViaWinget must NOT use old verbose heartbeat message"
+}
+Write-Host "[check]   6. Old Node.js heartbeat message removed OK"
+
+# 7. Node.js 安装使用新的紧凑进度参数
+if ($claudeInstallText -notmatch 'ProgressTitle.*Node\.js LTS 安装中') {
+    throw "Install-NodeJsViaWinget must use ProgressTitle for compact progress"
+}
+if ($claudeInstallText -notmatch 'ProgressHint.*权限弹窗') {
+    throw "Install-NodeJsViaWinget must use ProgressHint for UAC prompt"
+}
+Write-Host "[check]   7. Node.js compact progress params OK"
+
+# 8. 不得在 Node.js 安装前台透传 winget 原始 stdout/stderr
+$nodeWingetFunc = if ($claudeInstallText -match '(?s)function Install-NodeJsViaWinget\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+if ($nodeWingetFunc -match 'Write-Host\s+\$stdout|Write-Host\s+\$stderr|Write-Host\s+\$process\.StandardOutput') {
+    throw "Install-NodeJsViaWinget must NOT Write-Host raw winget stdout/stderr"
+}
+Write-Host "[check]   8. Node.js winget does not leak raw output OK"
+
+# 9. MaxLogLines/MaxTerminalLines 已降到 120（非 200）
+if ($commonText -match 'MaxLogLines\s*=\s*200' -and $commonText -notmatch 'MaxLogLines\s*=\s*120') {
+    throw "New-SupportFeedbackReport MaxLogLines should be 120 (not 200)"
+}
+Write-Host "[check]   9. MaxLogLines/MaxTerminalLines optimized OK"
+
+Write-Host "[check] v1.3.3 Node progress + noise filtering anti-regression OK"
 
 Write-Host "[check] OK"

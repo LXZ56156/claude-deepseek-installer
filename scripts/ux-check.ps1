@@ -2326,6 +2326,24 @@ x-api-key: $TestApiKey
         } "build-release.ps1 白名单禁止包含 '$fd'"
     }
 
+    # --- 34g: Node.js 安装进度文案 ---
+    $claudeInstallText = Get-Content -Path (Join-Path $ScriptRoot "lib\claude-install.ps1") -Raw -Encoding UTF8
+    Assert "34g: 不含旧长句 'Node.js 仍在安装中，请不要关闭窗口。如有权限确认窗口'" {
+        $claudeInstallText -notmatch [regex]::Escape('Node.js 仍在安装中，请不要关闭窗口。如有权限确认窗口')
+    } "claude-install.ps1 不得保留旧 Node.js heartbeat 长句"
+    Assert "34g: 包含 'Node.js LTS 安装中'" {
+        $claudeInstallText -match [regex]::Escape('Node.js LTS 安装中')
+    } "claude-install.ps1 必须包含新紧凑进度标题"
+    Assert "34g: 包含 '已等待'" {
+        $claudeInstallText -match '已等待'
+    } "claude-install.ps1 必须显示已等待时间"
+    Assert "34g: 包含 UAC 权限弹窗提示" {
+        $claudeInstallText -match [regex]::Escape('如有权限弹窗请选择"是"') -or $claudeInstallText -match [regex]::Escape('如果弹出权限确认窗口，请选择"是"')
+    } "claude-install.ps1 必须保留 UAC 权限弹窗提示"
+    Assert "34g: 不含前台 winget 失败原文" {
+        $claudeInstallText -notmatch 'winget Node\.js 安装返回: Success=False' -and $claudeInstallText -notmatch 'Write-Host.*\$stdout' -and $claudeInstallText -notmatch 'Write-Host.*\$stderr'
+    } "claude-install.ps1 不得前台透传 winget 原始输出或误导性失败原文"
+
     Write-Host ""
 
     # ============================================================

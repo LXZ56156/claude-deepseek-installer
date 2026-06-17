@@ -996,7 +996,11 @@ function Invoke-InstallCommandCaptured {
         [string]$FriendlyName = "安装命令",
         [string]$StartMessage = "",
         [string]$HeartbeatMessage = "",
-        [string]$TimeoutMessage = ""
+        [string]$TimeoutMessage = "",
+        # v1.3.3 UX: 紧凑中文进度模式
+        [string]$ProgressTitle = "",
+        [string]$ProgressHint = "",
+        [int]$ProgressIntervalSec = 10
     )
 
     $result = @{
@@ -1021,6 +1025,16 @@ function Invoke-InstallCommandCaptured {
     $hasStartMessage = $PSBoundParameters.ContainsKey("StartMessage")
     $hasHeartbeatMessage = $PSBoundParameters.ContainsKey("HeartbeatMessage")
     $hasTimeoutMessage = $PSBoundParameters.ContainsKey("TimeoutMessage")
+
+    # v1.3.3 UX: 紧凑进度模式（ShowUserProgress）
+    # 如果指定了 -ProgressTitle，启用短中文进度条（每 10s 一条），不再使用长句 heartbeat
+    $showCompactProgress = $PSBoundParameters.ContainsKey("ProgressTitle") -and -not [string]::IsNullOrWhiteSpace($ProgressTitle)
+    if ($showCompactProgress) {
+        $effectiveHeartbeatSec = if ($PSBoundParameters.ContainsKey("ProgressIntervalSec")) { $ProgressIntervalSec } else { 10 }
+    }
+    else {
+        $effectiveHeartbeatSec = $HeartbeatSec
+    }
 
     if (-not $hasStartMessage) {
         $StartMessage = "正在执行 $FriendlyName..."
@@ -1048,17 +1062,22 @@ function Invoke-InstallCommandCaptured {
 
         $sw = [Diagnostics.Stopwatch]::StartNew()
         $pollIntervalSec = 1
-        $nextHeartbeatAt = [Math]::Max(1, $HeartbeatSec)
+        $nextHeartbeatAt = [Math]::Max(1, $effectiveHeartbeatSec)
 
         while (-not $proc.HasExited) {
             Start-Sleep -Seconds $pollIntervalSec
             $elapsed = [Math]::Round($sw.Elapsed.TotalSeconds, 0)
 
             if ($elapsed -ge $nextHeartbeatAt) {
-                if (-not [string]::IsNullOrWhiteSpace($HeartbeatMessage)) {
+                if ($showCompactProgress) {
+                    $elapsedFormatted = "{0:D2}:{1:D2}" -f [Math]::Floor($elapsed / 60), ($elapsed % 60)
+                    $hintPart = if ($ProgressHint) { " | $ProgressHint" } else { "" }
+                    Write-Info "[进度] $ProgressTitle | 已等待 $elapsedFormatted | 状态：正常$hintPart"
+                }
+                elseif (-not [string]::IsNullOrWhiteSpace($HeartbeatMessage)) {
                     Write-Info "$HeartbeatMessage（已等待 $elapsed 秒）"
                 }
-                $nextHeartbeatAt += [Math]::Max(1, $HeartbeatSec)
+                $nextHeartbeatAt += [Math]::Max(1, $effectiveHeartbeatSec)
             }
 
             if ($sw.Elapsed.TotalSeconds -gt $TimeoutSec) {
@@ -2772,11 +2791,9 @@ function Install-NodeJsViaWinget {
     }
 
     Write-Log "INFO" "Installing Node.js LTS via winget"
-    Write-Info "正在安装 Node.js LTS，这是 Claude Code 备用安装所需运行环境。"
-    Write-Info "这一步可能需要几分钟，下载约几十 MB。"
-    Write-Info "如果 Windows 弹出'是否允许此应用更改你的设备'，请选择'是'。"
-    Write-Info "如果没有看到弹窗，请查看任务栏是否有闪烁的安装/权限确认窗口。"
-    Write-Info "安装完成后工具会自动继续检测；如提示需要重开，再关闭窗口重新运行。"
+    Write-Info "正在安装 Node.js LTS，请不要关闭窗口。"
+    Write-Info "这一步通常需要 1-5 分钟，取决于网络和电脑速度。"
+    Write-Info "如果弹出权限确认窗口，请选择"是"；如果没看到，请看任务栏是否闪烁。"
     Write-Host ""
 
     return Invoke-InstallCommandCaptured -FilePath "winget" -Arguments @(
@@ -2785,9 +2802,10 @@ function Install-NodeJsViaWinget {
         "--accept-package-agreements",
         "--accept-source-agreements",
         "--silent"
-    ) -TimeoutSec $TimeoutSec -HeartbeatSec 30 -FriendlyName "Node.js LTS 安装" `
-        -StartMessage "" `
-        -HeartbeatMessage "Node.js 仍在安装中，请不要关闭窗口。如有权限确认窗口，请选择'是'。"
+    ) -TimeoutSec $TimeoutSec -ProgressIntervalSec 10 -FriendlyName "Node.js LTS 安装" `
+        -ProgressTitle "Node.js LTS 安装中" `
+        -ProgressHint "如有权限弹窗请选择"是"" `
+        -StartMessage ""
 }
 
 function Install-ClaudeCodeViaWinget {
