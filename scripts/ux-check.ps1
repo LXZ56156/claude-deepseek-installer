@@ -2390,6 +2390,37 @@ x-api-key: $TestApiKey
 
     Write-Host ""
 
+    # --- 34i: 超时文案对齐 fallback 流程 ---
+    Assert "34i: 包含 '官方安装已等待约 5 分钟'" {
+        $claudeInstallText -match [regex]::Escape('官方安装已等待约 5 分钟')
+    } "claude-install.ps1 Native 超时必须表达'正在确认安装结果'而非直接诊断"
+    Assert "34i: 包含 '如未成功会自动切换备用方式'" {
+        $claudeInstallText -match [regex]::Escape('如未成功会自动切换备用方式')
+    } "claude-install.ps1 Native/Winget 超时必须表达 fallback 口径"
+    Assert "34i: 包含 '系统安装方式等待过久'" {
+        $claudeInstallText -match [regex]::Escape('系统安装方式等待过久')
+    } "claude-install.ps1 Winget 超时必须表达'正在确认安装结果'"
+    Assert "34i: 包含 '如未成功会自动切换备用下载方式'" {
+        $claudeInstallText -match [regex]::Escape('如未成功会自动切换备用下载方式')
+    } "claude-install.ps1 Winget 超时必须表达 fallback 口径"
+    Assert "34i: 包含 '备用下载方式等待过久'" {
+        $claudeInstallText -match [regex]::Escape('备用下载方式等待过久')
+    } "claude-install.ps1 npm 超时必须表达'正在确认安装结果'"
+    Assert "34i: 包含 '如果后续仍未成功'" {
+        $claudeInstallText -match [regex]::Escape('如果后续仍未成功')
+    } "claude-install.ps1 npm 超时 follow-up 必须使用'如果后续仍未成功'"
+    # 禁止 Native/Winget 超时直接让用户运行诊断
+    $nativeFunc = if ($claudeInstallText -match '(?s)function Install-ClaudeCodeNative\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+    $wingetClaudeFunc = if ($claudeInstallText -match '(?s)function Install-ClaudeCodeViaWinget\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+    Assert "34i: Native 超时不包含默认诊断 follow-up" {
+        $nativeFunc -notmatch 'TimeoutFollowupMessage\s+\"详细错误已写入日志'
+    } "Native 超时不得再用默认诊断 follow-up（传空字符串）"
+    Assert "34i: Winget 超时不包含默认诊断 follow-up" {
+        $wingetClaudeFunc -notmatch 'TimeoutFollowupMessage\s+\"详细错误已写入日志'
+    } "Winget 超时不得再用默认诊断 follow-up（传空字符串）"
+
+    Write-Host ""
+
     # ============================================================
     # 最终汇总
     # ============================================================

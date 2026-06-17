@@ -3528,6 +3528,47 @@ if ($nodeWingetFunc -notmatch 'ProgressIntervalSec\s+10') {
     throw "Install-NodeJsViaWinget must have ProgressIntervalSec 10"
 }
 
+# J. Invoke-InstallCommandCaptured must support TimeoutFollowupMessage
+if ($claudeInstallText -notmatch '\$TimeoutFollowupMessage') {
+    throw "Invoke-InstallCommandCaptured must support TimeoutFollowupMessage param"
+}
+# The timeout branch must guard follow-up with IsNullOrWhiteSpace
+if ($claudeInstallText -notmatch 'IsNullOrWhiteSpace\(\$TimeoutFollowupMessage\)') {
+    throw "Invoke-InstallCommandCaptured must guard TimeoutFollowupMessage before Write-Info"
+}
+
+# K. Native Install timeout copy
+if ($nativeFunc -notmatch '官方安装已等待约 5 分钟') {
+    throw "Install-ClaudeCodeNative must use timeout message: '官方安装已等待约 5 分钟'"
+}
+if ($nativeFunc -notmatch 'TimeoutFollowupMessage\s+\"\"') {
+    throw "Install-ClaudeCodeNative must pass TimeoutFollowupMessage '' (empty)"
+}
+
+# L. Winget Claude timeout copy
+if ($wingetClaudeFunc -notmatch '系统安装方式等待过久') {
+    throw "Install-ClaudeCodeViaWinget must use timeout message: '系统安装方式等待过久'"
+}
+if ($wingetClaudeFunc -notmatch 'TimeoutFollowupMessage\s+\"\"') {
+    throw "Install-ClaudeCodeViaWinget must pass TimeoutFollowupMessage '' (empty)"
+}
+
+# M. npm mirror timeout copy
+if ($npmMirrorFunc -notmatch '备用下载方式等待过久') {
+    throw "Install-ClaudeCodeNpmMirror must use timeout message: '备用下载方式等待过久'"
+}
+if ($npmMirrorFunc -notmatch '如果后续仍未成功') {
+    throw "Install-ClaudeCodeNpmMirror must pass TimeoutFollowupMessage with '如果后续仍未成功'"
+}
+
+# N. Node.js must NOT pass TimeoutFollowupMessage (keeps default)
+# Extract only the Invoke-InstallCommandCaptured call from Install-NodeJsViaWinget
+if ($claudeInstallText -match '(?s)function Install-NodeJsViaWinget\s*\{.*?Invoke-InstallCommandCaptured.*?-StartMessage\s+\"\"') {
+    if ($matches[0] -match 'TimeoutFollowupMessage') {
+        throw "Install-NodeJsViaWinget must NOT pass TimeoutFollowupMessage (keep default)"
+    }
+}
+
 # H. 全仓库禁止旧等待句
 $allSourceFiles = @(Get-ChildItem -Path $RootDir -Recurse -Include "*.ps1", "*.psm1", "*.cmd", "*.sh", "*.md", "*.txt" -Exclude "*.log", "*.tmp" | Where-Object {
     $_.FullName -notmatch '[\\/]\.sandbox[\\/]' -and

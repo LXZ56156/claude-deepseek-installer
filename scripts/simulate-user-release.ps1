@@ -998,6 +998,52 @@ PS>TerminatingError(Invoke-WebRequest):"操作超时。"
     }
     Write-Host "[simulate]   install method progress alignment OK" -ForegroundColor Green
 
+    # v1.3.3 UX: timeout message alignment with fallback flow
+    Write-Check "v1.3.3 UX: timeout message alignment static checks"
+
+    # 1. Invoke-InstallCommandCaptured has TimeoutFollowupMessage param
+    $capturedFunc = if ($ciContent -match '(?s)function Invoke-InstallCommandCaptured\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+    if ($capturedFunc -notmatch '\[string\]\$TimeoutFollowupMessage') {
+        throw "Invoke-InstallCommandCaptured missing TimeoutFollowupMessage param"
+    }
+    # 2. Timeout branch uses IsNullOrWhiteSpace guard
+    if ($capturedFunc -notmatch 'IsNullOrWhiteSpace\(\$TimeoutFollowupMessage\)') {
+        throw "Invoke-InstallCommandCaptured must guard TimeoutFollowupMessage with IsNullOrWhiteSpace"
+    }
+
+    # 3. Native Install timeout copy
+    $nativeFunc = if ($ciContent -match '(?s)function Install-ClaudeCodeNative\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+    if ($nativeFunc -notmatch 'TimeoutFollowupMessage\s+\"\"') {
+        throw "Install-ClaudeCodeNative must pass TimeoutFollowupMessage ''"
+    }
+    if ($nativeFunc -notmatch '官方安装已等待约 5 分钟') {
+        throw "Install-ClaudeCodeNative missing timeout message"
+    }
+
+    # 4. Winget Claude timeout copy
+    $wingetClaudeFunc2 = if ($ciContent -match '(?s)function Install-ClaudeCodeViaWinget\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+    if ($wingetClaudeFunc2 -notmatch 'TimeoutFollowupMessage\s+\"\"') {
+        throw "Install-ClaudeCodeViaWinget must pass TimeoutFollowupMessage ''"
+    }
+    if ($wingetClaudeFunc2 -notmatch '系统安装方式等待过久') {
+        throw "Install-ClaudeCodeViaWinget missing timeout message"
+    }
+
+    # 5. npm mirror timeout copy
+    $npmMirrorFunc = if ($ciContent -match '(?s)function Install-ClaudeCodeNpmMirror\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+    if ($npmMirrorFunc -notmatch '如果后续仍未成功') {
+        throw "Install-ClaudeCodeNpmMirror missing '如果后续仍未成功' in TimeoutFollowupMessage"
+    }
+
+    # 6. Node.js must NOT have TimeoutFollowupMessage
+    # Extract only the Invoke-InstallCommandCaptured call within Install-NodeJsViaWinget
+    if ($ciContent -match '(?s)function Install-NodeJsViaWinget\s*\{.*?Invoke-InstallCommandCaptured.*?-StartMessage\s+\"\"') {
+        if ($matches[0] -match 'TimeoutFollowupMessage') {
+            throw "Install-NodeJsViaWinget must NOT pass TimeoutFollowupMessage (keep default)"
+        }
+    }
+    Write-Host "[simulate]   timeout message alignment OK" -ForegroundColor Green
+
     Write-Host "[simulate] OK" -ForegroundColor Green
 }
 finally {

@@ -931,7 +931,7 @@ function Write-NativeInstallUserMessage {
         v1.3.3 UX: 统一 Native Install 用户可见文案。
         确保后验验证前不显示"失败"，ExitCode 异常只写日志。
     .PARAMETER Phase
-        阶段: Start | Heartbeat | Verify | Success | Partial | Fallback
+        阶段: Start | Verify | Success | Partial | Fallback
     .PARAMETER Detail
         附加信息（如版本号）
     #>
@@ -994,6 +994,7 @@ function Invoke-InstallCommandCaptured {
         [string]$StartMessage = "",
         [string]$HeartbeatMessage = "",
         [string]$TimeoutMessage = "",
+        [string]$TimeoutFollowupMessage = "详细错误已写入日志，请运行「一键诊断.cmd」排查。",
         # v1.3.3 UX: 紧凑中文进度模式
         [string]$ProgressTitle = "",
         [string]$ProgressHint = "",
@@ -1131,7 +1132,9 @@ function Invoke-InstallCommandCaptured {
                 else {
                     Write-Warning "$FriendlyName 超时，已停止。请运行一键诊断。"
                 }
-                Write-Info "详细错误已写入日志，请运行「一键诊断.cmd」排查。"
+                if (-not [string]::IsNullOrWhiteSpace($TimeoutFollowupMessage)) {
+                    Write-Info $TimeoutFollowupMessage
+                }
                 return $result
             }
         }
@@ -1253,7 +1256,9 @@ function Install-ClaudeCodeNative {
             -ProgressTitle "Claude Code 官方安装中" `
             -ProgressHint "如果网络较慢会自动切换备用方式" `
             -SlowNoticeAfterSec 120 `
-            -SlowNoticeMessage "官方安装较慢，工具仍在等待；如果超过约 5 分钟会自动切换备用方式。"
+            -SlowNoticeMessage "官方安装较慢，工具仍在等待；如果超过约 5 分钟会自动切换备用方式。" `
+            -TimeoutMessage "官方安装已等待约 5 分钟，正在确认安装结果；如未成功会自动切换备用方式。" `
+            -TimeoutFollowupMessage ""
 
         # 清理临时脚本
         Remove-Item $tempInstallScript -Force -ErrorAction SilentlyContinue
@@ -1357,7 +1362,9 @@ function Install-ClaudeCodeNpmMirror {
         -ProgressTitle "Claude Code 备用下载方式安装中" `
         -ProgressHint "正在从备用下载源获取 Claude Code" `
         -SlowNoticeAfterSec 120 `
-        -SlowNoticeMessage "备用下载方式较慢，工具仍在等待；如果长时间无结果，请稍后运行一键诊断。"
+        -SlowNoticeMessage "备用下载方式较慢，工具仍在等待；如果长时间无结果，请稍后运行一键诊断。" `
+        -TimeoutMessage "备用下载方式等待过久，正在确认安装结果。" `
+        -TimeoutFollowupMessage "如果后续仍未成功，请运行「一键诊断.cmd」。"
 
     if ($installResult.Success) {
         Write-Success "Claude Code 备用下载方式安装完成。"
@@ -2864,7 +2871,9 @@ function Install-ClaudeCodeViaWinget {
         -ProgressTitle "Claude Code 系统安装中" `
         -ProgressHint '如有权限弹窗请选择"是"' `
         -SlowNoticeAfterSec 120 `
-        -SlowNoticeMessage "系统安装方式较慢，工具仍在等待；如果后续未确认成功，会自动切换备用下载方式。"
+        -SlowNoticeMessage "系统安装方式较慢，工具仍在等待；如果后续未确认成功，会自动切换备用下载方式。" `
+        -TimeoutMessage "系统安装方式等待过久，正在确认安装结果；如未成功会自动切换备用下载方式。" `
+        -TimeoutFollowupMessage ""
 }
 
 # ============================================================
