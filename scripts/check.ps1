@@ -4019,4 +4019,23 @@ Write-Host "[check]   6. Stop-CcdiTranscriptSafe appears only in Main finally OK
 
 Write-Host "[check] v1.3.3 residuals batch 2 anti-regression OK"
 
+Write-Host "[check] v1.3.3 hotfix: suppress transcript return values (True/False)"
+# 1. Start-Here.ps1 必须用 [void] 包裹 Start-CcdiTranscriptSafe
+if ($startHereText -notmatch '\[void\]\(\s*Start-CcdiTranscriptSafe\s+-Name\s+"start-here"\s*\)') {
+    throw "Start-Here.ps1 must suppress Start-CcdiTranscriptSafe return value with [void](...)"
+}
+# 2. doctor.ps1 必须用 [void] 包裹 Start-CcdiTranscriptSafe
+if ($doctorText -notmatch '\[void\]\(\s*Start-CcdiTranscriptSafe\s+-Name\s+"doctor"\s*\)') {
+    throw "doctor.ps1 must suppress Start-CcdiTranscriptSafe return value with [void](...)"
+}
+# 3. Start-Here.ps1 不得有裸调用（可能打印 True/False）
+if ($startHereText -match '(?m)^\s*Start-CcdiTranscriptSafe\s+-Name\s+"start-here"\s*$') {
+    throw "Start-Here.ps1 has bare Start-CcdiTranscriptSafe call that may print True/False"
+}
+# 4. doctor.ps1 不得有裸调用
+if ($doctorText -match '(?m)^\s*Start-CcdiTranscriptSafe\s+-Name\s+"doctor"\s*$') {
+    throw "doctor.ps1 has bare Start-CcdiTranscriptSafe call that may print True/False"
+}
+Write-Host "[check]   transcript return suppression OK"
+
 Write-Host "[check] OK"

@@ -2308,7 +2308,7 @@ function Show-AdvancedMenu {
 
 function Main {
     # 安全启动 terminal transcript（失败不阻断，finally 兜底停止）
-    Start-CcdiTranscriptSafe -Name "start-here"
+    [void](Start-CcdiTranscriptSafe -Name "start-here")
 
     try {
         # ============================================================

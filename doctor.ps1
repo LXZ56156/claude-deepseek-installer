@@ -1585,7 +1585,7 @@ function Main {
     Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host ""
     # 安全启动 terminal transcript（失败不阻断，finally 兜底停止）
-    Start-CcdiTranscriptSafe -Name "doctor"
+    [void](Start-CcdiTranscriptSafe -Name "doctor")
 
     try {
     Write-Info "正在全面检测您的环境配置..."
