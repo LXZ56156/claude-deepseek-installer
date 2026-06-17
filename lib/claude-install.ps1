@@ -3005,7 +3005,7 @@ function Install-ClaudeCodeAuto {
                     claudeInstallStatus        = "installed"
                     claudeInstallCompletedAt   = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
                 } | Out-Null
-                Write-Success "Claude Code 安装完成 (mock Native Install)"
+                Write-Success "Claude Code 安装完成 (mock)"
                 return $result
             }
 
@@ -3043,7 +3043,7 @@ function Install-ClaudeCodeAuto {
                     Write-Info "命令路径已配置，关闭当前窗口后重新打开 PowerShell 通常即可解决。"
                 }
                 else {
-                    Write-Info "请运行「一键修复依赖」或重新运行安装工具修复 PATH。"
+                    Write-Info "请运行「一键修复依赖」自动修复命令路径，或重新运行安装助手。"
                 }
             }
 
@@ -3088,9 +3088,9 @@ function Install-ClaudeCodeAuto {
 
             # 状态 3: claude 可用 + PATH 写入失败 + fresh shell 失败 → 需要修复
             if ($verifyResult.Usable -and -not $pathResult.Success -and -not $freshCheck.Success) {
-                Write-Warning "Claude Code 已安装，但 PATH 自动写入失败"
-                Write-Info "请运行「一键修复依赖」或手动将以下路径加入 User PATH："
-                Write-Info "  $nativeBinPath"
+                Write-Warning "Claude Code 已安装，但命令路径自动配置失败。"
+                Write-Info "请优先运行「一键修复依赖」自动修复命令路径。"
+                Write-Log "INFO" "Manual PATH add needed: $nativeBinPath"
 
                 $result.Success = $true
                 $result.Method = "official_native"
@@ -3258,8 +3258,9 @@ function Install-ClaudeCodeAuto {
             Test-CommandAvailable -CommandName "winget"
         }
         if ($wingetOk -and -not $NonInteractive) {
-            Write-Info "检测到 winget，可以自动安装 Node.js LTS。"
-            if ($isMockDecision -or (Confirm-UserChoice -Message "是否使用 winget 安装 Node.js LTS？这会修改系统环境。" -Default "No")) {
+            Write-Info "检测到可用的系统安装工具，可以自动安装必要运行环境。"
+            Write-Log "INFO" "winget available; offering Node.js LTS install"
+            if ($isMockDecision -or (Confirm-UserChoice -Message "是否自动安装必要运行环境？这会修改系统环境。" -Default "No")) {
                 if ($isMockDecision) {
                     Write-Log "DEBUG" "MOCK: auto-confirming winget Node.js install prompt"
                 }
@@ -3391,9 +3392,10 @@ function Install-ClaudeCodeAuto {
                         $verifyResult2 = Test-ClaudeCommandExisting
                         if ($verifyResult2.Usable) {
                             if (-not $mirrorResult.Success) {
-                                Write-Log "INFO" "npm 镜像安装命令返回异常但后验验证通过（PATH 刷新后），以 claude --version 为准。"
+                                Write-Log "INFO" "npm 镜像安装命令返回异常但后验验证通过（命令路径刷新后），以 claude --version 为准。"
                             }
-                            Write-Success "Claude Code 安装验证通过: $($verifyResult2.Version)"
+                            Write-Success "Claude Code 已安装并确认可用。"
+                        Write-Log "INFO" "post verify (retry): version=$($verifyResult2.Version)"
                             $result.Success = $true
                             $result.Method = "npm_npmmirror"
                             $result.Status = "installed"
@@ -3409,7 +3411,7 @@ function Install-ClaudeCodeAuto {
                         elseif ($verifyResult2.Exists) {
                             Write-Warning "备用下载方式未完成确认。"
                             Write-Info "可能原因：必要运行环境不完整、网络连接异常，或命令路径还未刷新。"
-                            Write-Warning "检测到 claude 命令存在但无法运行（PATH 刷新后）: $($verifyResult2.Error)"
+                            Write-Warning "检测到 claude 命令存在但无法运行（命令路径刷新后）: $($verifyResult2.Error)"
                             Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
                             Write-Log "WARN" "npm mirror PATH retry: claude exists but unusable: $($verifyResult2.Error)"
                             try {
@@ -3513,7 +3515,8 @@ function Install-ClaudeCodeAuto {
             } | Out-Null
         }
         else {
-            Write-Info "未检测到 winget，请手动安装 Node.js:"
+            Write-Info "未检测到系统安装工具，请手动安装必要运行环境。"
+            Write-Log "INFO" "winget not detected; prompting manual Node.js install"
             Write-Info "下载地址: https://nodejs.org (选择 LTS 版本)"
             Write-Info "安装完成后，关闭并重新打开终端，然后重新运行本脚本。"
             $result.Status = "failed_missing_node_or_npm"
@@ -3592,7 +3595,8 @@ function Install-ClaudeCodeAuto {
         if (-not $mirrorResult.Success) {
             Write-Log "INFO" "npm 镜像安装命令返回异常但后验验证通过（ExitCode 可能为空或非标准），以 claude --version 为准。"
         }
-        Write-Success "Claude Code 安装验证通过: $($verifyResult.Version)"
+        Write-Success "Claude Code 已安装并确认可用。"
+                        Write-Log "INFO" "post verify: version=$($verifyResult.Version)"
         # claude doctor is diagnostic-only; not called during install
 
         $result.Success = $true
@@ -3611,7 +3615,8 @@ function Install-ClaudeCodeAuto {
         Write-Warning "备用下载方式未完成确认。"
         Write-Info "可能原因：必要运行环境不完整、网络连接异常，或命令路径还未刷新。"
         Write-Warning "检测到 claude 命令存在但无法运行: $($verifyResult.Error)"
-        Write-Warning "可能是旧安装、残留 shim、WindowsApps alias 或 PATH 冲突。"
+        Write-Warning "可能是旧安装残留或命令路径冲突。"
+                        Write-Log "WARN" "possible shim/WindowsApps alias/PATH conflict"
         Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
         Write-Log "WARN" "npm mirror: claude exists but unusable: $($verifyResult.Error)"
         try {
@@ -3629,14 +3634,15 @@ function Install-ClaudeCodeAuto {
         return $result
     }
     else {
-        Write-Warning "claude 命令未找到，正在刷新 PATH 并重新检测..."
+        Write-Warning "Claude Code 未找到，正在刷新命令路径并重新检测..."
         Refresh-CurrentProcessPath
         $verifyResult2 = Test-ClaudeCommandExisting
         if ($verifyResult2.Usable) {
             if (-not $mirrorResult.Success) {
-                Write-Log "INFO" "npm 镜像安装命令返回异常但后验验证通过（PATH 刷新后），以 claude --version 为准。"
+                Write-Log "INFO" "npm 镜像安装命令返回异常但后验验证通过（命令路径刷新后），以 claude --version 为准。"
             }
-            Write-Success "Claude Code 安装验证通过: $($verifyResult2.Version)"
+            Write-Success "Claude Code 已安装并确认可用。"
+                        Write-Log "INFO" "post verify (retry): version=$($verifyResult2.Version)"
             $result.Success = $true
             $result.Method = "npm_npmmirror"
             $result.Status = "installed"
@@ -3652,7 +3658,7 @@ function Install-ClaudeCodeAuto {
         elseif ($verifyResult2.Exists) {
             Write-Warning "备用下载方式未完成确认。"
             Write-Info "可能原因：必要运行环境不完整、网络连接异常，或命令路径还未刷新。"
-            Write-Warning "检测到 claude 命令存在但无法运行（PATH 刷新后）: $($verifyResult2.Error)"
+            Write-Warning "检测到 claude 命令存在但无法运行（命令路径刷新后）: $($verifyResult2.Error)"
             Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
             Write-Log "WARN" "npm mirror PATH retry: claude exists but unusable: $($verifyResult2.Error)"
             try {
@@ -3671,7 +3677,8 @@ function Install-ClaudeCodeAuto {
         }
 
         if ($mirrorResult.Success) {
-            Write-Warning "Claude Code 可能已安装，但当前终端还没有刷新 PATH。"
+            Write-Warning "Claude Code 可能已安装，但当前窗口还没有识别到新命令。"
+            Write-Log "WARN" "claude likely installed, current process PATH is stale"
             Write-Info "请关闭此窗口后重新双击 [00-点我开始安装.cmd]。"
             Write-Info "如果仍不行，请运行 [一键诊断.cmd] 获取诊断报告。"
 

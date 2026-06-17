@@ -539,10 +539,10 @@ function Step-CheckEnvironment {
     }
     else {
         if ($nativePreCheckOk) {
-            Write-ResultLine "Node.js" "INFO" "未安装（Native Install 已就绪，不影响基础使用）"
+            Write-ResultLine "Node.js" "INFO" "未安装（官方安装方式已就绪，不影响基础使用）"
         }
         else {
-            Write-ResultLine "Node.js" "WARN" "未安装（如 Native Install 不可用将自动安装）"
+            Write-ResultLine "Node.js" "WARN" "未安装（如官方安装方式不可用将自动安装）"
         }
     }
 
@@ -554,7 +554,7 @@ function Step-CheckEnvironment {
     }
     else {
         if ($nativePreCheckOk) {
-            Write-ResultLine "npm" "INFO" "未安装（Native Install 已就绪，不影响基础使用）"
+            Write-ResultLine "npm" "INFO" "未安装（官方安装方式已就绪，不影响基础使用）"
         }
         else {
             Write-ResultLine "npm" "SKIP" "未安装"
@@ -565,10 +565,10 @@ function Step-CheckEnvironment {
     Write-CheckProgress -Current 6 -Total 7 -Name "winget"
     $wingetOk = Test-CommandAvailable -CommandName "winget"
     if ($wingetOk) {
-        Write-ResultLine "winget" "OK" "可用"
+        Write-ResultLine "系统安装工具" "OK" "可用"
     }
     else {
-        Write-ResultLine "winget" "WARN" "未检测到（不影响主流程）"
+        Write-ResultLine "系统安装工具" "WARN" "未检测到（不影响主流程）"
     }
 
     # VS Code（可选增强项，只在日志记录，不在终端逐项刷屏）
@@ -729,7 +729,8 @@ function Step-InstallClaudeCode {
                 $script:ClaudeInstalled = $true
                 $script:ClaudeInstallMethod = if ($finalCheck.Source) { $finalCheck.Source } else { "final_fallback" }
                 $script:ClaudeInstallStatus = "installed"
-                Write-Success "最终验证: Claude Code 已可用 ($($finalCheck.Version))，新 PowerShell 也可直接运行。"
+                Write-Success "Claude Code 已安装并确认可用。"
+                Write-Log "INFO" "final verification succeeded: version=$($finalCheck.Version), fresh shell OK"
                 Write-Log "INFO" "兜底检测通过: fresh shell 可用, 覆盖安装结果 Success=true"
             }
             else {
@@ -1608,7 +1609,7 @@ function Show-CompletionPage {
             Write-Host ""
             Write-Success "Claude Code 已安装。"
             Write-Success "DeepSeek API 已配置。"
-            Write-Success "新 PowerShell 已验证可直接运行 claude。"
+            Write-Success "新打开的 PowerShell 已确认可用。"
             Write-Host ""
             Write-Info "下一步：选择 [1] 启动 Claude Code 测试。"
         }
@@ -1700,7 +1701,11 @@ function Show-CompletionPage {
             Write-Host "==============================================================" -ForegroundColor Yellow
             Write-Host ""
             Write-Success "Claude Code 已安装: $($finalClaude.Version)"
-            Write-Success "安装来源: $($finalClaude.Source)"
+            $sourceForReport = Convert-ClaudeInstallMethodForReport `
+                -Method $(if ($script:ClaudeInstallMethod) { $script:ClaudeInstallMethod } else { "" }) `
+                -Source $finalClaude.Source `
+                -Path $finalClaude.Path
+            Write-Success "安装来源: $sourceForReport"
             $configStatus = Get-DeepSeekConfigStatus
             if (-not $configStatus.IsConfigured) {
                 Write-Warning "DeepSeek API Key 尚未配置或配置不完整。"

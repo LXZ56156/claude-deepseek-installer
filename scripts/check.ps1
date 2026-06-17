@@ -3723,23 +3723,27 @@ if ($checkPs1Text -notmatch '非 release 阶段不阻断') {
 Write-Host "[check] P0-UX batch 2 patch coverage OK"
 
 # ============================================================
-# P0-UX batch 2 UX copy polish v2: helpers / tech term reduction /
-# long-step hints / failure cards / completion page hint /
-# expanded user-visible line scanning
+# P0-UX batch 2 UX copy polish v3: dual-file scan + 0-tolerance PATH + expanded blacklist
 # ============================================================
-Write-Host "[check] P0-UX batch 2 UX copy polish v2 (expanded tech term scan)"
+Write-Host "[check] P0-UX batch 2 UX copy polish v3 (dual-file scan, 0-tolerance PATH, expanded blacklist)"
 
 $startHereText = Get-Content -Path (Join-Path $RootDir "Start-Here.ps1") -Raw -Encoding UTF8
 $claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
 
-# Helper: extract user-visible output lines (Write-Info/Write-Warning/Write-Success/Write-Error-Msg)
+# Helper: extract user-visible output lines
 function Get-UserVisibleLines {
     param([string]$Text)
     return ($Text -split "`r?`n") | Where-Object {
-        $_ -match '^\s*(Write-Info|Write-Warning|Write-Success|Write-Error-Msg)\b' -and
+        $_ -match '^\s*(Write-Info|Write-Warning|Write-Success|Write-Error-Msg|Write-ResultLine)\b' -and
         $_ -notmatch '^\s*#'
     }
 }
+
+# Build unified user-visible line list
+$allUserVisibleLines = @()
+$allUserVisibleLines += (Get-UserVisibleLines -Text $startHereText)
+$allUserVisibleLines += (Get-UserVisibleLines -Text $claudeInstallText)
+$allVisText = $allUserVisibleLines -join "`n"
 
 # --- G. Helper functions ---
 if ($startHereText -notmatch 'function Write-UserFriendlyInstallMessage') { throw "Missing Write-UserFriendlyInstallMessage" }
@@ -3750,61 +3754,50 @@ if ($nextStepBody -notmatch '不要发送 settings\.json') { throw "Write-NextSt
 if ($nextStepBody -notmatch '只发送 report\.txt') { throw "Write-NextStepCard must: only report.txt" }
 if ($nextStepBody -notmatch '完整 API Key') { throw "Write-NextStepCard must warn: no full API Key" }
 
-# --- H. 用户可见技术词黑名单扫描 (claude-install.ps1) ---
-$installVisLines = Get-UserVisibleLines -Text $claudeInstallText
-$forbiddenInUserVisible = @(
-    "winget 安装验证通过",
-    "正在尝试通过 winget 安装 Claude Code",
-    "正在使用 winget 安装 Claude Code",
-    "这是 Windows 官方包管理器方式",
-    "npm 镜像安装未完成验证",
-    "npm 镜像",
-    "npm 全局 PATH 异常",
-    "Claude 官方下载域名不可达，跳过 winget",
-    "Claude 官方 Native Install 方式安装",
-    "开始 Native Install...",
-    "Claude 官方安装通道可用。",
-    "npm 安装命令未确认成功",
-    "npm 镜像仓库不可达",
-    "正在使用 npm 镜像安装",
-    "后验验证",
-    "Fresh PowerShell",
-    "winget 安装后暂未检测到 claude",
-    "继续尝试 npm 镜像安装",
-    "npmmirror: 可访问",
-    "npm 镜像安装 Claude Code 完成。"
+# --- H. 0-tolerance PATH scan (user-visible only) ---
+$pathInVis = @($allUserVisibleLines | Where-Object { $_ -match '\bPATH\b' })
+if ($pathInVis.Count -gt 0) {
+    throw "User-visible output must NOT contain raw PATH (0 tolerance). Found $($pathInVis.Count) line(s):`n$($pathInVis -join "`n")"
+}
+
+# --- I. 用户可见技术词黑名单（双文件统一扫描）---
+$forbiddenAll = @(
+    # 安装通道技术词
+    "Native Install", "npm 镜像", "npmmirror", "winget",
+    "官方 Native", "官方下载域名", "官方安装通道",
+    # 验证技术词
+    "后验验证", "Fresh PowerShell", "最终验证", "安装验证通过",
+    # 内部来源词
+    "ExternalScript", "Application", "Function", "Cmdlet",
+    # 路径技术词
+    "npm 全局 PATH", "PATH 异常", "PATH 冲突", "刷新 PATH",
+    # 售后错误口径
+    "直接发给卖家", "马上联系卖家", "把 logs 发给卖家"
 )
-foreach ($forbidden in $forbiddenInUserVisible) {
-    $matchedLines = @($installVisLines | Where-Object { $_ -match [regex]::Escape($forbidden) })
+foreach ($forbidden in $forbiddenAll) {
+    $matchedLines = @($allUserVisibleLines | Where-Object { $_ -match [regex]::Escape($forbidden) })
     if ($matchedLines.Count -gt 0) {
-        throw "claude-install.ps1 user-visible lines must NOT contain '$forbidden' (found $($matchedLines.Count) occurrence(s))"
+        throw "User-visible output must NOT contain '$forbidden' (found $($matchedLines.Count) line(s))"
     }
 }
 
-# PATH in user-visible lines should be minimized (allow in report/logs/comments/func names)
-$pathInVisLines = $installVisLines | Where-Object { $_ -match '\bPATH\b' -and $_ -notmatch 'User PATH|\[PATH\]' }
-if ($pathInVisLines.Count -gt 8) {
-    throw "claude-install.ps1 still has too many user-visible PATH references ($($pathInVisLines.Count) lines)"
-}
-
-# --- I. 长耗时提示 ---
+# --- J. 长耗时提示 ---
 if ($startHereText -notmatch 'Write-LongStepHint') { throw "Missing Write-LongStepHint call" }
 if ($startHereText -notmatch '可能需要几分钟') { throw "Missing '可能需要几分钟' hint" }
 if ($startHereText -notmatch '请不要关闭窗口') { throw "Missing '请不要关闭窗口' hint" }
 if ($startHereText -notmatch '最长等待约 30 秒') { throw "Missing API test 30s hint" }
 if ($claudeInstallText -notmatch '请不要关闭窗口') { throw "claude-install.ps1 missing close-window hint" }
 
-# --- J. 失败卡片统一 ---
+# --- K. 失败卡片统一 ---
 $nextStepCardCount = ([regex]::Matches($startHereText, 'Write-NextStepCard')).Count
 if ($nextStepCardCount -lt 4) {
-    throw "Start-Here.ps1 must call Write-NextStepCard at least 4 times (needs_restart, install fail, API fail, final fallback) (found $nextStepCardCount)"
+    throw "Start-Here.ps1 must call Write-NextStepCard at least 4 times (found $nextStepCardCount)"
 }
-if ($startHereText -match '直接发给卖家|马上联系卖家') { throw "Must NOT contain '发给卖家'" }
-if ($claudeInstallText -match '直接发给卖家|马上联系卖家') { throw "Must NOT contain '发给卖家' in install lib" }
+if ($allVisText -match '直接发给卖家|马上联系卖家') { throw "Must NOT contain '发给卖家'" }
 if ($startHereText -match '把\s*logs\s*发给') { throw "Must NOT suggest sending logs to seller" }
 if ($nextStepBody -notmatch '如需人工协助|如果以上方法') { throw "Write-NextStepCard must defer support to after repair" }
 
-# --- K. 完成页 + 条件推荐 ---
+# --- L. 完成页 + 条件推荐 ---
 $compMenuBody = if ($startHereText -match '(?s)function Show-CompletionMenu\s*\{(.*?)(?=^function \w|\Z)') { $matches[1] } else { "" }
 if ($compMenuBody -notmatch '推荐下一步.*直接输入 1') { throw "Show-CompletionMenu missing recommendation" }
 if ($compMenuBody -notmatch '启动 Claude Code 测试') { throw "Show-CompletionMenu missing test entry" }
@@ -3816,6 +3809,11 @@ if ($userFriendlyBody -notmatch 'AutoSelect') { throw "Missing AutoSelect type" 
 if ($userFriendlyBody -notmatch 'InstallSuccess') { throw "Missing InstallSuccess type" }
 if ($userFriendlyBody -notmatch 'InstallFailed') { throw "Missing InstallFailed type" }
 
-Write-Host "[check] P0-UX batch 2 UX copy polish v2 OK"
+# --- M. raw Source 检查（完成页不得直接暴露 PowerShell 内部词）---
+if ($startHereText -match 'Write-Success\s+"安装来源:\s*\$\(\$finalClaude\.Source\)') {
+    throw "Completion page must NOT directly output `$finalClaude.Source (use Convert-ClaudeInstallMethodForReport)"
+}
+
+Write-Host "[check] P0-UX batch 2 UX copy polish v3 OK"
 
 Write-Host "[check] OK"

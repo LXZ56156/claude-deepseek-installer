@@ -2124,12 +2124,14 @@ x-api-key: $TestApiKey
     # ============================================================
     # 32. v1.3.3 第二批 UX 文案收口：helper/技术词收缩/长耗时/失败卡片/完成页
     # ============================================================
-    Write-CheckHeader "32. 第二批 UX 文案收口 v2：helper / 技术词黑名单扫描 / 长耗时 / 失败卡片 / 条件推荐"
+    Write-CheckHeader "32. UX copy v3: dual-file scan / 0-tolerance PATH / expanded blacklist"
 
-    $startHerePath = Join-Path $ScriptRoot "Start-Here.ps1"
-    $startHereText = Get-Content $startHerePath -Raw -Encoding UTF8
-    $claudeInstallPath = Join-Path $ScriptRoot "lib\claude-install.ps1"
-    $claudeInstallText = Get-Content $claudeInstallPath -Raw -Encoding UTF8
+    $startHereText = Get-Content (Join-Path $ScriptRoot "Start-Here.ps1") -Raw -Encoding UTF8
+    $claudeInstallText = Get-Content (Join-Path $ScriptRoot "lib\claude-install.ps1") -Raw -Encoding UTF8
+
+    function Get-VisLines { param([string]$T) $T -split "`r?`n" | Where-Object { $_ -match '^\s*(Write-Info|Write-Warning|Write-Success|Write-Error-Msg|Write-ResultLine)\b' } }
+    $allVisLines = @((Get-VisLines $startHereText)) + @((Get-VisLines $claudeInstallText))
+    $allVisJoined = $allVisLines -join "`n"
 
     # --- 32a: Helper 函数存在 ---
     Assert "32a: Write-UserFriendlyInstallMessage 存在" {
@@ -2207,10 +2209,7 @@ x-api-key: $TestApiKey
     Assert "32f: claude-install.ps1 不再直接输出 已在 User PATH 中" {
         $claudeInstallText -notmatch 'Write-Info\s+"Claude Code 安装目录已在用户 PATH 中'
     } "仍有 PATH 残留"
-    Assert "32f: claude-install.ps1 不再输出 已将 Claude Code 安装目录加入用户 PATH" {
-        $claudeInstallText -notmatch 'Write-Info\s+"已将 Claude Code 安装目录加入用户 PATH'
-    } "仍有 PATH 加入残留"
-
+    # All section 32 checks consolidated in v3
     Write-Host ""
 
     # ============================================================
