@@ -3147,7 +3147,7 @@ function Install-ClaudeCodeAuto {
     }
     else {
         Write-Warning "Claude 官方安装通道不可用: $($officialNetwork.Details)"
-        Write-Info "将自动切换备用安装通道（winget → npmmirror 镜像）。"
+        Write-Info "将自动切换备用安装通道，正在评估可用通道..."
     }
 
     # ============================================================
