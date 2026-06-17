@@ -96,6 +96,13 @@ function Invoke-SimCommand {
 
     Write-Check "run: $Name"
 
+    # powershell.exe 需通过命令行参数 -WindowStyle Hidden 隐藏窗口
+    # （ProcessStartInfo.WindowStyle 仅在 UseShellExecute=$true 时生效，
+    #   此处 UseShellExecute=$false，必须用命令行参数）
+    if ($FileName -match 'powershell(\.exe)?$') {
+        $Arguments = @("-WindowStyle", "Hidden") + $Arguments
+    }
+
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $FileName
     $psi.Arguments = ConvertTo-SimCommandLine -Arguments $Arguments
@@ -105,7 +112,24 @@ function Invoke-SimCommand {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
 
+    # 默认环境变量：让子进程尽量后台运行，不弹出控制台窗口
+    $defaultEnv = @{
+        TERM                      = "dumb"
+        NO_COLOR                  = "1"
+        CLAUDE_CODE_DISABLE_COLOR = "1"
+        CCDI_TEST_MODE            = "1"
+        CCDI_NO_INTERACTIVE_UI    = "1"
+    }
+
+    foreach ($key in $defaultEnv.Keys) {
+        if (-not $psi.EnvironmentVariables.ContainsKey($key)) {
+            $psi.EnvironmentVariables[$key] = [string]$defaultEnv[$key]
+        }
+    }
+
+    # 调用方传入的 Environment 可以覆盖默认值
     foreach ($key in $Environment.Keys) {
         $psi.EnvironmentVariables[$key] = [string]$Environment[$key]
     }
@@ -618,7 +642,12 @@ try {
     Write-Check "ShellExecute launcher tests (simulating user double-click)"
     $shellExecuteCapable = $true
     try {
-        $null = [System.Diagnostics.Process]::Start("cmd.exe", "/c exit 0")
+        $psiTest = New-Object System.Diagnostics.ProcessStartInfo
+        $psiTest.FileName = "cmd.exe"
+        $psiTest.Arguments = "/c exit 0"
+        $psiTest.UseShellExecute = $true
+        $psiTest.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        $null = [System.Diagnostics.Process]::Start($psiTest)
     }
     catch {
         $shellExecuteCapable = $false
@@ -663,6 +692,7 @@ try {
                     $psi.WorkingDirectory = $releaseRoot
                     $psi.UseShellExecute = $true
                     $psi.CreateNoWindow = $false
+                    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
 
                     $proc = [System.Diagnostics.Process]::Start($psi)
 
