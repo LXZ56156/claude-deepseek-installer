@@ -21,14 +21,26 @@
   - ZIP required entries check: PASSED
   - ZIP sensitive scan: PASSED (0 real credentials)
   - Chinese/space path unzip TestSafe run: PASSED (Start-Here, doctor, repair-deps, uninstall-config)
-## v1.3.3 WIP
+## v1.3.3
 
 - Branch: `fix/v1.3.3-native-path-doctor-ux`
-- Current HEAD: `e789bb5`
-- Status: UX 修复第一批次，未 release
-
-- Notes:
-  - Release ZIP 不包含开发者打包脚本（build-release.ps1、simulate-user-release.ps1、package-release.ps1、sandbox-full-user-simulation.ps1）。
-  - Release ZIP 不包含 logs、backup、reports、release、.git、.sandbox、report.txt、CLAUDE.md、.gitignore。
-  - 敏感串扫描无命中真实凭据。
-  - 旧 ZIP（SHA256: `8ce8167...`）不再作为交付产物使用，以本条 SHA256 为准。
+- Artifact source commit: `37ea865` (ZIP artifact source tree)
+- Generating code commit: `37ea865` (release build)
+- Metadata HEAD: `37ea865` (current HEAD of fix/v1.3.3-native-path-doctor-ux)
+- ZIP: `ClaudeCode-DeepSeek-本地配置助手-v1.3.3.zip`
+- SHA256: `f72bdbce37665579774c8818a51423442c80831d5e9b863c109ea6281e3ef6b9`
+- Size: `267729 bytes (261.5 KB)`
+- Entries: `38`
+- Build command: `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version "1.3.3"`
+- Simulate command: `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\simulate-user-release.ps1 -Version "1.3.3"`
+- Validation:
+  - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check.ps1` → ALL PASSED (P0-P9, v1.3.3 anti-regression)
+  - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\ux-check.ps1` → 555/555 PASSED
+  - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check.ps1 -ReleaseCheck` → PASSED
+  - All .ps1 syntax parse → PASSED
+  - `build-release.ps1` → 打包成功，38 entries
+  - `simulate-user-release.ps1` → ALL PASSED (包括 7 ShellExecute 双击模拟、7 API mock 场景、中文空格路径解压、配置完整生命周期)
+  - ZIP forbidden entries check: PASSED (无 .git/, logs/, backup/, reports/, settings.json, 开发者脚本)
+  - ZIP required entries check: PASSED
+  - ZIP sensitive scan: PASSED (DEEPSEEK_API_KEY/api_key 均为变量名引用，无真实 sk- 密钥)
+  - A/B/C 验收：B/C 真实验收通过，A 场景标记为模拟/待真实验收（当前机器非干净 Windows）
