@@ -2032,6 +2032,96 @@ x-api-key: $TestApiKey
     Write-Host ""
 
     # ============================================================
+    # 31. v1.3.3 第二批补丁覆盖：映射优先级 / release-artifacts 检查口径
+    # ============================================================
+    Write-CheckHeader "31. 第二批补丁覆盖：Path 优先于 Source / release-artifacts 非 release 阶段不阻断"
+
+    $startHerePath = Join-Path $ScriptRoot "Start-Here.ps1"
+    $startHereText = Get-Content $startHerePath -Raw -Encoding UTF8
+    $checkPs1Path = Join-Path $ScriptRoot "scripts\check.ps1"
+    $checkPs1Text = Get-Content $checkPs1Path -Raw -Encoding UTF8
+
+    # --- 31a: Path 优先于 Source ---
+    $convertFunc = if ($startHereText -match '(?s)function Convert-ClaudeInstallMethodForReport\s*\{(.*?)(?=^function \w|\Z)') {
+        $matches[1]
+    } else { "" }
+
+    $idxNpm = $convertFunc.IndexOf('AppData\\Roaming\\npm\\claude')
+    $idxNative = $convertFunc.IndexOf('.local\\bin\\claude')
+    $idxExternal = $convertFunc.IndexOf("Source -eq 'ExternalScript'")
+
+    Assert "31a: Path 判断存在（npm 路径）" {
+        $idxNpm -ge 0
+    } "Convert-ClaudeInstallMethodForReport 必须匹配 AppData\\Roaming\\npm\\claude.cmd"
+
+    Assert "31a: Path 判断存在（Native 路径）" {
+        $idxNative -ge 0
+    } "Convert-ClaudeInstallMethodForReport 必须匹配 .local\\bin\\claude.exe"
+
+    Assert "31a: Path 优先于 Source — npm 路径在 ExternalScript 之前" {
+        $idxNpm -lt $idxExternal
+    } "npm 路径映射必须在 ExternalScript 判断之前（否则被 ExternalScript 误吞）"
+
+    Assert "31a: Path 优先于 Source — Native 路径在 ExternalScript 之前" {
+        $idxNative -lt $idxExternal
+    } "Native 路径映射必须在 ExternalScript 判断之前（否则被 ExternalScript 误吞）"
+
+    Assert "31a: default 分支不返回 ExternalScript" {
+        $convertFunc -notmatch "return 'ExternalScript'"
+    } "Convert-ClaudeInstallMethodForReport 不得返回 'ExternalScript' 原文"
+
+    Assert "31a: default 分支不返回 Application" {
+        $convertFunc -notmatch "return 'Application'"
+    } "Convert-ClaudeInstallMethodForReport 不得返回 'Application' 原文"
+
+    Assert "31a: default 分支不返回 Function" {
+        $convertFunc -notmatch "return 'Function'"
+    } "Convert-ClaudeInstallMethodForReport 不得返回 'Function' 原文"
+
+    Assert "31a: default 分支不返回 Cmdlet" {
+        $convertFunc -notmatch "return 'Cmdlet'"
+    } "Convert-ClaudeInstallMethodForReport 不得返回 'Cmdlet' 原文"
+
+    # 确认 METHOD 也能处理 PowerShell 内部词
+    Assert "31a: Method in ExternalScript/Application/Function/Cmdlet 兜底映射" {
+        $convertFunc -match "ExternalScript" -and
+        $convertFunc -match "Application" -and
+        $convertFunc -match "Function" -and
+        $convertFunc -match "Cmdlet"
+    } "Convert-ClaudeInstallMethodForReport 必须处理 Method 为 PowerShell 内部词的情况"
+
+    # --- 31b: release-artifacts 检查口径 ---
+    Assert "31b: check.ps1 含 -ReleaseCheck 参数" {
+        $checkPs1Text -match '\[switch\]\$ReleaseCheck'
+    } "check.ps1 必须新增 [switch]`$ReleaseCheck 参数"
+
+    Assert "31b: check.ps1 含 CCDI_RELEASE_CHECK 环境变量支持" {
+        $checkPs1Text -match 'CCDI_RELEASE_CHECK'
+    } "check.ps1 必须支持 CCDI_RELEASE_CHECK 环境变量"
+
+    Assert "31b: check.ps1 含 strictReleaseCheck 分级变量" {
+        $checkPs1Text -match '\$strictReleaseCheck'
+    } "check.ps1 必须定义 `$strictReleaseCheck 分级变量"
+
+    Assert "31b: release SHA 不匹配在普通模式只 WARN 不 throw" {
+        $checkPs1Text -notmatch 'if\s*\(\s*-not\s+\$foundCommit\s*\)\s*\{[\s\S]{0,100}throw'
+    } "普通模式 release SHA 不匹配不得直接 throw（必须 if/else 分支）"
+
+    Assert "31b: release SHA 检查处引用 strictReleaseCheck" {
+        $checkPs1Text -match 'if\s*\(\s*\$strictReleaseCheck\s*\)'
+    } "release SHA 检查处必须使用 `$strictReleaseCheck 判断"
+
+    Assert "31b: 含 release 前需要更新文案" {
+        $checkPs1Text -match 'release 前需要更新'
+    } "check.ps1 必须输出 release 前需要更新提示"
+
+    Assert "31b: 含非 release 阶段不阻断文案" {
+        $checkPs1Text -match '非 release 阶段不阻断'
+    } "check.ps1 必须输出非 release 阶段不阻断说明"
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""

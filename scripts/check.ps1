@@ -4,11 +4,15 @@
 
 param(
     [switch]$Network,
-    [switch]$StrictNetwork
+    [switch]$StrictNetwork,
+    [switch]$ReleaseCheck
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+# 严格 release 检查：-ReleaseCheck 参数 或 CCDI_RELEASE_CHECK=1 环境变量
+$strictReleaseCheck = $ReleaseCheck -or ($env:CCDI_RELEASE_CHECK -eq "1")
 
 $ScriptDir = $PSScriptRoot
 $RootDir = Split-Path -Parent $ScriptDir
@@ -776,7 +780,13 @@ foreach ($sha in $recentShas) {
 }
 if (-not $foundCommit) {
     $headShort = (git rev-parse --short HEAD).Trim()
-    throw "docs/release-artifacts.md Commit must reference a recent commit (HEAD=$headShort or parent)"
+    $releaseShaMessage = "docs/release-artifacts.md 未记录当前 HEAD ($headShort) 或近 4 代提交；release 前需要更新，非 release 阶段不阻断 check.ps1。"
+    if ($strictReleaseCheck) {
+        throw "ReleaseCheck 严格模式: $releaseShaMessage"
+    }
+    else {
+        Write-Host "[check]     WARN: $releaseShaMessage" -ForegroundColor Yellow
+    }
 }
 # Must include both source and generating commit fields
 if ($releaseArtifactsText -notmatch 'Artifact source commit') {
@@ -3591,5 +3601,125 @@ foreach ($method in $requiredMethods) {
 }
 
 Write-Host "[check] P0-UX batch 2 anti-regression OK"
+
+# ============================================================
+# P0-UX batch 2 patch coverage: mapping priority + release check gating
+# ============================================================
+Write-Host "[check] P0-UX batch 2 patch coverage (mapping priority, release-artifacts gating)"
+
+$startHereText = Get-Content -Path (Join-Path $RootDir "Start-Here.ps1") -Raw -Encoding UTF8
+
+# --- E. 安装方式映射 Path 优先 ---
+$convertFuncText = if ($startHereText -match '(?s)function Convert-ClaudeInstallMethodForReport\s*\{(.*?)(?=^function \w|\Z)') {
+    $matches[1]
+} else { "" }
+
+# E1. 函数存在
+if ($startHereText -notmatch 'function Convert-ClaudeInstallMethodForReport') {
+    throw "Convert-ClaudeInstallMethodForReport function must exist"
+}
+
+# E2. Path 判断在 Source 判断之前（字符串位置检查）
+$idxNpmPath = $convertFuncText.IndexOf('AppData\\Roaming\\npm\\claude')
+$idxNativePath = $convertFuncText.IndexOf('.local\\bin\\claude')
+$idxExternalScript = $convertFuncText.IndexOf("Source -eq 'ExternalScript'")
+$idxApplication = $convertFuncText.IndexOf("Source -eq 'Application'")
+
+if ($idxNpmPath -lt 0) {
+    throw "Convert-ClaudeInstallMethodForReport must match AppData\\Roaming\\npm\\claude.cmd path"
+}
+if ($idxNativePath -lt 0) {
+    throw "Convert-ClaudeInstallMethodForReport must match .local\\bin\\claude.exe path"
+}
+if ($idxExternalScript -lt 0) {
+    throw "Convert-ClaudeInstallMethodForReport must handle Source='ExternalScript'"
+}
+# E3. Path 必须出现在 ExternalScript 之前（优先匹配）
+if ($idxNpmPath -ge $idxExternalScript) {
+    throw "Convert-ClaudeInstallMethodForReport: npm path check must come BEFORE Source='ExternalScript' check (Path priority)"
+}
+if ($idxNativePath -ge $idxExternalScript) {
+    throw "Convert-ClaudeInstallMethodForReport: Native path check must come BEFORE Source='ExternalScript' check (Path priority)"
+}
+
+# E4. 映射函数不得返回 PowerShell 内部词
+$forbiddenSources = @('ExternalScript', 'Application', 'Function', 'Cmdlet')
+foreach ($fs in $forbiddenSources) {
+    # 允许在条件判断中出现（如 if Source -eq 'ExternalScript'），但不允许作为 return 值
+    if ($convertFuncText -match "return '$fs'") {
+        throw "Convert-ClaudeInstallMethodForReport must NOT return '$fs' directly; must map to user-readable label"
+    }
+}
+
+# E5. 映射函数必须包含所有已知 Method 映射
+$requiredMethodsPatch = @(
+    "official_native",
+    "existing_native",
+    "winget",
+    "npm_npmmirror",
+    "existing",
+    "native_local_bin",
+    "npm_global",
+    "final_fallback",
+    "skipped_existing",
+    "skipped_test_safe"
+)
+foreach ($method in $requiredMethodsPatch) {
+    if ($convertFuncText -notmatch [regex]::Escape($method)) {
+        throw "Convert-ClaudeInstallMethodForReport must include mapping/check for '$method'"
+    }
+}
+
+# E6. report 模板不得出现 PowerShell 内部词
+$reportTemplate = if ($startHereText -match '(?s)\$reportContent\s*=\s*@"(.*?)"@') {
+    $matches[1]
+} else { "" }
+foreach ($fs in $forbiddenSources) {
+    if ($reportTemplate -match [regex]::Escape($fs)) {
+        throw "Report template must NOT contain '$fs' (must use Convert-ClaudeInstallMethodForReport)"
+    }
+}
+
+# E7. report 模板不得直接输出 $script:ClaudeInstallMethod
+if ($reportTemplate -match '\$script:ClaudeInstallMethod') {
+    throw "Report template must NOT output raw `$script:ClaudeInstallMethod (use `$installMethodForReport)"
+}
+
+# --- F. release-artifacts 检查口径 ---
+$checkPs1Text = Get-Content -Path (Join-Path $ScriptDir "check.ps1") -Raw -Encoding UTF8
+
+# F1. check.ps1 必须有 -ReleaseCheck 参数
+if ($checkPs1Text -notmatch '\[switch\]\$ReleaseCheck') {
+    throw "check.ps1 must define [switch]`$ReleaseCheck parameter"
+}
+
+# F2. check.ps1 必须有 CCDI_RELEASE_CHECK 环境变量判断
+if ($checkPs1Text -notmatch 'CCDI_RELEASE_CHECK') {
+    throw "check.ps1 must support CCDI_RELEASE_CHECK environment variable"
+}
+
+# F3. check.ps1 必须有 strictReleaseCheck 变量
+if ($checkPs1Text -notmatch '\$strictReleaseCheck') {
+    throw "check.ps1 must define `$strictReleaseCheck variable for release check gating"
+}
+
+# F4. 非严格模式不得 throw，只能 WARN
+#    确认 release-artifacts SHA 检查处有 if/else 分支控制
+if ($checkPs1Text -notmatch 'strictReleaseCheck[\s\S]{0,300}throw[\s\S]{0,300}Write-Host.*WARN') {
+    throw "check.ps1 release-artifacts SHA check must branch on `$strictReleaseCheck: throw in strict mode, WARN in normal mode"
+}
+
+# F5. 必须包含明确提示文案
+if ($checkPs1Text -notmatch 'release-artifacts\.md\s+未记录当前 HEAD') {
+    throw "check.ps1 must include clear message: release-artifacts.md 未记录当前 HEAD"
+}
+if ($checkPs1Text -notmatch 'release 前需要更新') {
+    throw "check.ps1 must include: release 前需要更新"
+}
+if ($checkPs1Text -notmatch '非 release 阶段不阻断') {
+    throw "check.ps1 must include: 非 release 阶段不阻断 check.ps1"
+}
+
+Write-Host "[check] P0-UX batch 2 patch coverage OK"
 
 Write-Host "[check] OK"

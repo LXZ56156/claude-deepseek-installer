@@ -180,9 +180,22 @@ function Convert-ClaudeInstallMethodForReport {
         '^skipped_existing$' { return '已存在，跳过安装' }
         '^skipped_test_safe' { return '测试安全模式（未执行真实安装）' }
         default {
-            if ($Source -eq 'ExternalScript') { return '系统 PATH 中检测到 Claude Code' }
+            # 路径判断优先于 Source。因为 PowerShell CommandType/Source 可能只是 ExternalScript，
+            # 但 Path 才能准确说明 claude 来自 npm 目录还是 Native Install 目录。
             if ($Path -match '\\AppData\\Roaming\\npm\\claude\.cmd$') { return 'npm 全局安装' }
             if ($Path -match '\\\.local\\bin\\claude\.exe$') { return 'Claude 官方 Native Install' }
+
+            # 再处理 PowerShell CommandType / Source 内部词，不暴露给用户
+            if ($Source -eq 'ExternalScript') { return '系统 PATH 中检测到 Claude Code' }
+            if ($Source -eq 'Application') { return '系统 PATH 中检测到 Claude Code' }
+            if ($Source -eq 'Function') { return '系统函数或别名中检测到 Claude Code' }
+            if ($Source -eq 'Cmdlet') { return 'PowerShell 命令中检测到 Claude Code' }
+
+            # Method 本身也可能是 PowerShell 内部词（兜底）
+            if ($Method -in @('ExternalScript', 'Application', 'Function', 'Cmdlet')) {
+                return '系统 PATH 中检测到 Claude Code'
+            }
+
             if ($Method) { return $Method }
             return '未知'
         }
