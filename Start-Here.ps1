@@ -1621,7 +1621,7 @@ function Show-CompletionPage {
             Write-Host ""
             Write-Success "Claude Code 文件已安装。"
             Write-Success "DeepSeek API 已配置。"
-            Write-Info "PATH 已配置，但自动启动验证暂未通过。"
+            Write-Info "命令路径已配置，但新打开的 PowerShell 暂未确认可用。"
             Write-Host ""
             Write-Info "下一步："
             Write-Info "选择 [1] 启动 Claude Code 测试。"
@@ -1645,20 +1645,24 @@ function Show-CompletionPage {
     }
     elseif ($script:ClaudeInstalled -and $script:ConfigWritten) {
         Write-Host "==============================================================" -ForegroundColor Yellow
-        Write-Host "                                                              " -ForegroundColor Yellow
         Write-Host "            安装部分完成，API 测试未通过                     " -ForegroundColor Yellow
-        Write-Host "                                                              " -ForegroundColor Yellow
         Write-Host "==============================================================" -ForegroundColor Yellow
         Write-Host ""
         Write-Success "Claude Code 已安装。"
         Write-Success "DeepSeek 配置已写入。"
-        Write-Warning "但 API 测试失败，可能是 Key、余额、网络或 DeepSeek 服务问题。"
-        Write-Host ""
-        Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
-        Write-Host "  【下一步说明】" -ForegroundColor Cyan
-        Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
-        Write-Host ""
-        Write-Info "运行 [4] 一键诊断，只发送 report.txt。"
+        Write-Warning "API 测试未通过，但安装和配置已保留。"
+
+        Write-NextStepCard `
+            -Status "Claude Code 已安装，DeepSeek 配置已写入，但 API 暂未测试通过。" `
+            -Tried @(
+                "已写入 DeepSeek 配置",
+                "已尝试连接 DeepSeek API"
+            ) `
+            -NextSteps @(
+                "先检查 DeepSeek API Key 是否正确",
+                "检查 DeepSeek 账户余额是否充足",
+                "稍后选择 [4] 一键诊断重新测试 API"
+            )
         Write-Host ""
         Write-Info "安装完成报告: $($script:ReportPath)"
     }
@@ -1676,21 +1680,11 @@ function Show-CompletionPage {
         Write-Host "            需要重开终端后继续                                " -ForegroundColor Yellow
         Write-Host "==============================================================" -ForegroundColor Yellow
         Write-Host ""
-        Write-Warning "当前终端还无法识别新安装的命令。"
-        Write-Host ""
-        Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
-        Write-Host "  【下一步说明】" -ForegroundColor Cyan
-        Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
-        Write-Host ""
+        Write-Warning "当前窗口还没有识别到新安装的命令。"
         Write-Info "这是第一阶段完成，不是失败。"
-        Write-Info "Node.js 已安装完成（或 Claude Code npm 全局安装完成），但"
-        Write-Info "当前终端窗口的 PATH 尚未刷新，暂时无法识别新命令。"
-        Write-Host ""
-        Write-Info "下一步: 关闭此窗口，重新双击「00-点我开始安装.cmd」。"
-        Write-Info "脚本会继续安装 Claude Code 并配置 DeepSeek。"
-        Write-Host ""
-        Write-Info "类比：就像手机安装完 App 后需要点图标打开，"
-        Write-Info "终端也需要关闭重开才能识别新安装的程序。"
+        Write-Info "下一步：关闭此窗口，重新双击「00-点我开始安装.cmd」继续。"
+        Write-Info "重新打开后，安装助手会继续完成后续步骤。"
+        Write-Info "类比：就像手机安装完 App 后需要点图标打开。"
     }
     else {
         # 最终兜底：即使在所有安装通道都失败的情况下，也做一次最终检测。
@@ -1722,9 +1716,20 @@ function Show-CompletionPage {
             Write-Host "            安装未完成                                        " -ForegroundColor Red
             Write-Host "==============================================================" -ForegroundColor Red
             Write-Host ""
-            Write-Error-Msg "Claude Code 安装未成功。"
-            Write-Info "请运行「一键诊断.cmd」，只发送 report.txt。"
-            Write-Info "不要发送 backup/、logs/ 或完整 API Key。"
+            Write-Error-Msg "Claude Code 暂未确认安装成功。"
+
+            Write-NextStepCard `
+                -Status "Claude Code 暂未确认安装成功。" `
+                -Tried @(
+                    "已自动尝试可用安装方式",
+                    "已刷新命令路径并重新检测安装结果"
+                ) `
+                -NextSteps @(
+                    "先运行「一键修复依赖.cmd」自动修复常见问题",
+                    "修复后重新运行「00-点我开始安装.cmd」",
+                    "如果仍失败，再运行「一键诊断.cmd」生成 report.txt"
+                ) `
+                -IncludeSupportFallback
         }
     }
 
@@ -1754,7 +1759,8 @@ function Show-CompletionMenu {
 
         # 选项 1: 启动 Claude Code 测试（推荐）
         $testProjectAvailable = ($script:TestProjectPath -and (Test-Path $script:TestProjectPath))
-        if ($testProjectAvailable) {
+        $canRecommendClaudeTest = $script:ClaudeInstalled -and $testProjectAvailable
+        if ($canRecommendClaudeTest) {
             Write-Host ""
             Write-Info "推荐下一步：直接输入 1，然后按回车，启动 Claude Code 测试。"
         }
@@ -1940,9 +1946,10 @@ function Start-LazyInstall {
                     $script:ClaudeInstallMethod = if ($finalCheck.Source) { $finalCheck.Source } else { "final_fallback" }
                     $script:ClaudeInstallStatus = "installed_needs_restart_or_path_fix"
 
-                    Write-Warning "Claude Code 当前进程可用，但新 PowerShell 验证未通过。"
+                    Write-Warning "当前窗口可以识别 Claude Code，但新打开的 PowerShell 还没有确认可用。"
                     Write-Info "本工具会继续配置 DeepSeek API Key。"
-                    Write-Info "安装结束后请按完成页提示重新打开 PowerShell 或运行「一键修复依赖」。"
+                    Write-Info "安装结束后请先选择完成页 [1] 启动测试。"
+                    Write-Info "如果测试失败，再运行「一键修复依赖.cmd」。"
                     Write-Log "WARN" "Start-LazyInstall 兜底部分通过: current process usable, fresh shell failed: $($freshFinal.Error)"
                 }
 
@@ -1995,9 +2002,10 @@ function Start-LazyInstall {
     }
     elseif ($partialClaudeStatus) {
         Pause-ForNextStep -Force -Messages @(
-            "Claude Code 文件已安装，但新 PowerShell 命令验证尚未完整通过。",
+            "Claude Code 文件已安装，但新打开的 PowerShell 还没有确认可用。",
             "本工具会继续配置 DeepSeek API Key。",
-            "安装结束后请按完成页提示运行「一键修复依赖」或重新打开 PowerShell 验证 claude --version。"
+            "安装结束后请先选择完成页 [1] 启动测试。",
+            "如果测试失败，再运行「一键修复依赖.cmd」。"
         )
     }
     else {

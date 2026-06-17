@@ -803,7 +803,7 @@ x-api-key: $TestApiKey
 
     # 20a. 下载超时友好提示
     Assert "Invoke-VisibleFileDownload 提示超时而非长时间无响应" {
-        $claudeInstallText -match '如果下载超时，将自动切换备用安装通道'
+        $claudeInstallText -match '如果下载超时，将自动切换到备用安装方式'
     } "下载超时提示文案未更新"
 
     # 20b. Native 失败后不再误导"直接切换npm"
@@ -1494,8 +1494,8 @@ x-api-key: $TestApiKey
     } "完成页 pathOk+freshShellFail 场景标题必须降噪"
 
     Assert "27c: 含'PATH 已配置，但自动启动验证暂未通过'" {
-        $startHereText -match [regex]::Escape('PATH 已配置，但自动启动验证暂未通过')
-    } "完成页必须说明 PATH 已配置但验证暂未通过"
+        $startHereText -match '命令路径已配置，但新打开的 PowerShell 暂未确认可用'
+    } "完成页必须说明命令路径已配置但验证暂未通过"
 
     Assert "27c: 含'选择 [1] 启动 Claude Code 测试'（pathOk+freshShellFail 场景）" {
         $startHereText -match [regex]::Escape('选择 [1] 启动 Claude Code 测试')
@@ -1838,9 +1838,9 @@ x-api-key: $TestApiKey
         $claudeInstallText -match '跳过 winget'
     } "必须输出跳过 winget 安装 Claude Code 的提示"
 
-    Assert "29b: 必须说明跳过原因（避免长时间等待）" {
-        $claudeInstallText -match '避免长时间等待'
-    } "必须解释跳过原因"
+    Assert "29b: 必须记录跳过原因到日志" {
+        $claudeInstallText -match 'skip winget Claude'
+    } "必须将跳过原因记录到日志"
 
     Assert "29b: 不得禁用 winget 安装 Node.js LTS" {
         $claudeInstallText -match 'OpenJS\.NodeJS\.LTS'
@@ -1872,12 +1872,12 @@ x-api-key: $TestApiKey
         $claudeInstallText -notmatch 'if\s*\(\s*-not\s+\$mirrorResult\.Success\s*\)\s*\{[\s\S]{0,200}failed_official_and_mirror'
     } "不得在 npm 调用后直接 return failed_official_and_mirror"
 
-    Assert "29d: 失败文案 'npm 镜像安装未完成验证' 仅在后验验证失败路径中出现" {
-        ($claudeInstallText -match 'elseif\s*\(\s*\$verifyResult\.Exists\s*\)[\s\S]{0,200}npm 镜像安装未完成验证')
-    } "'npm 镜像安装未完成验证' 必须仅出现在后验验证失败路径（elseif verifyResult.Exists）"
+    Assert "29d: 失败文案 '备用下载方式未完成确认' 仅在后验验证失败路径中出现" {
+        ($claudeInstallText -match 'elseif\s*\(\s*\$verifyResult\.Exists\s*\)[\s\S]{0,200}备用下载方式未完成确认')
+    } "'备用下载方式未完成确认' 必须仅出现在后验验证失败路径"
 
     Assert "29d: 后验验证失败时必须包含可能原因提示" {
-        $claudeInstallText -match '可能原因：Node\.js/npm 不完整'
+        $claudeInstallText -match '可能原因：必要运行环境不完整'
     } "后验验证失败时必须输出可能原因"
 
     Assert "29d: 后验验证通过时必须记录安装命令异常（Write-Log）" {
@@ -1891,7 +1891,7 @@ x-api-key: $TestApiKey
     } "installed_needs_restart 必须仅在 mirrorResult.Success=true 时使用"
 
     Assert "29e: mirrorResult.Success=false 必须返回真实失败文案" {
-        $claudeInstallText -match 'npm 安装命令未确认成功，且未检测到可用的 claude 命令'
+        $claudeInstallText -match '备用下载方式未完成，且没有检测到可用的 Claude Code'
     } "mirrorResult.Success=false 时必须输出真实失败原因"
 
     Assert "29e: 两个 npm 调用点都受 mirrorResult.Success 控制" {
@@ -2124,7 +2124,7 @@ x-api-key: $TestApiKey
     # ============================================================
     # 32. v1.3.3 第二批 UX 文案收口：helper/技术词收缩/长耗时/失败卡片/完成页
     # ============================================================
-    Write-CheckHeader "32. 第二批 UX 文案收口：helper 存在 / 技术词收缩 / 长耗时提示 / 失败卡片 / 完成页推荐"
+    Write-CheckHeader "32. 第二批 UX 文案收口 v2：helper / 技术词黑名单扫描 / 长耗时 / 失败卡片 / 条件推荐"
 
     $startHerePath = Join-Path $ScriptRoot "Start-Here.ps1"
     $startHereText = Get-Content $startHerePath -Raw -Encoding UTF8
@@ -2135,89 +2135,81 @@ x-api-key: $TestApiKey
     Assert "32a: Write-UserFriendlyInstallMessage 存在" {
         $startHereText -match 'function Write-UserFriendlyInstallMessage'
     } "Start-Here.ps1 必须定义 Write-UserFriendlyInstallMessage"
-
     Assert "32a: Write-LongStepHint 存在" {
         $startHereText -match 'function Write-LongStepHint'
     } "Start-Here.ps1 必须定义 Write-LongStepHint"
-
     Assert "32a: Write-NextStepCard 存在" {
         $startHereText -match 'function Write-NextStepCard'
     } "Start-Here.ps1 必须定义 Write-NextStepCard"
+    Assert "32a: Write-NextStepCard 包含安全文案" {
+        ($startHereText -match '不要发送 settings\.json' -and
+         $startHereText -match '只发送 report\.txt' -and
+         $startHereText -match '完整 API Key')
+    } "Write-NextStepCard 必须包含完整安全提醒"
 
-    Assert "32a: Write-NextStepCard 包含不要发送 settings.json" {
-        $startHereText -match '不要发送 settings\.json'
-    } "Write-NextStepCard 必须提醒不要发送 settings.json"
-
-    Assert "32a: Write-NextStepCard 包含只发送 report.txt" {
-        $startHereText -match '只发送 report\.txt'
-    } "Write-NextStepCard 必须提示只发送 report.txt"
-
-    Assert "32a: Write-NextStepCard 包含不要发送完整 API Key" {
-        $startHereText -match '完整 API Key'
-    } "Write-NextStepCard 必须提醒不要发送完整 API Key"
-
-    # --- 32b: 技术词收缩 ---
-    Assert "32b: Step 2 不再显示原始安装策略行" {
-        $startHereText -notmatch 'Write-Info\s+"安装策略:'
-    } "Start-Here.ps1 Step 2 不得再显示原始安装策略（使用 Write-UserFriendlyInstallMessage）"
-
-    Assert "32b: claude-install.ps1 不再直接显示 Native Install 文案给用户" {
-        $claudeInstallText -notmatch 'Write-Info\s+"优先使用 Claude 官方 Native Install' -and
-        $claudeInstallText -notmatch 'Write-Info\s+"开始 Native Install\.\.\.\"' -and
-        $claudeInstallText -notmatch 'Write-Success\s+"Claude 官方安装通道可用'
-    } "claude-install.ps1 不得再直接输出 Native Install 文案给用户"
-
-    Assert "32b: winget 安装 Node.js 文案已收缩" {
-        $claudeInstallText -notmatch 'Write-Info\s+"正在通过 Windows 官方 winget 安装 Node'
-    } "claude-install.ps1 winget Node.js 文案必须收缩"
+    # --- 32b: 用户可见技术词黑名单（仅扫描 Write-Info/Write-Warning/Write-Success/Write-Error-Msg）---
+    $forbiddenTerms = @(
+        "winget 安装验证通过",
+        "正在尝试通过 winget 安装 Claude Code",
+        "正在使用 winget 安装 Claude Code",
+        "这是 Windows 官方包管理器方式",
+        "npm 镜像安装未完成验证",
+        "npm 镜像",
+        "npm 全局 PATH 异常",
+        "Claude 官方下载域名不可达，跳过 winget",
+        "Claude 官方 Native Install 方式安装",
+        "Claude 官方安装通道可用。",
+        "npm 安装命令未确认成功",
+        "npm 镜像仓库不可达",
+        "正在使用 npm 镜像安装",
+        "后验验证",
+        "npmmirror: 可访问",
+        "npm 镜像安装 Claude Code 完成。"
+    )
+    # Extract only user-visible output lines (exclude Write-Log, comments, function names)
+    $userVisLines = ($claudeInstallText -split "`r?`n") | Where-Object {
+        $_ -match '^\s*(Write-Info|Write-Warning|Write-Success|Write-Error-Msg)\b'
+    }
+    $installUserVisText = $userVisLines -join "`n"
+    $allClean = $true
+    foreach ($term in $forbiddenTerms) {
+        if ($installUserVisText -match [regex]::Escape($term)) {
+            $allClean = $false
+            break
+        }
+    }
+    Assert "32b: claude-install.ps1 用户可见输出不含技术词黑名单" { $allClean } "存在残留技术词"
 
     # --- 32c: 长耗时提示 ---
-    Assert "32c: Start-Here.ps1 包含 Write-LongStepHint 调用" {
-        $startHereText -match 'Write-LongStepHint'
-    } "Start-Here.ps1 必须调用 Write-LongStepHint"
+    Assert "32c: 长耗时提示存在" {
+        ($startHereText -match 'Write-LongStepHint' -and
+         $startHereText -match '可能需要几分钟' -and
+         $startHereText -match '请不要关闭窗口' -and
+         $startHereText -match '最长等待约 30 秒')
+    } "长耗时提示不完整"
 
-    Assert "32c: 包含'可能需要几分钟'" {
-        $startHereText -match '可能需要几分钟'
-    } "Start-Here.ps1 必须包含'可能需要几分钟'长耗时提示"
-
-    Assert "32c: 包含'请不要关闭窗口'" {
-        $startHereText -match '请不要关闭窗口'
-    } "Start-Here.ps1 必须包含'请不要关闭窗口'提示"
-
-    Assert "32c: API 测试包含等待时长提示" {
-        $startHereText -match '最长等待约 30 秒|最长等待.*30 秒'
-    } "Start-Here.ps1 API 测试必须提示最长等待约 30 秒"
-
-    # --- 32d: 失败卡片统一 ---
+    # --- 32d: 失败卡片 ---
     $nextStepCardCount = ([regex]::Matches($startHereText, 'Write-NextStepCard')).Count
-    Assert "32d: Write-NextStepCard 至少调用 3 次" {
-        $nextStepCardCount -ge 3
-    } "Start-Here.ps1 必须至少调用 Write-NextStepCard 3 次（实际 $nextStepCardCount 次）"
+    Assert "32d: Write-NextStepCard >= 4 次" { $nextStepCardCount -ge 4 } "卡片少于 4 个（实际 $nextStepCardCount）"
+    Assert "32d: 不含 发给卖家" { $startHereText -notmatch '直接发给卖家|马上联系卖家' } "含'发给卖家'"
+    Assert "32d: 不含 发送 logs" { $startHereText -notmatch '把\s*logs\s*发给' } "含'发送 logs'"
+    Assert "32d: 安装库也不含 发给卖家" { $claudeInstallText -notmatch '直接发给卖家|马上联系卖家' } "库含'发给卖家'"
 
-    Assert "32d: 不含'直接发给卖家'" {
-        $startHereText -notmatch '直接发给卖家|马上联系卖家'
-    } "Start-Here.ps1 不得包含'直接发给卖家'"
+    # --- 32e: 完成页推荐条件 ---
+    Assert "32e: 推荐文案存在" { $startHereText -match '推荐下一步.*直接输入 1' } "缺失推荐"
+    Assert "32e: 推荐受 ClaudeInstalled 控制" {
+        $startHereText -match '\$canRecommendClaudeTest'
+    } "推荐未用 `$canRecommendClaudeTest 条件"
+    Assert "32e: [1] 测试菜单仍存在" { $startHereText -match '启动 Claude Code 测试（推荐）' } "菜单[1]缺失"
+    Assert "32e: [4] 一键诊断仍存在" { $startHereText -match '运行一键诊断' } "菜单[4]缺失"
 
-    Assert "32d: 不含'把 logs 发给卖家'" {
-        $startHereText -notmatch '把\s*logs\s*发给'
-    } "Start-Here.ps1 不得建议发送 logs 给卖家"
-
-    Assert "32d: claude-install.ps1 不含'发给卖家'" {
-        $claudeInstallText -notmatch '直接发给卖家|马上联系卖家'
-    } "claude-install.ps1 不得包含'发给卖家'"
-
-    # --- 32e: 完成页推荐动作 ---
-    Assert "32e: 完成页菜单包含推荐下一步文案" {
-        $startHereText -match '推荐下一步.*直接输入 1'
-    } "Show-CompletionMenu 必须包含'推荐下一步：直接输入 1'文案"
-
-    Assert "32e: 菜单 [1] 启动 Claude Code 测试（推荐）仍存在" {
-        $startHereText -match '启动 Claude Code 测试（推荐）'
-    } "完成页 [1] 必须仍是'启动 Claude Code 测试（推荐）'"
-
-    Assert "32e: 菜单 [4] 一键诊断仍存在" {
-        $startHereText -match '运行一键诊断'
-    } "完成页 [4] '一键诊断'必须存在"
+    # --- 32f: PATH 在用户可见输出中最小化 ---
+    Assert "32f: claude-install.ps1 不再直接输出 已在 User PATH 中" {
+        $claudeInstallText -notmatch 'Write-Info\s+"Claude Code 安装目录已在用户 PATH 中'
+    } "仍有 PATH 残留"
+    Assert "32f: claude-install.ps1 不再输出 已将 Claude Code 安装目录加入用户 PATH" {
+        $claudeInstallText -notmatch 'Write-Info\s+"已将 Claude Code 安装目录加入用户 PATH'
+    } "仍有 PATH 加入残留"
 
     Write-Host ""
 

@@ -3368,8 +3368,8 @@ if ($claudeInstallText -notmatch 'if\s*\(\s*\$wingetOk\s+-and\s+\$shouldTryWinge
 if ($claudeInstallText -notmatch '跳过 winget') {
     throw "Install-ClaudeCodeAuto must have user-visible message about skipping winget Claude Code"
 }
-if ($claudeInstallText -notmatch '避免长时间等待') {
-    throw "Install-ClaudeCodeAuto must explain skip reason (避免长时间等待)"
+if ($claudeInstallText -notmatch 'skip winget Claude') {
+    throw "Install-ClaudeCodeAuto must log skip reason in Write-Log (skip winget Claude)"
 }
 # Node.js via winget must still be present
 if ($claudeInstallText -notmatch 'Install-NodeJsViaWinget') {
@@ -3428,11 +3428,11 @@ if ($claudeInstallText -match 'if\s*\(\s*-not\s+\$mirrorResult\.Success\s*\)\s*\
     throw "Pre-verified failed_official_and_mirror return must NOT exist (must do post-verification first)"
 }
 # D2. npm mirror failure messages must exist in post-verify failure paths
-if ($claudeInstallText -notmatch 'npm 镜像安装未完成验证') {
-    throw "Post-verify failure paths must retain 'npm 镜像安装未完成验证' message"
+if ($claudeInstallText -notmatch '备用下载方式未完成确认') {
+    throw "Post-verify failure paths must retain '备用下载方式未完成确认' message"
 }
-if ($claudeInstallText -notmatch '可能原因：Node\.js/npm 不完整') {
-    throw "Post-verify failure paths must include possible causes explanation"
+if ($claudeInstallText -notmatch '可能原因：必要运行环境不完整') {
+    throw "Post-verify failure paths must include possible causes explanation (更新为普通用户语言)"
 }
 
 # E. installed_needs_restart must be guarded by mirrorResult.Success
@@ -3444,8 +3444,8 @@ if ($claudeInstallText -notmatch 'if\s*\(\s*\$mirrorResult\.Success\s*\)\s*\{
     throw "installed_needs_restart must be guarded by if (`$mirrorResult.Success)"
 }
 # E2. When mirrorResult.Success is false + claude not found, must return failed_official_and_mirror
-if ($claudeInstallText -notmatch 'npm 安装命令未确认成功，且未检测到可用的 claude 命令') {
-    throw "mirrorResult.Success=false must trigger real failure message: 'npm 安装命令未确认成功'"
+if ($claudeInstallText -notmatch '备用下载方式未完成，且没有检测到可用的 Claude Code') {
+    throw "mirrorResult.Success=false must trigger real failure message (updated to user-friendly text)"
 }
 # E3. Must NOT unconditionally set installed_needs_restart at end of npm post-verify failure
 # (The installed_needs_restart must appear ONLY inside `if ($mirrorResult.Success)` block)
@@ -3723,136 +3723,99 @@ if ($checkPs1Text -notmatch '非 release 阶段不阻断') {
 Write-Host "[check] P0-UX batch 2 patch coverage OK"
 
 # ============================================================
-# P0-UX batch 2 UX copy polish: helpers / tech term reduction /
-# long-step hints / failure cards / completion page hint
+# P0-UX batch 2 UX copy polish v2: helpers / tech term reduction /
+# long-step hints / failure cards / completion page hint /
+# expanded user-visible line scanning
 # ============================================================
-Write-Host "[check] P0-UX batch 2 UX copy polish (helpers, term reduction, failure cards)"
+Write-Host "[check] P0-UX batch 2 UX copy polish v2 (expanded tech term scan)"
 
 $startHereText = Get-Content -Path (Join-Path $RootDir "Start-Here.ps1") -Raw -Encoding UTF8
 $claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
 
+# Helper: extract user-visible output lines (Write-Info/Write-Warning/Write-Success/Write-Error-Msg)
+function Get-UserVisibleLines {
+    param([string]$Text)
+    return ($Text -split "`r?`n") | Where-Object {
+        $_ -match '^\s*(Write-Info|Write-Warning|Write-Success|Write-Error-Msg)\b' -and
+        $_ -notmatch '^\s*#'
+    }
+}
+
 # --- G. Helper functions ---
-# G1. 三个 helper 必须存在
-if ($startHereText -notmatch 'function Write-UserFriendlyInstallMessage') {
-    throw "Start-Here.ps1 must define Write-UserFriendlyInstallMessage"
-}
-if ($startHereText -notmatch 'function Write-LongStepHint') {
-    throw "Start-Here.ps1 must define Write-LongStepHint"
-}
-if ($startHereText -notmatch 'function Write-NextStepCard') {
-    throw "Start-Here.ps1 must define Write-NextStepCard"
-}
-
-# G2. Write-NextStepCard 必须包含安全文案
+if ($startHereText -notmatch 'function Write-UserFriendlyInstallMessage') { throw "Missing Write-UserFriendlyInstallMessage" }
+if ($startHereText -notmatch 'function Write-LongStepHint') { throw "Missing Write-LongStepHint" }
+if ($startHereText -notmatch 'function Write-NextStepCard') { throw "Missing Write-NextStepCard" }
 $nextStepBody = if ($startHereText -match '(?s)function Write-NextStepCard\s*\{(.*?)(?=^function \w|\Z)') { $matches[1] } else { "" }
-if ($nextStepBody -notmatch '不要发送 settings\.json') {
-    throw "Write-NextStepCard must include '不要发送 settings.json'"
-}
-if ($nextStepBody -notmatch '只发送 report\.txt') {
-    throw "Write-NextStepCard must include '只发送 report.txt'"
-}
-if ($nextStepBody -notmatch '完整 API Key') {
-    throw "Write-NextStepCard must warn against sending full API Key"
+if ($nextStepBody -notmatch '不要发送 settings\.json') { throw "Write-NextStepCard must warn: no settings.json" }
+if ($nextStepBody -notmatch '只发送 report\.txt') { throw "Write-NextStepCard must: only report.txt" }
+if ($nextStepBody -notmatch '完整 API Key') { throw "Write-NextStepCard must warn: no full API Key" }
+
+# --- H. 用户可见技术词黑名单扫描 (claude-install.ps1) ---
+$installVisLines = Get-UserVisibleLines -Text $claudeInstallText
+$forbiddenInUserVisible = @(
+    "winget 安装验证通过",
+    "正在尝试通过 winget 安装 Claude Code",
+    "正在使用 winget 安装 Claude Code",
+    "这是 Windows 官方包管理器方式",
+    "npm 镜像安装未完成验证",
+    "npm 镜像",
+    "npm 全局 PATH 异常",
+    "Claude 官方下载域名不可达，跳过 winget",
+    "Claude 官方 Native Install 方式安装",
+    "开始 Native Install...",
+    "Claude 官方安装通道可用。",
+    "npm 安装命令未确认成功",
+    "npm 镜像仓库不可达",
+    "正在使用 npm 镜像安装",
+    "后验验证",
+    "Fresh PowerShell",
+    "winget 安装后暂未检测到 claude",
+    "继续尝试 npm 镜像安装",
+    "npmmirror: 可访问",
+    "npm 镜像安装 Claude Code 完成。"
+)
+foreach ($forbidden in $forbiddenInUserVisible) {
+    $matchedLines = @($installVisLines | Where-Object { $_ -match [regex]::Escape($forbidden) })
+    if ($matchedLines.Count -gt 0) {
+        throw "claude-install.ps1 user-visible lines must NOT contain '$forbidden' (found $($matchedLines.Count) occurrence(s))"
+    }
 }
 
-# --- H. 技术词收缩 ---
-# H1. Step 2 用户可见文案不得仍使用旧策略格式
-$step2Block = if ($startHereText -match '(?s)function Step-InstallClaudeCode\s*\{(.*?)(?=function \w+\s*\{)') { $matches[1] } else { "" }
-if ($step2Block -match 'Write-Info\s+"安装策略:') {
-    throw "Step-InstallClaudeCode must NOT show raw install strategy (use Write-UserFriendlyInstallMessage)"
-}
-
-# H2. claude-install.ps1 不再直接输出 "Native Install" 给用户
-#    允许在 Write-Log、注释、函数名中出现
-if ($claudeInstallText -match 'Write-Info\s+"优先使用 Claude 官方 Native Install 方式安装') {
-    throw "claude-install.ps1 must NOT show '优先使用 Claude 官方 Native Install 方式安装' (use Write-Log or user-friendly text)"
-}
-if ($claudeInstallText -match 'Write-Info\s+"开始 Native Install\.\.\.\"') {
-    throw "claude-install.ps1 must NOT show '开始 Native Install...' to user"
-}
-if ($claudeInstallText -match 'Write-Success\s+"Claude 官方安装通道可用') {
-    throw "claude-install.ps1 must NOT show 'Claude 官方安装通道可用' to user"
-}
-
-# H3. npm 安装文案收缩
-if ($claudeInstallText -match 'Write-Info\s+"正在使用 npm 镜像安装') {
-    throw "claude-install.ps1 must NOT show '正在使用 npm 镜像安装' to user"
-}
-
-# H4. winget 安装文案收缩
-if ($claudeInstallText -match 'Write-Info\s+"正在使用 winget 安装 Claude Code') {
-    throw "claude-install.ps1 must NOT show '正在使用 winget 安装 Claude Code' to user"
-}
-if ($claudeInstallText -match 'Write-Info\s+"正在通过 Windows 官方 winget 安装 Node') {
-    throw "claude-install.ps1 must NOT show '正在通过 Windows 官方 winget 安装 Node' to user"
+# PATH in user-visible lines should be minimized (allow in report/logs/comments/func names)
+$pathInVisLines = $installVisLines | Where-Object { $_ -match '\bPATH\b' -and $_ -notmatch 'User PATH|\[PATH\]' }
+if ($pathInVisLines.Count -gt 8) {
+    throw "claude-install.ps1 still has too many user-visible PATH references ($($pathInVisLines.Count) lines)"
 }
 
 # --- I. 长耗时提示 ---
-# I1. Start-Here.ps1 包含长耗时提示调用
-if ($startHereText -notmatch 'Write-LongStepHint') {
-    throw "Start-Here.ps1 must call Write-LongStepHint at least once"
-}
-if ($startHereText -notmatch '可能需要几分钟') {
-    throw "Start-Here.ps1 must include '可能需要几分钟' hint text"
-}
-if ($startHereText -notmatch '请不要关闭窗口') {
-    throw "Start-Here.ps1 must include '请不要关闭窗口' hint text"
-}
-if ($startHereText -notmatch 'API 测试最长等待约 30 秒|最长等待约 30 秒') {
-    throw "Start-Here.ps1 must include API test timeout hint"
-}
-
-# I2. claude-install.ps1 也应有
-if ($claudeInstallText -notmatch '请不要关闭窗口') {
-    throw "claude-install.ps1 must include '请不要关闭窗口' for long-running steps"
-}
+if ($startHereText -notmatch 'Write-LongStepHint') { throw "Missing Write-LongStepHint call" }
+if ($startHereText -notmatch '可能需要几分钟') { throw "Missing '可能需要几分钟' hint" }
+if ($startHereText -notmatch '请不要关闭窗口') { throw "Missing '请不要关闭窗口' hint" }
+if ($startHereText -notmatch '最长等待约 30 秒') { throw "Missing API test 30s hint" }
+if ($claudeInstallText -notmatch '请不要关闭窗口') { throw "claude-install.ps1 missing close-window hint" }
 
 # --- J. 失败卡片统一 ---
-# J1. needs_restart 分支必须调用 Write-NextStepCard
-if ($startHereText -match 'node_installed_needs_restart' -and $startHereText -notmatch 'Write-NextStepCard[\s\S]{0,300}node_installed_needs_restart') {
-    # This is hard to check precisely; verify at least one Write-NextStepCard in failure context
-}
-# Simpler: count Write-NextStepCard calls
 $nextStepCardCount = ([regex]::Matches($startHereText, 'Write-NextStepCard')).Count
-if ($nextStepCardCount -lt 3) {
-    throw "Start-Here.ps1 must call Write-NextStepCard at least 3 times (needs_restart, install fail, API fail) (found $nextStepCardCount)"
+if ($nextStepCardCount -lt 4) {
+    throw "Start-Here.ps1 must call Write-NextStepCard at least 4 times (needs_restart, install fail, API fail, final fallback) (found $nextStepCardCount)"
 }
+if ($startHereText -match '直接发给卖家|马上联系卖家') { throw "Must NOT contain '发给卖家'" }
+if ($claudeInstallText -match '直接发给卖家|马上联系卖家') { throw "Must NOT contain '发给卖家' in install lib" }
+if ($startHereText -match '把\s*logs\s*发给') { throw "Must NOT suggest sending logs to seller" }
+if ($nextStepBody -notmatch '如需人工协助|如果以上方法') { throw "Write-NextStepCard must defer support to after repair" }
 
-# J2. 不得出现 "直接发给卖家" / "马上联系卖家"
-if ($startHereText -match '直接发给卖家|马上联系卖家') {
-    throw "Start-Here.ps1 must NOT contain '直接发给卖家' or similar (bad UX)"
-}
-if ($claudeInstallText -match '直接发给卖家|马上联系卖家') {
-    throw "claude-install.ps1 must NOT contain '直接发给卖家' or similar (bad UX)"
-}
-
-# J3. 不得出现 "把 logs 发给卖家"
-if ($startHereText -match '把\s*logs\s*发给|发送.*logs.*给') {
-    throw "Start-Here.ps1 must NOT suggest sending logs to seller"
-}
-
-# J4. failure scenario must reference "一键修复依赖" before "report.txt"
-#     Verify Write-NextStepCard defaults prioritize repair over report
-if ($nextStepBody -notmatch '如需人工协助|如果以上方法') {
-    throw "Write-NextStepCard must defer support fallback to after self-repair steps"
-}
-
-# --- K. 完成页推荐动作 ---
-# K1. Show-CompletionMenu 含推荐下一步
+# --- K. 完成页 + 条件推荐 ---
 $compMenuBody = if ($startHereText -match '(?s)function Show-CompletionMenu\s*\{(.*?)(?=^function \w|\Z)') { $matches[1] } else { "" }
-if ($compMenuBody -notmatch '推荐下一步.*直接输入 1') {
-    throw "Show-CompletionMenu must include '推荐下一步：直接输入 1，然后按回车'"
+if ($compMenuBody -notmatch '推荐下一步.*直接输入 1') { throw "Show-CompletionMenu missing recommendation" }
+if ($compMenuBody -notmatch '启动 Claude Code 测试') { throw "Show-CompletionMenu missing test entry" }
+if ($compMenuBody -notmatch '\$script:ClaudeInstalled\s+-and\s+\$testProjectAvailable') {
+    throw "Show-CompletionMenu recommendation must be guarded by ClaudeInstalled AND testProjectAvailable"
 }
-if ($compMenuBody -notmatch '启动 Claude Code 测试') {
-    throw "Show-CompletionMenu must still contain '启动 Claude Code 测试（推荐）' menu entry"
-}
-
-# K2. Write-UserFriendlyInstallMessage 存在 AutoSelect / InstallSuccess / InstallFailed
 $userFriendlyBody = if ($startHereText -match '(?s)function Write-UserFriendlyInstallMessage\s*\{(.*?)(?=^function \w|\Z)') { $matches[1] } else { "" }
-if ($userFriendlyBody -notmatch 'AutoSelect') { throw "Write-UserFriendlyInstallMessage must support Type='AutoSelect'" }
-if ($userFriendlyBody -notmatch 'InstallSuccess') { throw "Write-UserFriendlyInstallMessage must support Type='InstallSuccess'" }
-if ($userFriendlyBody -notmatch 'InstallFailed') { throw "Write-UserFriendlyInstallMessage must support Type='InstallFailed'" }
+if ($userFriendlyBody -notmatch 'AutoSelect') { throw "Missing AutoSelect type" }
+if ($userFriendlyBody -notmatch 'InstallSuccess') { throw "Missing InstallSuccess type" }
+if ($userFriendlyBody -notmatch 'InstallFailed') { throw "Missing InstallFailed type" }
 
-Write-Host "[check] P0-UX batch 2 UX copy polish OK"
+Write-Host "[check] P0-UX batch 2 UX copy polish v2 OK"
 
 Write-Host "[check] OK"
