@@ -766,12 +766,12 @@ x-api-key: $TestApiKey
 
     # Step-CheckEnvironment 使用 Write-CheckProgress（至少 10 个进度调用）
     Assert "Step-CheckEnvironment 包含 Write-CheckProgress -Current 1" {
-        $startHereText -match 'Write-CheckProgress\s+-Current\s+1\s+-Total\s+10'
-    } "Step-CheckEnvironment 缺失第 1 项进度提示"
+        $startHereText -match 'Write-CheckProgress\s+-Current\s+1\s+-Total\s+7'
+    } "Step-CheckEnvironment 缺失第 1 项进度提示（Total 应为 7，VS Code/Git/WSL 已移入日志）"
 
-    Assert "Step-CheckEnvironment 包含 Write-CheckProgress -Current 10" {
-        $startHereText -match 'Write-CheckProgress\s+-Current\s+10\s+-Total\s+10'
-    } "Step-CheckEnvironment 缺失第 10 项进度提示"
+    Assert "Step-CheckEnvironment 包含 Write-CheckProgress -Current 7 (末项)" {
+        $startHereText -match 'Write-CheckProgress\s+-Current\s+7\s+-Total\s+7'
+    } "Step-CheckEnvironment 缺失第 7 项进度提示（末项应为 Current 7 Total 7，VS Code/Git/WSL 已移入日志）"
 
     # WSL 方式 B 已移除
     Assert "Start-WslSetup 不再包含 Windows 端自动调用 WSL" {
@@ -1906,6 +1906,128 @@ x-api-key: $TestApiKey
         $claudeInstallText -notmatch 'else\s*\{[\s\S]{0,50}Write-Warning\s+"Claude Code 可能已安装' `
             -or $claudeInstallText -match 'if\s*\(\s*\$mirrorResult\.Success\s*\)\s*\{[\s\S]{0,300}installed_needs_restart'
     } "installed_needs_restart 不得在无条件 else 分支中出现"
+
+    Write-Host ""
+
+    # ============================================================
+    # 30. v1.3.3 第二批 UX 优化检查（报告准确性/去重/降噪/安装方式映射）
+    # ============================================================
+    Write-CheckHeader "30. 第二批 UX 优化：报告 Node/npm 实时检测 / Step 4 去重 / 可选项降噪 / 安装方式映射"
+
+    $startHerePath = Join-Path $ScriptRoot "Start-Here.ps1"
+    $startHereText = Get-Content $startHerePath -Raw -Encoding UTF8
+    $configWriterPath = Join-Path $ScriptRoot "lib\config-writer.ps1"
+    $configWriterText = Get-Content $configWriterPath -Raw -Encoding UTF8
+
+    # --- 30a: 报告 Node/npm 实时检测 ---
+    # 提取 Step-GenerateReport 函数体
+    $genReportBody = if ($startHereText -match '(?s)function Step-GenerateReport\s*\{(.*?)(?=function \w+\s*\{)') {
+        $matches[1]
+    } else { "" }
+
+    Assert "30a: Step-GenerateReport 实时调用 Test-NodeJsInstalled" {
+        $genReportBody -match 'Test-NodeJsInstalled'
+    } "Step-GenerateReport 必须调用 Test-NodeJsInstalled 实时检测 Node.js"
+
+    Assert "30a: Step-GenerateReport 实时调用 Test-NpmInstalled" {
+        $genReportBody -match 'Test-NpmInstalled'
+    } "Step-GenerateReport 必须调用 Test-NpmInstalled 实时检测 npm"
+
+    Assert "30a: Step-GenerateReport 不使用 snap.NodeInfo 缓存" {
+        $genReportBody -notmatch '\$snap\.NodeInfo'
+    } "Step-GenerateReport 不得使用 `$snap.NodeInfo 缓存（安装前快照已过期）"
+
+    Assert "30a: Step-GenerateReport 不使用 snap.NpmInfo 缓存" {
+        $genReportBody -notmatch '\$snap\.NpmInfo'
+    } "Step-GenerateReport 不得使用 `$snap.NpmInfo 缓存（安装前快照已过期）"
+
+    # --- 30b: Step 4 去重 ---
+    $writeConfigBody = if ($startHereText -match '(?s)function Step-WriteConfig\s*\{(.*?)(?=function \w+\s*\{)') {
+        $matches[1]
+    } else { "" }
+
+    Assert "30b: Step-WriteConfig 不重复 Write-Success DeepSeek 配置写入成功" {
+        $writeConfigBody -notmatch 'Write-Success\s+"DeepSeek 配置写入成功'
+    } "Step-WriteConfig 不得重复 Write-Success 'DeepSeek 配置写入成功'（lib/config-writer.ps1 已输出）"
+
+    Assert "30b: Step-WriteConfig 不重复 API Key: 输出" {
+        $writeConfigBody -notmatch 'Write-Info\s+"API Key:'
+    } "Step-WriteConfig 不得重复输出 'API Key:'（lib/config-writer.ps1 已输出）"
+
+    Assert "30b: Write-DeepSeekConfig 保留脱敏 Key 输出" {
+        $configWriterText -match 'API Key 已保存'
+    } "lib/config-writer.ps1 Write-DeepSeekConfig 必须保留 'API Key 已保存' 输出"
+
+    # --- 30c: 可选项降噪 ---
+    Assert "30c: 终端不再逐项显示 VS Code 检测" {
+        $startHereText -notmatch 'Write-CheckProgress[\s\S]{0,50}"VS Code"'
+    } "Start-Here.ps1 不得再有 Write-CheckProgress 'VS Code'（可选增强项不应刷屏）"
+
+    Assert "30c: 终端不再逐项显示 Git 检测" {
+        $startHereText -notmatch 'Write-CheckProgress[\s\S]{0,50}"Git"'
+    } "Start-Here.ps1 不得再有 Write-CheckProgress 'Git'（可选增强项不应刷屏）"
+
+    Assert "30c: 终端不再逐项显示 WSL 检测" {
+        $startHereText -notmatch 'Write-CheckProgress[\s\S]{0,50}"WSL"'
+    } "Start-Here.ps1 不得再有 Write-CheckProgress 'WSL'（可选增强项不应刷屏）"
+
+    Assert "30c: 保留可选增强项汇总" {
+        $startHereText -match '可选增强项'
+    } "Start-Here.ps1 必须保留'可选增强项'汇总段落"
+
+    Assert "30c: VS Code 仍写入日志" {
+        $startHereText -match 'Write-Log\s+"INFO"\s+"VS Code'
+    } "Start-Here.ps1 必须用 Write-Log 记录 VS Code 检测"
+
+    Assert "30c: Git 仍写入日志" {
+        $startHereText -match 'Write-Log\s+"INFO"\s+"Git'
+    } "Start-Here.ps1 必须用 Write-Log 记录 Git 检测"
+
+    Assert "30c: WSL 仍写入日志" {
+        $startHereText -match 'Write-Log\s+"INFO"\s+"WSL'
+    } "Start-Here.ps1 必须用 Write-Log 记录 WSL 检测"
+
+    Assert "30c: VS Code/Git/WSL 不再用 Write-ResultLine 终端输出" {
+        $startHereText -notmatch 'Write-ResultLine\s+"VS Code"' -and
+        $startHereText -notmatch 'Write-ResultLine\s+"Git"' -and
+        $startHereText -notmatch 'Write-ResultLine\s+"WSL"'
+    } "VS Code/Git/WSL 不得再使用 Write-ResultLine 终端输出"
+
+    # --- 30d: 安装方式映射 ---
+    Assert "30d: Convert-ClaudeInstallMethodForReport 函数存在" {
+        $startHereText -match 'function Convert-ClaudeInstallMethodForReport'
+    } "Start-Here.ps1 必须定义 Convert-ClaudeInstallMethodForReport 函数"
+
+    $reportBlock = if ($startHereText -match '(?s)\$reportContent\s*=\s*@"(.*?)"@') {
+        $matches[1]
+    } else { "" }
+
+    Assert "30d: report 模板不直接输出 script:ClaudeInstallMethod" {
+        $reportBlock -notmatch '\$script:ClaudeInstallMethod'
+    } "report 模板不得直接输出 `$script:ClaudeInstallMethod（应使用映射后的 `$installMethodForReport）"
+
+    Assert "30d: report 模板不含 ExternalScript" {
+        $reportBlock -notmatch 'ExternalScript'
+    } "report 模板不得出现 'ExternalScript'（必须映射为用户可读中文）"
+
+    $convertFunc = if ($startHereText -match '(?s)function Convert-ClaudeInstallMethodForReport\s*\{(.*?)(?=^function \w|\Z)') {
+        $matches[1]
+    } else { "" }
+
+    $requiredMethodMappings = @(
+        "official_native",
+        "existing_native",
+        "winget",
+        "npm_npmmirror",
+        "native_local_bin",
+        "npm_global",
+        "final_fallback"
+    )
+    foreach ($method in $requiredMethodMappings) {
+        Assert "30d: 安装方式映射包含 $method" {
+            $convertFunc -match [regex]::Escape($method)
+        } "Convert-ClaudeInstallMethodForReport 必须包含 '$method' 的映射"
+    }
 
     Write-Host ""
 

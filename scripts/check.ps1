@@ -3450,4 +3450,146 @@ if ($mirrorSuccessGuards.Count -lt 2) {
 
 Write-Host "[check] P0-UX anti-regression OK"
 
+# ============================================================
+# P0-UX batch 2 anti-regression: report Node/npm, Step 4 dedup,
+# optional tools noise, install method mapping
+# ============================================================
+Write-Host "[check] P0-UX batch 2 anti-regression (report real-time Node/npm, Step 4 dedup, optional tools noise, install method mapping)"
+
+$startHereText = Get-Content -Path (Join-Path $RootDir "Start-Here.ps1") -Raw -Encoding UTF8
+$configWriterText = Get-Content -Path (Join-Path $RootDir "lib\config-writer.ps1") -Raw -Encoding UTF8
+
+# --- A. report Node/npm 实时检测 ---
+# Step-GenerateReport 函数体提取（用于精确检查）
+$genReportBlock = if ($startHereText -match '(?s)function Step-GenerateReport\s*\{(.*?)(?=function \w+\s*\{)') {
+    $matches[1]
+} else { "" }
+
+# A1. Step-GenerateReport 必须调用 Test-NodeJsInstalled
+if ($genReportBlock -notmatch 'Test-NodeJsInstalled') {
+    throw "Step-GenerateReport must call Test-NodeJsInstalled for real-time Node.js detection"
+}
+
+# A2. Step-GenerateReport 必须调用 Test-NpmInstalled
+if ($genReportBlock -notmatch 'Test-NpmInstalled') {
+    throw "Step-GenerateReport must call Test-NpmInstalled for real-time npm detection"
+}
+
+# A3. Step-GenerateReport 不得使用 $snap.NodeInfo
+if ($genReportBlock -match '\$snap\.NodeInfo') {
+    throw "Step-GenerateReport must NOT use `$snap.NodeInfo (cached from before Node.js install)"
+}
+
+# A4. Step-GenerateReport 不得使用 $snap.NpmInfo
+if ($genReportBlock -match '\$snap\.NpmInfo') {
+    throw "Step-GenerateReport must NOT use `$snap.NpmInfo (cached from before npm install)"
+}
+
+# --- B. Step 4 去重 ---
+# Step-WriteConfig 函数体提取
+$writeConfigBlock = if ($startHereText -match '(?s)function Step-WriteConfig\s*\{(.*?)(?=function \w+\s*\{)') {
+    $matches[1]
+} else { "" }
+
+# B1. Step-WriteConfig 不得重复输出 Write-Success "DeepSeek 配置写入成功"
+if ($writeConfigBlock -match 'Write-Success\s+"DeepSeek 配置写入成功') {
+    throw "Step-WriteConfig must NOT contain Write-Success 'DeepSeek 配置写入成功' (Write-DeepSeekConfig already outputs this)"
+}
+
+# B2. Step-WriteConfig 不得重复输出 "API Key:"
+if ($writeConfigBlock -match 'Write-Info\s+"API Key:') {
+    throw "Step-WriteConfig must NOT repeat 'API Key:' output (Write-DeepSeekConfig already outputs this)"
+}
+
+# B3. Write-DeepSeekConfig 必须保留脱敏 Key 输出
+if ($configWriterText -notmatch 'API Key 已保存') {
+    throw "Write-DeepSeekConfig must retain 'API Key 已保存' output"
+}
+
+# --- C. 可选项降噪 ---
+# C1. 默认终端输出不得有 "正在检测 VS Code"
+if ($startHereText -match 'Write-CheckProgress[\s\S]{0,50}"VS Code"') {
+    throw "Start-Here.ps1 must NOT show '正在检测 VS Code' in terminal (Write-CheckProgress with VS Code)"
+}
+
+# C2. 默认终端输出不得有 "正在检测 Git"
+if ($startHereText -match 'Write-CheckProgress[\s\S]{0,50}"Git"') {
+    throw "Start-Here.ps1 must NOT show '正在检测 Git' in terminal (Write-CheckProgress with Git)"
+}
+
+# C3. 默认终端输出不得有 "正在检测 WSL"
+if ($startHereText -match 'Write-CheckProgress[\s\S]{0,50}"WSL"') {
+    throw "Start-Here.ps1 must NOT show '正在检测 WSL' in terminal (Write-CheckProgress with WSL)"
+}
+
+# C4. 必须保留 "可选增强项" 汇总
+if ($startHereText -notmatch '可选增强项') {
+    throw "Start-Here.ps1 must retain '可选增强项' summary section"
+}
+
+# C5. Git/VS Code/WSL 缺失不得标成 ERROR
+#    VS Code 检测不再使用 Write-ResultLine 在终端输出
+if ($startHereText -match 'Write-ResultLine\s+"VS Code"') {
+    throw "Start-Here.ps1 must NOT output VS Code as Write-ResultLine (must be Write-Log only)"
+}
+if ($startHereText -match 'Write-ResultLine\s+"Git"') {
+    throw "Start-Here.ps1 must NOT output Git as Write-ResultLine (must be Write-Log only)"
+}
+# WSL: allow Write-Log only, not Write-ResultLine
+if ($startHereText -match 'Write-ResultLine\s+"WSL"') {
+    throw "Start-Here.ps1 must NOT output WSL as Write-ResultLine (must be Write-Log only)"
+}
+
+# VS Code/Git/WSL 必须仍有 Write-Log 记录
+if ($startHereText -notmatch 'Write-Log\s+"INFO"\s+"VS Code') {
+    throw "Start-Here.ps1 must log VS Code detection via Write-Log"
+}
+if ($startHereText -notmatch 'Write-Log\s+"INFO"\s+"Git') {
+    throw "Start-Here.ps1 must log Git detection via Write-Log"
+}
+if ($startHereText -notmatch 'Write-Log\s+"INFO"\s+"WSL') {
+    throw "Start-Here.ps1 must log WSL detection via Write-Log"
+}
+
+# --- D. 安装方式映射 ---
+# D1. Convert-ClaudeInstallMethodForReport 函数必须存在
+if ($startHereText -notmatch 'function Convert-ClaudeInstallMethodForReport') {
+    throw "Start-Here.ps1 must define Convert-ClaudeInstallMethodForReport function"
+}
+
+# D2. report 模板不得直接输出 $script:ClaudeInstallMethod
+#     (应该使用经过映射的 $installMethodForReport)
+$reportTemplate = if ($startHereText -match '(?s)\$reportContent\s*=\s*@"(.*?)"@') {
+    $matches[1]
+} else { "" }
+if ($reportTemplate -match '\$script:ClaudeInstallMethod') {
+    throw "Report template must NOT directly output `$script:ClaudeInstallMethod (use `$installMethodForReport)"
+}
+
+# D3. report 模板不得包含 ExternalScript
+if ($reportTemplate -match 'ExternalScript') {
+    throw "Report template must NOT contain 'ExternalScript' (must be mapped to readable Chinese)"
+}
+
+# D4. 映射中必须包含关键方法
+$convertFuncBody = if ($startHereText -match '(?s)function Convert-ClaudeInstallMethodForReport\s*\{(.*?)(?=^function \w|\Z)') {
+    $matches[1]
+} else { "" }
+$requiredMethods = @(
+    "official_native",
+    "existing_native",
+    "winget",
+    "npm_npmmirror",
+    "native_local_bin",
+    "npm_global",
+    "final_fallback"
+)
+foreach ($method in $requiredMethods) {
+    if ($convertFuncBody -notmatch [regex]::Escape($method)) {
+        throw "Convert-ClaudeInstallMethodForReport must include mapping for '$method'"
+    }
+}
+
+Write-Host "[check] P0-UX batch 2 anti-regression OK"
+
 Write-Host "[check] OK"

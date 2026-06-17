@@ -150,6 +150,45 @@ function Pause-ForNextStep {
     Read-Host "按回车键继续..."
 }
 
+function Convert-ClaudeInstallMethodForReport {
+    <#
+    .SYNOPSIS
+        将内部安装方式值映射为用户可读的中文描述。
+        避免在 report 中直接暴露 ExternalScript/Application/Cmdlet 等 PowerShell 内部词。
+    .PARAMETER Method
+        $script:ClaudeInstallMethod 的值。
+    .PARAMETER Source
+        Test-ClaudeCommandExisting 返回的 Source 字段。
+    .PARAMETER Path
+        Test-ClaudeCommandExisting 返回的 Path 字段。
+    #>
+    param(
+        [string]$Method,
+        [string]$Source = "",
+        [string]$Path = ""
+    )
+
+    switch -Regex ($Method) {
+        '^official_native$' { return 'Claude 官方 Native Install' }
+        '^existing_native$' { return '已存在：Claude 官方 Native Install' }
+        '^winget$' { return 'winget 安装' }
+        '^npm_npmmirror$' { return 'npm 镜像安装' }
+        '^existing$' { return '已存在：系统 PATH 中检测到 Claude Code' }
+        '^native_local_bin$' { return 'Claude 官方 Native Install' }
+        '^npm_global$' { return 'npm 全局安装' }
+        '^final_fallback$' { return '最终验证检测到 Claude Code' }
+        '^skipped_existing$' { return '已存在，跳过安装' }
+        '^skipped_test_safe' { return '测试安全模式（未执行真实安装）' }
+        default {
+            if ($Source -eq 'ExternalScript') { return '系统 PATH 中检测到 Claude Code' }
+            if ($Path -match '\\AppData\\Roaming\\npm\\claude\.cmd$') { return 'npm 全局安装' }
+            if ($Path -match '\\\.local\\bin\\claude\.exe$') { return 'Claude 官方 Native Install' }
+            if ($Method) { return $Method }
+            return '未知'
+        }
+    }
+}
+
 function Write-ApiKeySkipGuidance {
     <#
     .SYNOPSIS
@@ -221,7 +260,7 @@ function Step-CheckEnvironment {
     # ============================================================
     # 最低要求检测（硬性判断）
     # ============================================================
-    Write-CheckProgress -Current 1 -Total 10 -Name "最低系统要求"
+    Write-CheckProgress -Current 1 -Total 7 -Name "最低系统要求"
     Write-Host ""
 
     $minReq = Test-MinimumRequirements
@@ -306,7 +345,7 @@ function Step-CheckEnvironment {
     }
 
     Write-Host ""
-    Write-CheckProgress -Current 2 -Total 10 -Name "DeepSeek 网络"
+    Write-CheckProgress -Current 2 -Total 7 -Name "DeepSeek 网络"
     Write-Host ""
 
     # 网络检测
@@ -330,7 +369,7 @@ function Step-CheckEnvironment {
     }
 
     # Claude Code 检测
-    Write-CheckProgress -Current 3 -Total 10 -Name "Claude Code"
+    Write-CheckProgress -Current 3 -Total 7 -Name "Claude Code"
     $claudeVersion = Test-ClaudeInstalled
     if ($claudeVersion) {
         Write-ResultLine "Claude Code" "OK" "已安装: $claudeVersion"
@@ -347,7 +386,7 @@ function Step-CheckEnvironment {
     $nativePreCheckOk = (Test-Path $nativeExePath) -and $nativePathCheck.Contains
 
     # Node.js 检测
-    Write-CheckProgress -Current 4 -Total 10 -Name "Node.js"
+    Write-CheckProgress -Current 4 -Total 7 -Name "Node.js"
     $nodeInfo = Test-NodeJsInstalled
     if ($nodeInfo.Installed) {
         if ($nodeInfo.IsSupported) {
@@ -367,7 +406,7 @@ function Step-CheckEnvironment {
     }
 
     # npm 检测
-    Write-CheckProgress -Current 5 -Total 10 -Name "npm"
+    Write-CheckProgress -Current 5 -Total 7 -Name "npm"
     $npmInfo = Test-NpmInstalled
     if ($npmInfo.Installed) {
         Write-ResultLine "npm" "OK" $npmInfo.Version
@@ -382,7 +421,7 @@ function Step-CheckEnvironment {
     }
 
     # winget 检测
-    Write-CheckProgress -Current 6 -Total 10 -Name "winget"
+    Write-CheckProgress -Current 6 -Total 7 -Name "winget"
     $wingetOk = Test-CommandAvailable -CommandName "winget"
     if ($wingetOk) {
         Write-ResultLine "winget" "OK" "可用"
@@ -391,43 +430,29 @@ function Step-CheckEnvironment {
         Write-ResultLine "winget" "WARN" "未检测到（不影响主流程）"
     }
 
-    # VS Code
-    Write-CheckProgress -Current 7 -Total 10 -Name "VS Code"
+    # VS Code（可选增强项，只在日志记录，不在终端逐项刷屏）
     $codeVersion = Test-CodeInstalled
-    if ($codeVersion) {
-        $codeShort = ($codeVersion -split "`n")[0]
-        Write-ResultLine "VS Code" "OK" $codeShort
-    }
-    else {
-        Write-ResultLine "VS Code" "SKIP" "未检测到 code 命令（可选增强项）"
-    }
+    Write-Log "INFO" "VS Code: $(if ($codeVersion) { ($codeVersion -split "`n")[0] } else { '未检测到（可选增强项）' })"
 
-    # Git
-    Write-CheckProgress -Current 8 -Total 10 -Name "Git"
+    # Git（可选增强项，只在日志记录，不在终端逐项刷屏）
     $gitVersion = Test-GitInstalled
-    if ($gitVersion) {
-        Write-ResultLine "Git" "OK" $gitVersion
-    }
-    else {
-        Write-ResultLine "Git" "SKIP" "未安装（可选）；Git 不是安装 Claude Code 的硬性要求，但推荐安装"
-    }
+    Write-Log "INFO" "Git: $(if ($gitVersion) { $gitVersion } else { '未安装（可选）' })"
 
-    # WSL
-    Write-CheckProgress -Current 9 -Total 10 -Name "WSL"
+    # WSL（可选增强项，只在日志记录，不在终端逐项刷屏）
     if ($DeepWslCheck) {
         # 深度 WSL 检测（仅 -DeepWslCheck 或一键诊断时执行）
         $wslInfo = Test-WslInstalled
         if ($wslInfo.Installed) {
             $ubuntuInfo = Test-UbuntuInWsl -WslInfo $wslInfo
             if ($ubuntuInfo.Exists) {
-                Write-ResultLine "WSL Ubuntu" "OK" "已安装"
+                Write-Log "INFO" "WSL Ubuntu: 已安装"
             }
             else {
-                Write-ResultLine "WSL" "OK" "已安装（无 Ubuntu 发行版）"
+                Write-Log "INFO" "WSL: 已安装（无 Ubuntu 发行版）"
             }
         }
         else {
-            Write-ResultLine "WSL" "SKIP" "未启用或不可用（高级选项，不影响 Windows 原生安装）"
+            Write-Log "INFO" "WSL: 未启用或不可用（高级选项，不影响 Windows 原生安装）"
         }
     }
     else {
@@ -438,11 +463,11 @@ function Step-CheckEnvironment {
             Status    = "skipped_default"
             Message   = "默认一键安装跳过 WSL 深度检测（可选）"
         }
-        Write-ResultLine "WSL" "INFO" "默认跳过深度检测（可选，不影响安装）"
+        Write-Log "INFO" "WSL: 默认跳过深度检测（可选，不影响安装）"
     }
 
     # 配置文件
-    Write-CheckProgress -Current 10 -Total 10 -Name "Claude 配置"
+    Write-CheckProgress -Current 7 -Total 7 -Name "Claude 配置"
     $configInfo = Test-ClaudeConfigExists
     if ($configInfo.Exists) {
         if ($configInfo.IsValid) {
@@ -713,8 +738,7 @@ function Step-WriteConfig {
     $writeResult = Write-DeepSeekConfig -ApiKey $ApiKey -NonInteractive:$NonInteractive
 
     if ($writeResult.Success) {
-        Write-Success "DeepSeek 配置写入成功！"
-        Write-Info "API Key: $(Mask-ApiKey -Key $ApiKey)"
+        # Write-DeepSeekConfig 内部已输出完整的成功信息和脱敏 Key，这里只做状态更新
         $script:ConfigWritten = $true
         Update-CcdiState -Updates @{
             configPath     = $writeResult.ConfigPath
@@ -926,20 +950,20 @@ function Step-GenerateReport {
     # Claude Code 版本：允许重新检测一次（安装步骤可能已改变状态）
     $claudeVer = Test-ClaudeInstalled
 
-    # 以下字段优先使用缓存（环境检测结果不会因安装而改变）
+    # VS Code / WSL 可使用缓存（本工具不会安装它们），Node.js/npm 必须实时检测
     if ($snap) {
         $codeVer = if ($snap.CodeVersion) { $snap.CodeVersion } else { Test-CodeInstalled }
         $wslInfo = if ($snap.WslInfo) { $snap.WslInfo } else { Test-WslInstalled }
-        $nodeInfo = if ($snap.NodeInfo) { $snap.NodeInfo } else { Test-NodeJsInstalled }
-        $npmInfo = if ($snap.NpmInfo) { $snap.NpmInfo } else { Test-NpmInstalled }
     }
     else {
         # fallback: EnvSnapshot 不存在时（如旧版调用路径），回退到实时检测
         $codeVer = Test-CodeInstalled
         $wslInfo = Test-WslInstalled
-        $nodeInfo = Test-NodeJsInstalled
-        $npmInfo = Test-NpmInstalled
     }
+
+    # Node.js/npm 必须实时检测：安装流程可能刚刚安装了 Node.js，缓存已过期
+    $nodeInfo = Test-NodeJsInstalled
+    $npmInfo = Test-NpmInstalled
     $maskedKey = Mask-ApiKey -Key $ApiKey
 
     $apiTestStatus = if ($script:ApiTestPassed) { "通过" }
@@ -1056,6 +1080,10 @@ function Step-GenerateReport {
     }
     $testSafeNotice = if ($script:TestSafeMode) { "测试安全模式流程完成，不代表真实安装/API 已验证。" } else { "" }
 
+    # 安装方式映射：内部值 → 用户可读中文
+    $claudeCmdCheck = Test-ClaudeCommandExisting
+    $installMethodForReport = Convert-ClaudeInstallMethodForReport -Method $script:ClaudeInstallMethod -Source $claudeCmdCheck.Source -Path $claudeCmdCheck.Path
+
     $reportContent = @"
 $reportTitle
 ======================================
@@ -1091,7 +1119,7 @@ PowerShell 版本: $($psInfo.Version) ($($psInfo.Edition))
 --------------------------------------
 Claude Code: $(if ($script:TestSafeMode) { "测试安全模式未执行真实安装" } elseif ($claudeVer) { "已安装" } else { "未安装" })
 Claude Code 版本: $(if ($claudeVer) { $claudeVer } else { "-" })
-安装方式: $($script:ClaudeInstallMethod)
+安装方式: $installMethodForReport
 测试安全模式: $(if ($script:TestSafeMode) { "是（未执行安装/更新/卸载）" } else { "否" })
 VS Code: $(if ($codeVer) { "已检测" } else { "未检测" })
 WSL: $(if ($wslInfo.Installed) { "已检测" } else { "未检测" })
