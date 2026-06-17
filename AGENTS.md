@@ -7,9 +7,9 @@
 ## Active Work
 
 - **Branch**: `fix/v1.3.3-native-path-doctor-ux`
-- **Status**: 遗留收口批（feedback/report/package residuals）完成，全部验收通过
+- **Status**: 安装进度统一对齐完成，全部验收通过
 - **Next**: 真机验收 → 合并到 main → 打 v1.3.3 release ZIP
-- **Latest commit**: (待提交) fix(ux): close feedback/report/package residuals
+- **Latest commit**: 8a3135d fix(ux): align install progress feedback across install methods
 
 ---
 
@@ -19,7 +19,8 @@
 
 | 日期 | 内容 | Commit |
 |------|------|--------|
-| 2026-06-17 | 遗留收口 — npm shim 冲突修复/support-feedback 单文件反馈/terminal transcript/ZIP docs 白名单/售后口径统一 | (待提交) |
+| 2026-06-18 | 安装进度统一对齐 — 所有安装路径紧凑进度+SlowNotice+300s 超时/winget CC 改用 Captured/删除旧等待句 | 8a3135d |
+| 2026-06-17 | 遗留收口 — npm shim 冲突修复/support-feedback 单文件反馈/terminal transcript/ZIP docs 白名单/售后口径统一 | 82e1c20 |
 | 2026-06-17 | P0 真机 UX/diagnostic hotfix 第二批 — Node 提示/winget 去英文/API Key 暂停/Claude 启动提示/ps1 误执行 | 1a8d936 |
 | 2026-06-16 | v1.3.3 acceptance finalized — 验收通过，最终产物记录 | f44fe4e |
 | 2026-06-15 | UX 文案收口 — PATH/ExternalScript 清零 + 双文件 0 容忍扫描 | 23c7249 |
