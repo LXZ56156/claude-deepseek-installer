@@ -705,6 +705,98 @@ try {
         }
     }
 
+
+    Write-Check "v1.3.3 P5: fake npm shim (.ps1 + .cmd) - verify .ps1 not executed"
+    $shimTestDir = Join-Path $tempRoot "shim-test"
+    New-Item -ItemType Directory -Path $shimTestDir -Force | Out-Null
+
+    # Create fake claude.ps1 that writes a sentinel if executed (must NOT be called)
+    $fakePs1Path = Join-Path $shimTestDir "claude.ps1"
+    $fakePs1Content = @'
+# If this runs, it means .ps1 was executed (BUG)
+$sentinelFile = Join-Path $env:TEMP "PS1_SHIM_SHOULD_NOT_RUN_${PID}.txt"
+"PS1_SHIM_SHOULD_NOT_RUN" | Set-Content -Path $sentinelFile -Encoding UTF8
+Start-Process notepad.exe -ArgumentList $PSCommandPath
+Write-Output "2.1.179 (Claude Code)"
+'@
+    Set-Content -Path $fakePs1Path -Encoding UTF8 -Value $fakePs1Content
+
+    # Create fake claude.cmd that returns a valid version
+    $fakeCmdPath = Join-Path $shimTestDir "claude.cmd"
+    "@echo off`r`necho 2.1.179 (Claude Code)" | Set-Content -Path $fakeCmdPath -Encoding ASCII
+
+    # Temporarily prepend shimTestDir to PATH so Get-Command finds both shims
+    $oldPath = $env:Path
+    $env:Path = "$shimTestDir;$oldPath"
+    try {
+        # Reload libraries (Get-ClaudeCommandInventory etc.) after PATH change
+        Push-Location $releaseRoot
+        try {
+            . .\lib\bootstrap.ps1
+            Initialize-CcdiScript -ScriptName "shim-test" | Out-Null
+
+            # Run Get-ClaudeCommandInventory - this is the function that must NOT execute .ps1
+            $inventory = Get-ClaudeCommandInventory
+
+            # Assertions
+            if (-not $inventory) {
+                throw "Get-ClaudeCommandInventory returned null"
+            }
+            if ($inventory.Candidates.Count -eq 0) {
+                throw "Get-ClaudeCommandInventory found no candidates"
+            }
+
+            # Check no candidate executed the .ps1 directly
+            # The .ps1 candidate may be marked Usable=true because probing used sibling claude.cmd
+            # The real check is: no sentinel file was created
+            $ps1Candidate = $inventory.Candidates | Where-Object { $_.Path -eq $fakePs1Path }
+            if ($ps1Candidate) {
+                # If Error contains skip text, the .ps1 was properly skipped
+                # If Usable but no skip text, check if sentinel exists (was .ps1 directly run)
+                if ($ps1Candidate.Error -match 'PowerShell shim|跳过') {
+                    Write-Host "[simulate]   ps1 candidate properly skipped: $($ps1Candidate.Error)" -ForegroundColor Green
+                }
+                elseif ($ps1Candidate.Usable) {
+                    # Usable=true through sibling .cmd probe is fine;
+                    # only fail if a sentinel proves direct .ps1 execution
+                    $sentinelCheck = Get-ChildItem -Path $env:TEMP -Filter "PS1_SHIM_SHOULD_NOT_RUN_*.txt" -ErrorAction SilentlyContinue
+                    if ($sentinelCheck) {
+                        throw "claude.ps1 was executed directly! Sentinel file found: $($sentinelCheck.FullName)"
+                    }
+                    Write-Host "[simulate]   ps1 candidate usable via sibling .cmd probe: Usable=$($ps1Candidate.Usable), Error=$($ps1Candidate.Error)" -ForegroundColor Green
+                }
+                Write-Host "[simulate]   ps1 candidate handled: Usable=$($ps1Candidate.Usable), Risk=$($ps1Candidate.Risk)" -ForegroundColor Green
+            }
+
+            # Check the .cmd candidate was found and usable
+            $cmdCandidate = $inventory.Candidates | Where-Object { $_.Path -eq $fakeCmdPath }
+            if (-not $cmdCandidate) {
+                throw "Get-ClaudeCommandInventory did not find claude.cmd"
+            }
+            if (-not $cmdCandidate.Usable) {
+                throw "Get-ClaudeCommandInventory found claude.cmd but not usable: Error=$($cmdCandidate.Error)"
+            }
+            Write-Host "[simulate]   cmd candidate: Usable=$($cmdCandidate.Usable), Version=$($cmdCandidate.Version)" -ForegroundColor Green
+
+            # Check no sentinel file was created
+            $sentinelFiles = Get-ChildItem -Path $env:TEMP -Filter "PS1_SHIM_SHOULD_NOT_RUN_*.txt" -ErrorAction SilentlyContinue
+            if ($sentinelFiles) {
+                throw "claude.ps1 was executed directly! Sentinel file found: $($sentinelFiles.FullName)"
+            }
+
+            # Check no ".Count" errors in the output
+            Write-Host "[simulate]   shim test passed: .ps1 not executed, .cmd usable" -ForegroundColor Green
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    finally {
+        $env:Path = $oldPath
+        # Cleanup sentinel files
+        Get-ChildItem -Path $env:TEMP -Filter "PS1_SHIM_SHOULD_NOT_RUN_*.txt" -ErrorAction SilentlyContinue | Remove-Item -Force
+    }
+
     Assert-NoBadRuntimeText -Runs $runs -ReleaseRoot $releaseRoot -DummyKey $DummyApiKey
 
     Write-Host "[simulate] OK" -ForegroundColor Green

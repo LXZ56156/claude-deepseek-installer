@@ -346,6 +346,7 @@ function Check-Commands {
 
     # --- Claude Code CLI + 命令来源（只调用一次 Get-ClaudeCommandInventory）---
     $inventory = $null
+    $claudeCliOk = $false  # v1.3.3 P5: 跟踪 CLI 是否 OK，用于分级 命令来源
     try {
         $inventory = Get-ClaudeCommandInventory
     }
@@ -356,6 +357,7 @@ function Check-Commands {
 
     # Claude Code CLI 判断：优先使用 inventory
     if ($inventory -and $inventory.Active -and $inventory.Active.Usable) {
+        $claudeCliOk = $true
         Add-CheckResult "Claude Code CLI" "OK" $inventory.Active.Version
 
         # claude doctor 不自动运行
@@ -378,6 +380,7 @@ function Check-Commands {
         # inventory 不可用或没有候选，fallback 到旧检测
         $claudeVersion = Test-ClaudeInstalled
         if ($claudeVersion) {
+            $claudeCliOk = $true
             Add-CheckResult "Claude Code CLI" "OK" $claudeVersion
 
             Add-CheckResult "claude doctor" "INFO" "未自动运行（Claude Code doctor 在脚本/重定向环境中不会稳定输出；请按需手动运行）"
@@ -468,7 +471,12 @@ function Check-Commands {
     }
     else {
         # inventory 调用失败
-        Add-CheckResult "Claude 命令来源" "WARN" "无法收集 Claude 命令来源信息"
+        if ($claudeCliOk) {
+            Add-CheckResult "Claude 命令来源" "INFO" "命令来源详情收集不完整，不影响当前使用"
+        }
+        else {
+            Add-CheckResult "Claude 命令来源" "WARN" "无法收集 Claude 命令来源信息"
+        }
     }
 
     # npm 安装风险配置检测

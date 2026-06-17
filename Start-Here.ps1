@@ -1480,13 +1480,26 @@ Write-Host '[信息] 正在启动 Claude Code...' -ForegroundColor Gray
 Write-Host ''
 
 Write-Host '--------------------------------------------------------------' -ForegroundColor Yellow
-Write-Host '  [提示] 如果下方出现英文选择界面：' -ForegroundColor Yellow
+Write-Host '  [提示] Claude Code 首次启动可能出现以下界面：' -ForegroundColor Yellow
 Write-Host '' -ForegroundColor Yellow
-Write-Host '  "Claude Code will be able to read, edit, and execute files here."' -ForegroundColor Gray
-Write-Host '' -ForegroundColor Yellow
-Write-Host '  这是 Claude Code 在问你：是否信任当前文件夹？' -ForegroundColor Yellow
-Write-Host '  这个测试项目由本工具创建，仅用于验证 Claude Code 是否能正常启动。' -ForegroundColor Green
-Write-Host '  如你确认当前目录是测试项目，直接按回车即可继续。' -ForegroundColor Green
+Write-Host '  1. 颜色/主题选择：' -ForegroundColor White
+Write-Host '     如果看到 "Choose the text style that looks best with your terminal"' -ForegroundColor Gray
+Write-Host '     这是 Claude Code 第一次启动的颜色主题选择。' -ForegroundColor Yellow
+Write-Host '     可以直接按回车使用默认项，或选择 Dark mode。' -ForegroundColor Green
+Write-Host ''
+Write-Host '  2. 安全提示：' -ForegroundColor White
+Write-Host '     如果看到 "Security notes"' -ForegroundColor Gray
+Write-Host '     这是 Claude Code 的安全提示。' -ForegroundColor Yellow
+Write-Host '     阅读后按 Enter 继续。' -ForegroundColor Green
+Write-Host ''
+Write-Host '  3. 信任当前文件夹：' -ForegroundColor White
+Write-Host '     如果看到 "Claude Code will be able to read, edit, and execute files here."' -ForegroundColor Gray
+Write-Host '     这是 Claude Code 在问你是否信任当前文件夹。' -ForegroundColor Yellow
+Write-Host '     确认当前目录是 ClaudeCode-Test 测试项目，按回车继续。' -ForegroundColor Green
+Write-Host ''
+Write-Host '  进入 Claude Code 后可以输入：' -ForegroundColor White
+Write-Host '     请用一句话说明当前项目是做什么的。' -ForegroundColor Gray
+Write-Host '  如果模型能回复，说明基础可用。' -ForegroundColor Green
 Write-Host '--------------------------------------------------------------' -ForegroundColor Yellow
 Write-Host ''
 
@@ -1823,8 +1836,8 @@ function Show-CompletionMenu {
 
                 if ($started) {
                     Write-Success "已打开 Claude Code 测试终端。"
-                    Write-Info "新窗口会自动进入测试项目并运行 claude。"
-                    Write-Info "如新窗口启动失败，请选择 [4] 运行一键诊断。"
+                    Write-Info "接下来请看新打开的 Claude Code 窗口。"
+                    Write-Info "本窗口可以输入 5 退出，或输入 4 运行诊断。"
                 }
                 else {
                     Write-Warning "自动启动测试终端失败。"
@@ -2012,8 +2025,9 @@ function Start-LazyInstall {
     else {
         Pause-ForNextStep -Force -Messages @(
             "Claude Code 安装验证已通过。",
-            "下一步将配置 DeepSeek API Key。",
-            "你需要在浏览器中复制自己的 DeepSeek API Key。"
+            "下一步将打开 DeepSeek API Key 页面。",
+            "现在不用粘贴 API Key；请先按回车继续。",
+            "下一屏会让你选择 [1] 我已复制 Key，开始粘贴。"
         )
     }
 

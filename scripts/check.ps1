@@ -1334,9 +1334,9 @@ if ($claudeInstallText -notmatch 'Stop-Process.*-Force') {
     throw "Invoke-VisibleInstallCommand must have Stop-Process fallback"
 }
 
-# 21. Install-NodeJsViaWinget delegates to Invoke-VisibleInstallCommand (NOT Invoke-CommandSafe)
-if ($claudeInstallText -notmatch 'Install-NodeJsViaWinget[\s\S]{0,800}Invoke-VisibleInstallCommand') {
-    throw "Install-NodeJsViaWinget must delegate to Invoke-VisibleInstallCommand"
+# 21. Install-NodeJsViaWinget delegates to Invoke-VisibleInstallCommand or Invoke-InstallCommandCaptured (NOT Invoke-CommandSafe)
+if ($claudeInstallText -notmatch 'Install-NodeJsViaWinget[\s\S]{0,3000}Invoke-(VisibleInstallCommand|InstallCommandCaptured)') {
+    throw "Install-NodeJsViaWinget must delegate to Invoke-VisibleInstallCommand or Invoke-InstallCommandCaptured"
 }
 
 # 22. Install-ClaudeCodeNpmMirror must NOT use Invoke-CommandSafe for npm install
@@ -1639,7 +1639,7 @@ foreach ($wt in $waitTexts) {
 if ($startHereText -notmatch "Claude Code 安装验证已通过") {
     throw "Start-LazyInstall must show context message after Step 2 install success"
 }
-if ($startHereText -notmatch "下一步将配置 DeepSeek API Key") {
+if ($startHereText -notmatch "下一步将打开 DeepSeek API Key 页面") {
     throw "Start-LazyInstall must explain next step (DeepSeek API Key config) after Step 2"
 }
 if ($startHereText -notmatch "检测到 Claude Code 已安装，继续配置 DeepSeek") {
@@ -3815,5 +3815,56 @@ if ($startHereText -match 'Write-Success\s+"安装来源:\s*\$\(\$finalClaude\.S
 }
 
 Write-Host "[check] P0-UX batch 2 UX copy polish v3 OK"
+
+Write-Host "[check] v1.3.3 P5 anti-regression: Node prompt + winget params + .ps1 skip + .Count guards"
+$claudeInstallText = Get-Content (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+$startHereText = Get-Content (Join-Path $RootDir "Start-Here.ps1") -Raw -Encoding UTF8
+$doctorText = Get-Content (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+$repairDepsText = Get-Content (Join-Path $RootDir "repair-deps.ps1") -Raw -Encoding UTF8
+
+# 1. 用户可见源码中不能再出现 "这会修改系统环境"
+$allSourceText = $claudeInstallText + $startHereText + $doctorText + $repairDepsText
+if ($allSourceText -match [regex]::Escape("这会修改系统环境")) {
+    throw "仍包含 '这会修改系统环境'"
+}
+Write-Host "[check]   1. '这会修改系统环境' absent"
+
+# 2. Install-NodeJsViaWinget 必须包含 --id OpenJS.NodeJS.LTS --exact --source winget
+if ($claudeInstallText -notmatch 'install.*--id.*OpenJS\.NodeJS\.LTS.*--exact') {
+    throw "Install-NodeJsViaWinget 缺少 --id OpenJS.NodeJS.LTS --exact"
+}
+if ($claudeInstallText -notmatch '"--source"[\s\S]{0,20}"winget"') {
+    throw "Install-NodeJsViaWinget 缺少 --source winget"
+}
+Write-Host "[check]   2. Install-NodeJsViaWinget winget params OK"
+
+# 3. Node winget 分支必须包含中文UAC提示关键词
+$nodeWingetArea = if ($claudeInstallText -match '(?s)function Install-NodeJsViaWinget\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+if ($nodeWingetArea -notmatch '权限确认') {
+    throw "Install-NodeJsViaWinget 缺少 '权限确认'"
+}
+if ($nodeWingetArea -notmatch '任务栏') {
+    throw "Install-NodeJsViaWinget 缺少 '任务栏'"
+}
+if ($nodeWingetArea -notmatch "选择.是") {
+    throw "Install-NodeJsViaWinget 缺少 '选择'是''"
+}
+Write-Host "[check]   3. Node winget UAC hints OK"
+
+# 4. Get-ClaudeCommandInventory 不能直接执行 claude.ps1
+$invArea = if ($claudeInstallText -match '(?s)function Get-ClaudeCommandInventory\s*\{.*?(?=^function \w+\s*\{|\Z)') { $matches[0] } else { "" }
+# 确保函数体中有 .ps1 跳过逻辑（GetExtension + 同目录 claude.cmd）
+if ($invArea -notmatch 'GetExtension.*\.ps1' -or $invArea -notmatch '跳过.*claude\.ps1|claude\.ps1.*探测|ps1.*skip|劈过.*ps1') {
+    throw "Get-ClaudeCommandInventory 未处理 .ps1 跳过逻辑"
+}
+Write-Host "[check]   4. Get-ClaudeCommandInventory .ps1 skip OK"
+
+# 5. Where-Object + .Count 场景必须使用 @(...) 包裹（至少 errorCandidates / usableOthers）
+if ($invArea -notmatch '@\(\$inventory\.Candidates\s*\|') {
+    throw "Get-ClaudeCommandInventory 缺少 @(...) 包裹 Where-Object 结果"
+}
+Write-Host "[check]   5. @(...) guards for .Count OK"
+
+Write-Host "[check] v1.3.3 P5 anti-regression OK"
 
 Write-Host "[check] OK"

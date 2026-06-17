@@ -590,7 +590,7 @@ x-api-key: $TestApiKey
 
     # Start-LazyInstall Step 2 后有上下文文案
     Assert "Step 2 后有 Claude Code 安装验证已通过" { $startHereText -match "Claude Code 安装验证已通过" } "缺失安装成功文案"
-    Assert "Step 2 后有下一步说明" { $startHereText -match "下一步将配置 DeepSeek API Key" } "缺失下一步说明"
+    Assert "Step 2 后有下一步说明" { $startHereText -match "下一步将打开 DeepSeek API Key 页面" } "缺失下一步说明"
     Assert "Step 2 后有已安装检测" { $startHereText -match "检测到 Claude Code 已安装，继续配置 DeepSeek" } "缺失已安装检测"
 
     # configure-deepseek.ps1 提示
@@ -1480,13 +1480,13 @@ x-api-key: $TestApiKey
     } "Start-Here.ps1 不得包含'100% 安全'"
 
     # --- 27b: 新信任提示文案 ---
-    Assert "27b: 含新信任提示'由本工具创建，仅用于验证'" {
-        $startHereText -match [regex]::Escape('这个测试项目由本工具创建，仅用于验证 Claude Code 是否能正常启动')
+    Assert "27b: 含新信任提示'确认当前目录是 ClaudeCode-Test 测试项目'" {
+        $startHereText -match [regex]::Escape('确认当前目录是 ClaudeCode-Test 测试项目')
     } "Start-ClaudeTestTerminal 必须包含新信任提示"
 
-    Assert "27b: 含'如你确认当前目录是测试项目，直接按回车'" {
-        $startHereText -match [regex]::Escape('如你确认当前目录是测试项目，直接按回车即可继续')
-    } "Start-ClaudeTestTerminal 必须包含条件确认提示"
+    Assert "27b: 含'Claude Code 首次启动可能出现以下界面'" {
+        $startHereText -match [regex]::Escape('Claude Code 首次启动可能出现以下界面')
+    } "Start-ClaudeTestTerminal 必须包含首次启动引导标题"
 
     # --- 27c: 完成页 freshShellFail 但 pathOk 文案降噪 ---
     Assert "27c: 含'安装和配置已完成，建议启动测试确认'" {
@@ -2193,6 +2193,61 @@ x-api-key: $TestApiKey
 
     # --- 32f: PATH 在用户可见输出中最小化 ---
     Assert "32f: claude-install.ps1 PATH-free (PATH check covered by 32b)" { $true } ""
+
+    Write-Host ""
+
+    # ============================================================
+    # 33. v1.3.3 P5 本批修复防回归检查（API Key 暂停/Claude 测试终端/Node 安装/黑名单）
+    # ============================================================
+    Write-CheckHeader "33. v1.3.3 P5 本批修复：API Key 暂停/Claude 测试终端/Node 安装/黑名单"
+
+    $startHerePath = Join-Path $ScriptRoot "Start-Here.ps1"
+    $startHereText = Get-Content $startHerePath -Raw -Encoding UTF8
+    $claudeInstallPath = Join-Path $ScriptRoot "lib\claude-install.ps1"
+    $claudeInstallText = Get-Content $claudeInstallPath -Raw -Encoding UTF8
+
+    # --- 33a: API Key 前暂停必须包含 "现在不用粘贴 API Key" ---
+    Assert "33a: API Key 暂停包含 '现在不用粘贴 API Key'" {
+        $startHereText -match [regex]::Escape("现在不用粘贴 API Key")
+    } "Start-Here.ps1 API Key 暂停提示缺少 '现在不用粘贴 API Key'"
+
+    Assert "33a: API Key 暂停包含 '按回车后才进入获取/粘贴流程'" {
+        $startHereText -match [regex]::Escape("下一屏会让你选择 [1] 我已复制 Key，开始粘贴")
+    } "Start-Here.ps1 API Key 暂停提示缺少下一屏说明"
+
+    # --- 33b: Claude 测试终端提示必须包含三项 ---
+    $launchBlock = if ($startHereText -match '(?s)function Start-ClaudeTestTerminal\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+    Assert "33b: 测试终端提示包含 'Choose the text style'" {
+        $launchBlock -match [regex]::Escape("Choose the text style that looks best with your terminal")
+    } "Start-ClaudeTestTerminal 提示缺少 'Choose the text style'"
+
+    Assert "33b: 测试终端提示包含 'Security notes'" {
+        $launchBlock -match [regex]::Escape("Security notes")
+    } "Start-ClaudeTestTerminal 提示缺少 'Security notes'"
+
+    Assert "33b: 测试终端提示包含 '信任当前文件夹'" {
+        $launchBlock -match [regex]::Escape("信任当前文件夹")
+    } "Start-ClaudeTestTerminal 提示缺少 '信任当前文件夹'"
+
+    # --- 33c: Node 安装提示必须包含三项 ---
+    $nodeWingetBlock = if ($claudeInstallText -match '(?s)function Install-NodeJsViaWinget\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+    Assert "33c: Node 安装提示包含 'Node.js LTS'" {
+        $nodeWingetBlock -match [regex]::Escape("Node.js LTS")
+    } "Install-NodeJsViaWinget 提示缺少 'Node.js LTS'"
+
+    Assert "33c: Node 安装提示包含 '权限确认'" {
+        $nodeWingetBlock -match [regex]::Escape("权限确认")
+    } "Install-NodeJsViaWinget 提示缺少 '权限确认'"
+
+    Assert "33c: Node 安装提示包含 '任务栏'" {
+        $nodeWingetBlock -match [regex]::Escape("任务栏")
+    } "Install-NodeJsViaWinget 提示缺少 '任务栏'"
+
+    # --- 33d: 用户可见文本不能出现 "这会修改系统环境" ---
+    $allSrc = $startHereText + $claudeInstallText
+    Assert "33d: 用户可见文本不含 '这会修改系统环境'" {
+        $allSrc -notmatch [regex]::Escape("这会修改系统环境")
+    } "仍有 '这会修改系统环境'"
 
     Write-Host ""
 

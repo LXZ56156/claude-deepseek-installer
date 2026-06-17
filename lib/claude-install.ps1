@@ -309,18 +309,40 @@ function Get-ClaudeCommandInventory {
 
         # --version 检测
         if ($candidate.Exists) {
-            $verResult = Invoke-CommandSafe -Command $candidate.Path -Arguments @("--version") -TimeoutSec 8
-            if ($verResult.Success -and -not [string]::IsNullOrWhiteSpace($verResult.Output)) {
-                $candidate.Usable = $true
-                $candidate.Version = $verResult.Output.Trim()
+            # v1.3.3 P5: 不直接执行 claude.ps1，优先探测同目录 claude.cmd
+            $probePath = $candidate.Path
+            $probingPs1 = $false
+            if ([System.IO.Path]::GetExtension($candidate.Path) -eq '.ps1') {
+                $siblingCmd = Join-Path (Split-Path -Parent $candidate.Path) "claude.cmd"
+                if (Test-Path $siblingCmd) {
+                    $probePath = $siblingCmd
+                    Write-Log "DEBUG" "Get-ClaudeCommandInventory: 候选 $($candidate.Path) 是 .ps1，改用同目录 claude.cmd 探测: $siblingCmd"
+                }
+                else {
+                    # 没有同目录 claude.cmd，标记 WARN 但不执行 .ps1
+                    $candidate.Usable = $false
+                    $candidate.Risk = "WARN"
+                    $candidate.Note = "PowerShell shim 未直接探测；缺少同目录 claude.cmd"
+                    $candidate.Error = "跳过 claude.ps1 直接执行，防止记事本打开或弹窗"
+                    Write-Log "INFO" "Get-ClaudeCommandInventory: 跳过 claude.ps1 探测 (Path=$($candidate.Path))，无同目录 claude.cmd"
+                    $probingPs1 = $true
+                }
             }
-            else {
-                $candidate.Usable = $false
-                $candidate.Error = if ($verResult.Error) { $verResult.Error } else { "--version 返回空" }
-                # 文件存在但无法运行 → 升级为 ERROR（windowsapps 除外）
-                if ($candidate.Source -ne "windowsapps") {
-                    $candidate.Risk = "ERROR"
-                    $candidate.Note = "文件存在但无法运行，可能是残留 shim、损坏安装或 PATH 冲突"
+
+            if (-not $probingPs1) {
+                $verResult = Invoke-CommandSafe -Command $probePath -Arguments @("--version") -TimeoutSec 8
+                if ($verResult.Success -and -not [string]::IsNullOrWhiteSpace($verResult.Output)) {
+                    $candidate.Usable = $true
+                    $candidate.Version = $verResult.Output.Trim()
+                }
+                else {
+                    $candidate.Usable = $false
+                    $candidate.Error = if ($verResult.Error) { $verResult.Error } else { "--version 返回空" }
+                    # 文件存在但无法运行 → 升级为 ERROR（windowsapps 除外）
+                    if ($candidate.Source -ne "windowsapps") {
+                        $candidate.Risk = "ERROR"
+                        $candidate.Note = "文件存在但无法运行，可能是残留 shim、损坏安装或 PATH 冲突"
+                    }
                 }
             }
         }
@@ -366,7 +388,7 @@ function Get-ClaudeCommandInventory {
     }
 
     if ($inventory.Active -and -not $inventory.Active.Usable) {
-        $usableOthers = $inventory.Candidates | Where-Object { $_.Usable -and (_normalize $_.Path) -ne (_normalize $inventory.Active.Path) }
+        $usableOthers = @($inventory.Candidates | Where-Object { $_.Usable -and (_normalize $_.Path) -ne (_normalize $inventory.Active.Path) })
         if ($usableOthers) {
             $hasConflict = $true
             [void]$conflictReasons.Add("当前 PATH 优先命中的 claude 不可用，但其他路径存在可用 claude。")
@@ -378,8 +400,8 @@ function Get-ClaudeCommandInventory {
         [void]$conflictReasons.Add("WindowsApps alias 可能抢占真实 Claude Code CLI。")
     }
 
-    $errorCandidates = $inventory.Candidates | Where-Object { $_.Risk -eq "ERROR" }
-    if ($errorCandidates) {
+    $errorCandidates = @($inventory.Candidates | Where-Object { $_.Risk -eq "ERROR" })
+    if ($errorCandidates.Count -gt 0) {
         $hasConflict = $true
         [void]$conflictReasons.Add("存在 $($errorCandidates.Count) 个无法运行的 claude 候选（残留或损坏）。")
     }
@@ -2664,7 +2686,7 @@ function Invoke-VisibleFileDownload {
 function Install-NodeJsViaWinget {
     <#
     .SYNOPSIS
-        使用 winget 安装 Node.js LTS，保留终端输出让用户看到下载进度。
+        使用 winget 安装 Node.js LTS，捕获英文输出到日志，控制台只显示中文心跳。
     .PARAMETER TimeoutSec
         超时秒数，默认 900（15分钟）。
     .PARAMETER TestSafe
@@ -2683,17 +2705,22 @@ function Install-NodeJsViaWinget {
     }
 
     Write-Log "INFO" "Installing Node.js LTS via winget"
-    Write-Info "正在安装必要运行环境（Node.js）。"
+    Write-Info "正在安装 Node.js LTS，这是 Claude Code 备用安装所需运行环境。"
     Write-Info "这一步可能需要几分钟，下载约几十 MB。"
-    Write-Info "安装完成后请关闭窗口重新打开本工具继续。"
+    Write-Info "如果 Windows 弹出'是否允许此应用更改你的设备'，请选择'是'。"
+    Write-Info "如果没有看到弹窗，请查看任务栏是否有闪烁的安装/权限确认窗口。"
+    Write-Info "安装完成后工具会自动继续检测；如提示需要重开，再关闭窗口重新运行。"
     Write-Host ""
 
-    return Invoke-VisibleInstallCommand -FilePath "winget" -Arguments @(
-        "install", "OpenJS.NodeJS.LTS",
+    return Invoke-InstallCommandCaptured -FilePath "winget" -Arguments @(
+        "install", "--id", "OpenJS.NodeJS.LTS", "--exact",
+        "--source", "winget",
         "--accept-package-agreements",
         "--accept-source-agreements",
         "--silent"
-    ) -TimeoutSec $TimeoutSec -TestSafe:$TestSafe
+    ) -TimeoutSec $TimeoutSec -HeartbeatSec 30 -FriendlyName "Node.js LTS 安装" `
+        -StartMessage "" `
+        -HeartbeatMessage "Node.js 仍在安装中，请不要关闭窗口。如有权限确认窗口，请选择'是'。"
 }
 
 function Install-ClaudeCodeViaWinget {
@@ -3248,7 +3275,7 @@ function Install-ClaudeCodeAuto {
 
     if (-not $mirrorCheck.NodeOk) {
         # Node.js 不存在或版本过低
-        Write-Error-Msg "官方安装方式不可用，备用方式需要必要运行环境（Node.js 18+ 和 npm）。"
+        Write-Warning "当前需要先安装 Node.js LTS，这是 Claude Code 备用安装所需运行环境。"
 
         # 尝试 winget 安装 Node.js（仅交互模式）
         $wingetOk = if ($isMockDecision) {
@@ -3258,9 +3285,9 @@ function Install-ClaudeCodeAuto {
             Test-CommandAvailable -CommandName "winget"
         }
         if ($wingetOk -and -not $NonInteractive) {
-            Write-Info "检测到可用的系统安装工具，可以自动安装必要运行环境。"
+            Write-Info "检测到可用的系统安装工具，可以自动安装 Node.js LTS。"
             Write-Log "INFO" "winget available; offering Node.js LTS install"
-            if ($isMockDecision -or (Confirm-UserChoice -Message "是否自动安装必要运行环境？这会修改系统环境。" -Default "No")) {
+            if ($isMockDecision -or (Confirm-UserChoice -Message "是否现在安装 Node.js LTS？Windows 可能弹出权限确认窗口，请选择'是'继续。" -Default "No")) {
                 if ($isMockDecision) {
                     Write-Log "DEBUG" "MOCK: auto-confirming winget Node.js install prompt"
                 }
