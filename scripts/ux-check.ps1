@@ -585,7 +585,7 @@ x-api-key: $TestApiKey
     }
 
     # Step-TestApi 等待提示
-    Assert "Step-TestApi 包含『最长等待 30 秒』" { $startHereText -match [regex]::Escape("最长等待 30 秒") } "缺失等待提示"
+    Assert "Step-TestApi 包含『最长等待约 30 秒』" { $startHereText -match [regex]::Escape("最长等待约 30 秒") } "缺失等待提示"
     Assert "Step-TestApi 包含『配置仍会保留』" { $startHereText -match [regex]::Escape("配置仍会保留") } "缺失保留说明"
 
     # Start-LazyInstall Step 2 后有上下文文案
@@ -2118,6 +2118,106 @@ x-api-key: $TestApiKey
     Assert "31b: 含非 release 阶段不阻断文案" {
         $checkPs1Text -match '非 release 阶段不阻断'
     } "check.ps1 必须输出非 release 阶段不阻断说明"
+
+    Write-Host ""
+
+    # ============================================================
+    # 32. v1.3.3 第二批 UX 文案收口：helper/技术词收缩/长耗时/失败卡片/完成页
+    # ============================================================
+    Write-CheckHeader "32. 第二批 UX 文案收口：helper 存在 / 技术词收缩 / 长耗时提示 / 失败卡片 / 完成页推荐"
+
+    $startHerePath = Join-Path $ScriptRoot "Start-Here.ps1"
+    $startHereText = Get-Content $startHerePath -Raw -Encoding UTF8
+    $claudeInstallPath = Join-Path $ScriptRoot "lib\claude-install.ps1"
+    $claudeInstallText = Get-Content $claudeInstallPath -Raw -Encoding UTF8
+
+    # --- 32a: Helper 函数存在 ---
+    Assert "32a: Write-UserFriendlyInstallMessage 存在" {
+        $startHereText -match 'function Write-UserFriendlyInstallMessage'
+    } "Start-Here.ps1 必须定义 Write-UserFriendlyInstallMessage"
+
+    Assert "32a: Write-LongStepHint 存在" {
+        $startHereText -match 'function Write-LongStepHint'
+    } "Start-Here.ps1 必须定义 Write-LongStepHint"
+
+    Assert "32a: Write-NextStepCard 存在" {
+        $startHereText -match 'function Write-NextStepCard'
+    } "Start-Here.ps1 必须定义 Write-NextStepCard"
+
+    Assert "32a: Write-NextStepCard 包含不要发送 settings.json" {
+        $startHereText -match '不要发送 settings\.json'
+    } "Write-NextStepCard 必须提醒不要发送 settings.json"
+
+    Assert "32a: Write-NextStepCard 包含只发送 report.txt" {
+        $startHereText -match '只发送 report\.txt'
+    } "Write-NextStepCard 必须提示只发送 report.txt"
+
+    Assert "32a: Write-NextStepCard 包含不要发送完整 API Key" {
+        $startHereText -match '完整 API Key'
+    } "Write-NextStepCard 必须提醒不要发送完整 API Key"
+
+    # --- 32b: 技术词收缩 ---
+    Assert "32b: Step 2 不再显示原始安装策略行" {
+        $startHereText -notmatch 'Write-Info\s+"安装策略:'
+    } "Start-Here.ps1 Step 2 不得再显示原始安装策略（使用 Write-UserFriendlyInstallMessage）"
+
+    Assert "32b: claude-install.ps1 不再直接显示 Native Install 文案给用户" {
+        $claudeInstallText -notmatch 'Write-Info\s+"优先使用 Claude 官方 Native Install' -and
+        $claudeInstallText -notmatch 'Write-Info\s+"开始 Native Install\.\.\.\"' -and
+        $claudeInstallText -notmatch 'Write-Success\s+"Claude 官方安装通道可用'
+    } "claude-install.ps1 不得再直接输出 Native Install 文案给用户"
+
+    Assert "32b: winget 安装 Node.js 文案已收缩" {
+        $claudeInstallText -notmatch 'Write-Info\s+"正在通过 Windows 官方 winget 安装 Node'
+    } "claude-install.ps1 winget Node.js 文案必须收缩"
+
+    # --- 32c: 长耗时提示 ---
+    Assert "32c: Start-Here.ps1 包含 Write-LongStepHint 调用" {
+        $startHereText -match 'Write-LongStepHint'
+    } "Start-Here.ps1 必须调用 Write-LongStepHint"
+
+    Assert "32c: 包含'可能需要几分钟'" {
+        $startHereText -match '可能需要几分钟'
+    } "Start-Here.ps1 必须包含'可能需要几分钟'长耗时提示"
+
+    Assert "32c: 包含'请不要关闭窗口'" {
+        $startHereText -match '请不要关闭窗口'
+    } "Start-Here.ps1 必须包含'请不要关闭窗口'提示"
+
+    Assert "32c: API 测试包含等待时长提示" {
+        $startHereText -match '最长等待约 30 秒|最长等待.*30 秒'
+    } "Start-Here.ps1 API 测试必须提示最长等待约 30 秒"
+
+    # --- 32d: 失败卡片统一 ---
+    $nextStepCardCount = ([regex]::Matches($startHereText, 'Write-NextStepCard')).Count
+    Assert "32d: Write-NextStepCard 至少调用 3 次" {
+        $nextStepCardCount -ge 3
+    } "Start-Here.ps1 必须至少调用 Write-NextStepCard 3 次（实际 $nextStepCardCount 次）"
+
+    Assert "32d: 不含'直接发给卖家'" {
+        $startHereText -notmatch '直接发给卖家|马上联系卖家'
+    } "Start-Here.ps1 不得包含'直接发给卖家'"
+
+    Assert "32d: 不含'把 logs 发给卖家'" {
+        $startHereText -notmatch '把\s*logs\s*发给'
+    } "Start-Here.ps1 不得建议发送 logs 给卖家"
+
+    Assert "32d: claude-install.ps1 不含'发给卖家'" {
+        $claudeInstallText -notmatch '直接发给卖家|马上联系卖家'
+    } "claude-install.ps1 不得包含'发给卖家'"
+
+    # --- 32e: 完成页推荐动作 ---
+    Assert "32e: 完成页菜单包含推荐下一步文案" {
+        $startHereText -match '推荐下一步.*直接输入 1'
+    } "Show-CompletionMenu 必须包含'推荐下一步：直接输入 1'文案"
+
+    Assert "32e: 菜单 [1] 启动 Claude Code 测试（推荐）仍存在" {
+        $startHereText -match '启动 Claude Code 测试（推荐）'
+    } "完成页 [1] 必须仍是'启动 Claude Code 测试（推荐）'"
+
+    Assert "32e: 菜单 [4] 一键诊断仍存在" {
+        $startHereText -match '运行一键诊断'
+    } "完成页 [4] '一键诊断'必须存在"
 
     Write-Host ""
 

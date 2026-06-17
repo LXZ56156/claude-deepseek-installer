@@ -1406,8 +1406,8 @@ if ($claudeInstallText -match 'function Install-ClaudeCodeAuto[\s\S]{0,5000}Invo
 
 # 28. v1.3.3: Native Install 始终先做后验验证，只有后验验证失败才显示备用通道提示。
 # 旧版直接根据 ExitCode 判断失败，v1.3.3 改为后验优先。
-if ($claudeInstallText -notmatch '官方安装方式未完成验证，正在切换备用安装方式' -and
-    $claudeInstallText -notmatch '官方安装包执行结束，正在验证安装结果') {
+if ($claudeInstallText -notmatch '当前安装方式未完成，正在自动切换备用方式' -and
+    $claudeInstallText -notmatch '正在确认安装结果\.\.\.') {
     throw "Native Install flow must do post-install verification before declaring failure (v1.3.3)"
 }
 if ($claudeInstallText -notmatch '这通常是网络或系统环境导致，不代表整个安装失败') {
@@ -1625,7 +1625,7 @@ foreach ($mt in $menuTexts) {
 
 # 2. Step-TestApi 等待提示
 $waitTexts = @(
-    "最长等待 30 秒",
+    "最长等待约 30 秒",
     "配置仍会保留"
 )
 foreach ($wt in $waitTexts) {
@@ -3085,8 +3085,8 @@ if ($claudeInstallText -notmatch 'claudeInstallMethod\s*=\s*"official_native"') 
 }
 
 # 2d. v1.3.3: 后验验证必须在备用通道之前执行
-# (顺序: Native Install → 后验验证 → 通道切换判断 → winget. 不应先 winget 后验)
-$nativeToFallback = [regex]::Match($claudeInstallText, '(?s)官方安装包执行结束，正在验证安装结果.*?官方安装方式未完成验证，正在切换备用安装方式')
+# (顺序: 安装 → 确认安装结果 → 通道切换判断 → winget. 不应先 winget 后验)
+$nativeToFallback = [regex]::Match($claudeInstallText, '(?s)正在确认安装结果.*?当前安装方式未完成，正在自动切换备用方式')
 if (-not $nativeToFallback.Success) {
     throw "claude-install.ps1 post-install verification must appear before alternate channel fallback"
 }
@@ -3721,5 +3721,138 @@ if ($checkPs1Text -notmatch '非 release 阶段不阻断') {
 }
 
 Write-Host "[check] P0-UX batch 2 patch coverage OK"
+
+# ============================================================
+# P0-UX batch 2 UX copy polish: helpers / tech term reduction /
+# long-step hints / failure cards / completion page hint
+# ============================================================
+Write-Host "[check] P0-UX batch 2 UX copy polish (helpers, term reduction, failure cards)"
+
+$startHereText = Get-Content -Path (Join-Path $RootDir "Start-Here.ps1") -Raw -Encoding UTF8
+$claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+
+# --- G. Helper functions ---
+# G1. 三个 helper 必须存在
+if ($startHereText -notmatch 'function Write-UserFriendlyInstallMessage') {
+    throw "Start-Here.ps1 must define Write-UserFriendlyInstallMessage"
+}
+if ($startHereText -notmatch 'function Write-LongStepHint') {
+    throw "Start-Here.ps1 must define Write-LongStepHint"
+}
+if ($startHereText -notmatch 'function Write-NextStepCard') {
+    throw "Start-Here.ps1 must define Write-NextStepCard"
+}
+
+# G2. Write-NextStepCard 必须包含安全文案
+$nextStepBody = if ($startHereText -match '(?s)function Write-NextStepCard\s*\{(.*?)(?=^function \w|\Z)') { $matches[1] } else { "" }
+if ($nextStepBody -notmatch '不要发送 settings\.json') {
+    throw "Write-NextStepCard must include '不要发送 settings.json'"
+}
+if ($nextStepBody -notmatch '只发送 report\.txt') {
+    throw "Write-NextStepCard must include '只发送 report.txt'"
+}
+if ($nextStepBody -notmatch '完整 API Key') {
+    throw "Write-NextStepCard must warn against sending full API Key"
+}
+
+# --- H. 技术词收缩 ---
+# H1. Step 2 用户可见文案不得仍使用旧策略格式
+$step2Block = if ($startHereText -match '(?s)function Step-InstallClaudeCode\s*\{(.*?)(?=function \w+\s*\{)') { $matches[1] } else { "" }
+if ($step2Block -match 'Write-Info\s+"安装策略:') {
+    throw "Step-InstallClaudeCode must NOT show raw install strategy (use Write-UserFriendlyInstallMessage)"
+}
+
+# H2. claude-install.ps1 不再直接输出 "Native Install" 给用户
+#    允许在 Write-Log、注释、函数名中出现
+if ($claudeInstallText -match 'Write-Info\s+"优先使用 Claude 官方 Native Install 方式安装') {
+    throw "claude-install.ps1 must NOT show '优先使用 Claude 官方 Native Install 方式安装' (use Write-Log or user-friendly text)"
+}
+if ($claudeInstallText -match 'Write-Info\s+"开始 Native Install\.\.\.\"') {
+    throw "claude-install.ps1 must NOT show '开始 Native Install...' to user"
+}
+if ($claudeInstallText -match 'Write-Success\s+"Claude 官方安装通道可用') {
+    throw "claude-install.ps1 must NOT show 'Claude 官方安装通道可用' to user"
+}
+
+# H3. npm 安装文案收缩
+if ($claudeInstallText -match 'Write-Info\s+"正在使用 npm 镜像安装') {
+    throw "claude-install.ps1 must NOT show '正在使用 npm 镜像安装' to user"
+}
+
+# H4. winget 安装文案收缩
+if ($claudeInstallText -match 'Write-Info\s+"正在使用 winget 安装 Claude Code') {
+    throw "claude-install.ps1 must NOT show '正在使用 winget 安装 Claude Code' to user"
+}
+if ($claudeInstallText -match 'Write-Info\s+"正在通过 Windows 官方 winget 安装 Node') {
+    throw "claude-install.ps1 must NOT show '正在通过 Windows 官方 winget 安装 Node' to user"
+}
+
+# --- I. 长耗时提示 ---
+# I1. Start-Here.ps1 包含长耗时提示调用
+if ($startHereText -notmatch 'Write-LongStepHint') {
+    throw "Start-Here.ps1 must call Write-LongStepHint at least once"
+}
+if ($startHereText -notmatch '可能需要几分钟') {
+    throw "Start-Here.ps1 must include '可能需要几分钟' hint text"
+}
+if ($startHereText -notmatch '请不要关闭窗口') {
+    throw "Start-Here.ps1 must include '请不要关闭窗口' hint text"
+}
+if ($startHereText -notmatch 'API 测试最长等待约 30 秒|最长等待约 30 秒') {
+    throw "Start-Here.ps1 must include API test timeout hint"
+}
+
+# I2. claude-install.ps1 也应有
+if ($claudeInstallText -notmatch '请不要关闭窗口') {
+    throw "claude-install.ps1 must include '请不要关闭窗口' for long-running steps"
+}
+
+# --- J. 失败卡片统一 ---
+# J1. needs_restart 分支必须调用 Write-NextStepCard
+if ($startHereText -match 'node_installed_needs_restart' -and $startHereText -notmatch 'Write-NextStepCard[\s\S]{0,300}node_installed_needs_restart') {
+    # This is hard to check precisely; verify at least one Write-NextStepCard in failure context
+}
+# Simpler: count Write-NextStepCard calls
+$nextStepCardCount = ([regex]::Matches($startHereText, 'Write-NextStepCard')).Count
+if ($nextStepCardCount -lt 3) {
+    throw "Start-Here.ps1 must call Write-NextStepCard at least 3 times (needs_restart, install fail, API fail) (found $nextStepCardCount)"
+}
+
+# J2. 不得出现 "直接发给卖家" / "马上联系卖家"
+if ($startHereText -match '直接发给卖家|马上联系卖家') {
+    throw "Start-Here.ps1 must NOT contain '直接发给卖家' or similar (bad UX)"
+}
+if ($claudeInstallText -match '直接发给卖家|马上联系卖家') {
+    throw "claude-install.ps1 must NOT contain '直接发给卖家' or similar (bad UX)"
+}
+
+# J3. 不得出现 "把 logs 发给卖家"
+if ($startHereText -match '把\s*logs\s*发给|发送.*logs.*给') {
+    throw "Start-Here.ps1 must NOT suggest sending logs to seller"
+}
+
+# J4. failure scenario must reference "一键修复依赖" before "report.txt"
+#     Verify Write-NextStepCard defaults prioritize repair over report
+if ($nextStepBody -notmatch '如需人工协助|如果以上方法') {
+    throw "Write-NextStepCard must defer support fallback to after self-repair steps"
+}
+
+# --- K. 完成页推荐动作 ---
+# K1. Show-CompletionMenu 含推荐下一步
+$compMenuBody = if ($startHereText -match '(?s)function Show-CompletionMenu\s*\{(.*?)(?=^function \w|\Z)') { $matches[1] } else { "" }
+if ($compMenuBody -notmatch '推荐下一步.*直接输入 1') {
+    throw "Show-CompletionMenu must include '推荐下一步：直接输入 1，然后按回车'"
+}
+if ($compMenuBody -notmatch '启动 Claude Code 测试') {
+    throw "Show-CompletionMenu must still contain '启动 Claude Code 测试（推荐）' menu entry"
+}
+
+# K2. Write-UserFriendlyInstallMessage 存在 AutoSelect / InstallSuccess / InstallFailed
+$userFriendlyBody = if ($startHereText -match '(?s)function Write-UserFriendlyInstallMessage\s*\{(.*?)(?=^function \w|\Z)') { $matches[1] } else { "" }
+if ($userFriendlyBody -notmatch 'AutoSelect') { throw "Write-UserFriendlyInstallMessage must support Type='AutoSelect'" }
+if ($userFriendlyBody -notmatch 'InstallSuccess') { throw "Write-UserFriendlyInstallMessage must support Type='InstallSuccess'" }
+if ($userFriendlyBody -notmatch 'InstallFailed') { throw "Write-UserFriendlyInstallMessage must support Type='InstallFailed'" }
+
+Write-Host "[check] P0-UX batch 2 UX copy polish OK"
 
 Write-Host "[check] OK"

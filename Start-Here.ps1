@@ -202,6 +202,134 @@ function Convert-ClaudeInstallMethodForReport {
     }
 }
 
+# ============================================================
+# UX 文案 helper 函数
+# ============================================================
+
+function Write-UserFriendlyInstallMessage {
+    <#
+    .SYNOPSIS
+        把安装阶段用户可见文案统一成普通用户语言。
+        技术细节通过 Detail 写日志，不直接显示。
+    #>
+    param(
+        [ValidateSet(
+            "AutoSelect",
+            "SwitchFallback",
+            "ConfirmInstall",
+            "NeedRestart",
+            "PathVerify",
+            "InstallSuccess",
+            "InstallPartial",
+            "InstallFailed"
+        )]
+        [string]$Type,
+        [string]$Detail = ""
+    )
+
+    switch ($Type) {
+        "AutoSelect" {
+            Write-Info "正在自动选择可用的安装方式。"
+        }
+        "SwitchFallback" {
+            Write-Info "当前方式连接较慢，已自动切换备用方式。"
+        }
+        "ConfirmInstall" {
+            Write-Info "正在确认安装结果。"
+        }
+        "NeedRestart" {
+            Write-Warning "当前窗口还没有识别到最新命令。"
+            Write-Info "请关闭此窗口后重新打开安装助手继续。"
+        }
+        "PathVerify" {
+            Write-Info "正在确认新打开的 PowerShell 是否能直接使用 Claude Code。"
+        }
+        "InstallSuccess" {
+            Write-Success "Claude Code 已安装并确认可用。"
+        }
+        "InstallPartial" {
+            Write-Warning "Claude Code 已安装，但还需要重新打开 PowerShell 验证。"
+        }
+        "InstallFailed" {
+            Write-Warning "Claude Code 暂未确认安装成功。"
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Detail)) {
+        Write-Log "INFO" "UserFriendlyInstallMessage[$Type]: $Detail"
+    }
+}
+
+function Write-LongStepHint {
+    <#
+    .SYNOPSIS
+        所有可能超过 30 秒的步骤，统一提示，避免用户以为卡死。
+    #>
+    param(
+        [string]$Action = "这一步"
+    )
+
+    Write-Info "$Action 可能需要几分钟。"
+    Write-Info "如果短时间没有新输出，这是正常的，请不要关闭窗口。"
+}
+
+function Write-NextStepCard {
+    <#
+    .SYNOPSIS
+        失败/部分成功场景统一成 "自修复优先" 的卡片。
+        先修复 → 再诊断 → 最后才提示 report.txt。
+    .PARAMETER Status
+        当前状态描述。
+    .PARAMETER Tried
+        已自动尝试的操作列表。
+    .PARAMETER NextSteps
+        建议操作列表（会按编号显示）。
+    .PARAMETER IncludeSupportFallback
+        是否附加 "如需人工协助，只发送 report.txt"。
+    #>
+    param(
+        [string]$Status,
+        [string[]]$Tried = @(),
+        [string[]]$NextSteps = @(),
+        [switch]$IncludeSupportFallback
+    )
+
+    Write-Host ""
+    Write-Host "------------------------------------------------------------" -ForegroundColor Yellow
+    Write-Host "  下一步建议" -ForegroundColor Yellow
+    Write-Host "------------------------------------------------------------" -ForegroundColor Yellow
+
+    if (-not [string]::IsNullOrWhiteSpace($Status)) {
+        Write-Info "当前状态：$Status"
+    }
+
+    if ($Tried.Count -gt 0) {
+        Write-Host ""
+        Write-Info "已自动尝试："
+        foreach ($item in $Tried) {
+            Write-Host "  - $item" -ForegroundColor DarkGray
+        }
+    }
+
+    if ($NextSteps.Count -gt 0) {
+        Write-Host ""
+        Write-Info "建议操作："
+        for ($i = 0; $i -lt $NextSteps.Count; $i++) {
+            Write-Host ("  {0}. {1}" -f ($i + 1), $NextSteps[$i]) -ForegroundColor White
+        }
+    }
+
+    if ($IncludeSupportFallback) {
+        Write-Host ""
+        Write-Info "如果以上方法仍无法解决，再生成诊断报告。"
+        Write-Info "如需人工协助，只发送 report.txt。"
+        Write-Info "不要发送 settings.json、完整 API Key、backup 或 logs。"
+    }
+
+    Write-Host "------------------------------------------------------------" -ForegroundColor Yellow
+    Write-Host ""
+}
+
 function Write-ApiKeySkipGuidance {
     <#
     .SYNOPSIS
@@ -547,8 +675,9 @@ function Step-CheckEnvironment {
 function Step-InstallClaudeCode {
     Write-Step "Step 2/7：安装 Claude Code"
 
-    # 显示安装策略（压缩为一行）
-    Write-Info "安装策略: 官方 Native Install → winget → npm 镜像（自动降级）"
+    # 安装策略说明（用户友好版）
+    Write-UserFriendlyInstallMessage -Type "AutoSelect" -Detail "official_native -> winget -> npm_npmmirror"
+    Write-LongStepHint -Action "安装 Claude Code"
     Write-Log "INFO" "详细策略: 官方 Native Install 优先，失败后尝试 winget，最后 npm 镜像（npmmirror.com/@anthropic-ai/claude-code）兜底"
     Write-Host ""
 
@@ -565,8 +694,18 @@ function Step-InstallClaudeCode {
     # 处理特殊状态
     if ($installResult.Status -eq "node_installed_needs_restart" -or
         $installResult.Status -eq "installed_needs_restart") {
-        Write-Warning "当前需要重开终端后继续，已跳过后续配置步骤。"
-        Write-Info "下一步: 关闭此窗口，重新双击「00-点我开始安装.cmd」。"
+        Write-UserFriendlyInstallMessage -Type "NeedRestart"
+        Write-NextStepCard `
+            -Status "必要运行环境已安装，当前窗口还没有识别到最新命令。" `
+            -Tried @(
+                "已重新检测安装结果",
+                "已刷新当前窗口的命令路径"
+            ) `
+            -NextSteps @(
+                "关闭当前窗口",
+                "重新双击「00-点我开始安装.cmd」继续安装",
+                "如果仍提示相同问题，再运行「一键修复依赖.cmd」"
+            )
         return $false
     }
 
@@ -597,9 +736,18 @@ function Step-InstallClaudeCode {
                 $script:ClaudeInstalled = $true
                 $script:ClaudeInstallMethod = if ($finalCheck.Source) { $finalCheck.Source } else { "final_fallback" }
                 $script:ClaudeInstallStatus = "installed_needs_restart_or_path_fix"
-                Write-Warning "Claude Code 当前进程可用，但新 PowerShell 验证未通过。"
+                Write-Warning "当前窗口可以识别 Claude Code，但新打开的 PowerShell 还没有确认可用。"
                 Write-Info "本工具会继续配置 DeepSeek API Key。"
-                Write-Info "安装结束后请按完成页提示重新打开 PowerShell 或运行「一键修复依赖」。"
+                Write-NextStepCard `
+                    -Status "当前窗口可以识别 Claude Code，但新打开的 PowerShell 还没有确认可用。" `
+                    -Tried @(
+                        "已确认 Claude Code 文件可以运行",
+                        "已尝试在新 PowerShell 中验证命令"
+                    ) `
+                    -NextSteps @(
+                        "安装结束后先选择完成页 [1] 启动测试",
+                        "如果 [1] 启动失败，运行「一键修复依赖.cmd」"
+                    )
                 Write-Log "WARN" "兜底检测部分通过: current process usable, fresh shell failed: $($freshFinal.Error)"
             }
 
@@ -614,9 +762,19 @@ function Step-InstallClaudeCode {
             return $true
         }
 
-        Write-Error-Msg "Claude Code 安装未成功。"
-        Write-Info "请先解决安装问题后重新运行本脚本。"
-        Write-Info "如果仍不行，请运行「一键诊断.cmd」获取诊断报告。"
+        Write-UserFriendlyInstallMessage -Type "InstallFailed"
+        Write-NextStepCard `
+            -Status "Claude Code 暂未确认安装成功。" `
+            -Tried @(
+                "已自动切换可用安装方式",
+                "已刷新命令路径并重新检测安装结果"
+            ) `
+            -NextSteps @(
+                "先运行「一键修复依赖.cmd」自动修复常见问题",
+                "修复后重新运行「00-点我开始安装.cmd」",
+                "如果仍失败，再运行「一键诊断.cmd」生成 report.txt"
+            ) `
+            -IncludeSupportFallback
         return $false
     }
 
@@ -789,8 +947,9 @@ function Step-TestApi {
         return
     }
 
-    Write-Info "正在使用 Anthropic Format 接口测试 DeepSeek API（最长等待 30 秒）。若失败配置仍会保留。"
     Write-Log "INFO" "测试模型: deepseek-v4-flash, 测试消息: 'Reply OK only.'"
+    Write-Info "正在进行 API 连接测试。"
+    Write-Info "最长等待约 30 秒。如果失败，配置仍会保留，可稍后重新测试。"
     Write-Host ""
 
     $apiTest = Test-DeepSeekApiAnthropic -ApiKey $ApiKey -Model "deepseek-v4-flash"
@@ -819,7 +978,18 @@ function Step-TestApi {
         }
 
         # 不中断：配置已写入，API 测试失败也允许继续
-        Write-Info "配置已写入但 API 测试未通过。以下步骤将继续，但安装报告会标注「部分成功」。"
+        Write-Warning "API 测试未通过，但配置已保留。"
+        Write-NextStepCard `
+            -Status "Claude Code 已配置完成，但 DeepSeek API 暂未测试通过。" `
+            -Tried @(
+                "已写入 DeepSeek 配置",
+                "已尝试连接 DeepSeek API"
+            ) `
+            -NextSteps @(
+                "到 platform.deepseek.com 检查 API Key 是否正确",
+                "检查 DeepSeek 账户余额是否充足",
+                "稍后重新运行「一键诊断.cmd」测试 API"
+            )
         $script:ApiTestFailed = $true
         $script:ApiTestFailReason = $apiTest.Error
         Update-CcdiState -Updates @{ lastApiTest = "failed" } | Out-Null
@@ -1585,6 +1755,10 @@ function Show-CompletionMenu {
         # 选项 1: 启动 Claude Code 测试（推荐）
         $testProjectAvailable = ($script:TestProjectPath -and (Test-Path $script:TestProjectPath))
         if ($testProjectAvailable) {
+            Write-Host ""
+            Write-Info "推荐下一步：直接输入 1，然后按回车，启动 Claude Code 测试。"
+        }
+        if ($testProjectAvailable) {
             Write-Host "  [1] 启动 Claude Code 测试（推荐）" -ForegroundColor Green
             Write-Host "      自动打开测试项目终端，并直接运行 claude。" -ForegroundColor DarkGray
         }
@@ -1758,7 +1932,7 @@ function Start-LazyInstall {
                     $script:ClaudeInstalled = $true
                     $script:ClaudeInstallMethod = if ($finalCheck.Source) { $finalCheck.Source } else { "final_fallback" }
                     $script:ClaudeInstallStatus = "installed"
-                    Write-Success "最终验证: Claude Code 已可用 ($($finalCheck.Version))，新 PowerShell 也可直接运行。"
+                    Write-UserFriendlyInstallMessage -Type "InstallSuccess" -Detail "final check version: $($finalCheck.Version)"
                     Write-Log "INFO" "Start-LazyInstall 兜底通过: fresh shell 可用, 继续流程"
                 }
                 else {
@@ -1784,8 +1958,19 @@ function Start-LazyInstall {
                 # 不 return，继续后续 API Key 配置
             }
             else {
-                Write-Error-Msg "Claude Code 安装未成功，跳过后续配置步骤。"
-                Write-Info "请先解决安装问题后重新运行本脚本。"
+                Write-UserFriendlyInstallMessage -Type "InstallFailed"
+                Write-NextStepCard `
+                    -Status "Claude Code 暂未确认安装成功。" `
+                    -Tried @(
+                        "已自动切换可用安装方式",
+                        "已刷新命令路径并重新检测安装结果"
+                    ) `
+                    -NextSteps @(
+                        "先运行「一键修复依赖.cmd」自动修复常见问题",
+                        "修复后重新运行「00-点我开始安装.cmd」",
+                        "如果仍失败，再运行「一键诊断.cmd」生成 report.txt"
+                    ) `
+                    -IncludeSupportFallback
                 Show-CompletionPage
                 return
             }

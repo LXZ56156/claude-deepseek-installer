@@ -862,20 +862,20 @@ function Write-NativeInstallUserMessage {
             Write-Info "仍在安装 Claude Code，请继续等待，不要关闭窗口。"
         }
         "Verify" {
-            Write-Info "官方安装包执行结束，正在验证安装结果..."
+            Write-Info "正在确认安装结果..."
         }
         "Success" {
-            Write-Success "Claude Code 已安装：$Detail"
-            Write-Success "已确认新 PowerShell 可直接运行 claude"
+            Write-Success "Claude Code 已安装并确认可用。"
+            Write-Log "INFO" "claude --version 可用，新 PowerShell 验证通过: $Detail"
         }
         "Partial" {
-            Write-Warning "Claude Code 已安装，但新 PowerShell 验证暂未通过。"
+            Write-Warning "Claude Code 已安装，但新打开的 PowerShell 还没有确认可用。"
             Write-Info "本工具会继续完成配置。安装结束后请按完成页提示验证或修复。"
         }
         "Fallback" {
-            Write-Warning "官方安装方式未完成验证，正在切换备用安装方式。"
+            Write-Warning "当前安装方式未完成，正在自动切换备用方式。"
             Write-Info "这通常是网络或系统环境导致，不代表整个安装失败。"
-            Write-Info "将继续尝试 winget / npm 镜像方式。"
+            Write-Log "INFO" "Native Install not verified; fallback to winget/npm"
         }
     }
 }
@@ -1202,9 +1202,9 @@ function Install-ClaudeCodeNpmMirror {
         return $result
     }
 
-    Write-Info "正在使用 npm 镜像安装 Claude Code。"
-    Write-Info "这一步会下载 Anthropic 官方 Claude Code 包，可能需要数分钟。"
-    Write-Info "仍在安装 Claude Code，请继续等待，不要关闭窗口。"
+    Write-Log "INFO" "Installing via npm mirror (npmmirror.com/@anthropic-ai/claude-code)"
+    Write-Info "正在通过备用下载方式安装 Claude Code。"
+    Write-Info "这一步可能需要几分钟，请不要关闭窗口。"
 
     # 解析 npm.cmd（禁止使用 npm.ps1，会导致 "%1 is not a valid Win32 application"）
     $npmResolved = Resolve-NpmCmdPath
@@ -1226,11 +1226,11 @@ function Install-ClaudeCodeNpmMirror {
         "@anthropic-ai/claude-code",
         "--registry=https://registry.npmmirror.com"
     ) -TimeoutSec 900 -HeartbeatSec 30 -FriendlyName "npm 镜像安装 Claude Code" `
-        -StartMessage "正在使用 npm 镜像安装 Claude Code。" `
+        -StartMessage "正在通过备用下载方式安装 Claude Code。" `
         -HeartbeatMessage "仍在安装 Claude Code，请继续等待，不要关闭窗口。"
 
     if ($installResult.Success) {
-        Write-Success "npm 镜像安装 Claude Code 完成。"
+        Write-Success "Claude Code 备用下载方式安装完成。"
         Write-Log "INFO" "npm mirror 安装成功"
         $result.Success = $true
     }
@@ -2681,9 +2681,10 @@ function Install-NodeJsViaWinget {
         return @{ Success = $false; ExitCode = -1; Error = "skipped_test_safe" }
     }
 
-    Write-Info "正在通过 Windows 官方 winget 安装 Node.js LTS。"
-    Write-Info "这是备用安装方式所需依赖，下载约几十 MB。"
-    Write-Info "安装完成后可能需要关闭窗口重新运行本工具。"
+    Write-Log "INFO" "Installing Node.js LTS via winget"
+    Write-Info "正在安装必要运行环境（Node.js）。"
+    Write-Info "这一步可能需要几分钟，下载约几十 MB。"
+    Write-Info "安装完成后请关闭窗口重新打开本工具继续。"
     Write-Host ""
 
     return Invoke-VisibleInstallCommand -FilePath "winget" -Arguments @(
@@ -2713,8 +2714,9 @@ function Install-ClaudeCodeViaWinget {
         return @{ Success = $false; ExitCode = -1; Error = "skipped_test_safe" }
     }
 
-    Write-Info "正在使用 winget 安装 Claude Code（Windows 官方包管理器方式）..."
     Write-Log "INFO" "执行: winget install Anthropic.ClaudeCode"
+    Write-Info "正在通过备用方式安装 Claude Code。"
+    Write-Info "这一步可能需要几分钟，请不要关闭窗口。"
 
     return Invoke-VisibleInstallCommand -FilePath "winget" -Arguments @(
         "install", "Anthropic.ClaudeCode",
@@ -2956,17 +2958,19 @@ function Install-ClaudeCodeAuto {
     }
 
     # ============================================================
-    # Step 2: 检测官方安装通道 + 尝试 Native Install
+    # Step 2: 检测官方安装通道 + 尝试安装
     # ============================================================
     Write-Info ""
-    Write-Info "优先使用 Claude 官方 Native Install 方式安装..."
-    Write-Info "正在检测官方安装通道..."
+    Write-Log "INFO" "Install strategy: official_native -> winget -> npm_npmmirror"
+    Write-Info "正在检测最快的安装方式..."
+    Write-Log "INFO" "Checking official download channel..."
 
     $officialNetwork = Test-ClaudeOfficialInstallNetwork
 
     if ($officialNetwork.Reachable) {
-        Write-Success "Claude 官方安装通道可用。"
-        Write-Info "开始 Native Install..."
+        Write-Log "INFO" "Official download channel reachable, starting install..."
+        Write-Info "正在通过官方方式安装 Claude Code。"
+        Write-Info "这一步可能需要几分钟，请不要关闭窗口。"
 
         $nativeResult = Install-ClaudeCodeNative
 
@@ -3229,8 +3233,9 @@ function Install-ClaudeCodeAuto {
     # Step 3: npm npmmirror 镜像安装
     # ============================================================
     Write-Info ""
-    Write-Info "正在使用 npm 镜像安装 Claude Code。"
-    Write-Info "这会下载 Anthropic 官方发布的 @anthropic-ai/claude-code 包。"
+    Write-Log "INFO" "Installing via npm mirror: @anthropic-ai/claude-code"
+    Write-Info "正在通过备用下载方式安装 Claude Code。"
+    Write-Info "这一步可能需要几分钟，请不要关闭窗口。"
     Write-Host ""
 
     # 3a. 检测 Node.js 和 npm
