@@ -966,6 +966,28 @@ function Write-NativeInstallUserMessage {
     }
 }
 
+function Format-CcdiElapsedTime {
+    <#
+    .SYNOPSIS
+        v1.3.3 P0 fix: 安全格式化已用秒数为 MM:SS。
+        [Math]::Floor 在 PS5.1 下返回 Double，D2 不接受 Double，
+        必须显式转换为 [int] 后再格式化。
+    .PARAMETER Seconds
+        已用秒数（支持 double）
+    .RETURNS
+        "MM:SS" 格式字符串
+    .NOTES
+        所有 D2 参数必须是 [int]，避免 PS5.1 下出现"格式说明符无效"。
+    #>
+    param([double]$Seconds)
+
+    $elapsedInt = [int][Math]::Max(0, [Math]::Round($Seconds, 0))
+    $minutes = [int][Math]::Floor($elapsedInt / 60)
+    $secondsPart = [int]($elapsedInt % 60)
+
+    return ("{0:D2}:{1:D2}" -f $minutes, $secondsPart)
+}
+
 function Invoke-InstallCommandCaptured {
     <#
     .SYNOPSIS
@@ -1051,6 +1073,8 @@ function Invoke-InstallCommandCaptured {
         Write-Info $StartMessage
     }
 
+    $proc = $null
+
     try {
         $proc = Start-Process -FilePath $FilePath `
             -ArgumentList $Arguments `
@@ -1072,9 +1096,15 @@ function Invoke-InstallCommandCaptured {
 
             if ($elapsed -ge $nextHeartbeatAt) {
                 if ($showCompactProgress) {
-                    $elapsedFormatted = "{0:D2}:{1:D2}" -f [Math]::Floor($elapsed / 60), ($elapsed % 60)
                     $hintPart = if ($ProgressHint) { " | $ProgressHint" } else { "" }
-                    Write-Info "[进度] $ProgressTitle | 已等待 $elapsedFormatted | 状态：正常$hintPart"
+                    try {
+                        $elapsedFormatted = Format-CcdiElapsedTime -Seconds $elapsed
+                        Write-Info "[进度] $ProgressTitle | 已等待 $elapsedFormatted | 状态：正常$hintPart"
+                    }
+                    catch {
+                        Write-Log "WARN" "进度提示格式化失败，已降级为秒数显示: $($_.Exception.Message)"
+                        Write-Info "[进度] $ProgressTitle | 已等待 $elapsed 秒 | 状态：正常$hintPart"
+                    }
                 }
                 elseif (-not [string]::IsNullOrWhiteSpace($HeartbeatMessage)) {
                     Write-Info "$HeartbeatMessage（已等待 $elapsed 秒）"
@@ -1176,6 +1206,17 @@ function Invoke-InstallCommandCaptured {
     catch {
         $result.Error = "Invoke-InstallCommandCaptured 异常: $($_.Exception.Message)"
         Write-Log "ERROR" $result.Error
+        # 内部异常时必须终止已启动的子进程树，避免后台安装器残留继续运行
+        if ($null -ne $proc -and -not $proc.HasExited) {
+            Write-Log "WARN" "Invoke-InstallCommandCaptured 内部异常，正在终止子进程树 PID=$($proc.Id)，避免后台安装器残留。"
+            try {
+                & taskkill.exe /PID $proc.Id /T /F 2>$null | Out-Null
+                $proc.WaitForExit(5000) | Out-Null
+            }
+            catch {
+                Write-Log "WARN" "内部异常后终止子进程树失败: $($_.Exception.Message)"
+            }
+        }
     }
     finally {
         # 清理临时文件

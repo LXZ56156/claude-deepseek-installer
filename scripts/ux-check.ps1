@@ -2421,6 +2421,23 @@ x-api-key: $TestApiKey
 
     Write-Host ""
 
+    # --- 34j: P0 修复 — 进度格式化不得因 Double/D2 抛异常 ---
+    Assert "34j: 包含 'Format-CcdiElapsedTime'" {
+        $claudeInstallText -match 'Format-CcdiElapsedTime'
+    } "claude-install.ps1 必须存在 Format-CcdiElapsedTime 辅助函数"
+    Assert "34j: 不含旧 Double+D2 格式化" {
+        $claudeInstallText -notmatch '\{0:D2\}:\{1:D2\}.*-f\s*\[Math\]::Floor'
+    } "claude-install.ps1 不得使用 [Math]::Floor + D2（PS5.1 Double bug）"
+    Assert "34j: 不含前台 '格式说明符无效'（注释中的解释性引用除外）" {
+        # 允许在函数注释中以 .NOTES 形式出现，但不允许在可见输出函数（Write-Info/Write-Warning/Write-Error-Msg/Write-Host）中出现
+        $claudeInstallText -notmatch 'Write-Info.*格式说明符无效|Write-Warning.*格式说明符无效|Write-Error-Msg.*格式说明符无效|Write-Host.*格式说明符无效|Write-Log.*格式说明符无效'
+    } "claude-install.ps1 不得在前台文案中出现 '格式说明符无效'"
+    Assert "34j: 包含降级回退文案" {
+        $claudeInstallText -match [regex]::Escape('进度提示格式化失败，已降级为秒数显示')
+    } "claude-install.ps1 必须包含格式化失败的降级文案"
+
+    Write-Host ""
+
     # ============================================================
     # 最终汇总
     # ============================================================

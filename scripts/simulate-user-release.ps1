@@ -1044,6 +1044,49 @@ PS>TerminatingError(Invoke-WebRequest):"操作超时。"
     }
     Write-Host "[simulate]   timeout message alignment OK" -ForegroundColor Green
 
+    # v1.3.3 P0 fix: real runtime test — Invoke-InstallCommandCaptured with ProgressIntervalSec
+    # Must NOT throw "格式说明符无效" (Double + D2 in PS5.1)
+    Write-Check "v1.3.3 P0 fix: Invoke-InstallCommandCaptured progress formatting runtime test"
+    $progressTestEnv = New-SimEnvironment -ProfileDir $testProfile -DesktopDir $testDesktop -DummyKey $DummyApiKey
+    $progressTestEnv["CCDI_TEST_MODE"] = "1"
+    $progressTestScript = @'
+$scriptRoot = "{0}"
+. "$scriptRoot\lib\bootstrap.ps1"
+$result = Invoke-InstallCommandCaptured -FilePath "powershell" -Arguments @(
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "Start-Sleep -Seconds 2"
+) -TimeoutSec 10 -FriendlyName "进度格式化测试" `
+  -StartMessage "" `
+  -ProgressIntervalSec 1 `
+  -ProgressTitle "测试安装中" `
+  -ProgressHint "测试提示" `
+  -SlowNoticeAfterSec 1 `
+  -SlowNoticeMessage "测试慢速提示"
+Write-Output "TestSuccess=$($result.Success)"
+Write-Output "TestExitCode=$($result.ExitCode)"
+Write-Output "TestDurationMs=$($result.DurationMs)"
+Write-Output "TestError=$($result.Error)"
+'@ -f $releaseRoot
+    $progressTestPath = Join-Path $tempRoot "test_progress_format.ps1"
+    Set-Content -Path $progressTestPath -Value $progressTestScript -Encoding UTF8
+
+    $progressRun = Invoke-SimCommand -Name "progress format test" -FileName $powerShellExe -Arguments @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $progressTestPath
+    ) -WorkingDirectory $releaseRoot -Environment $progressTestEnv -TimeoutSec 30
+    [void]$runs.Add($progressRun)
+
+    # Assert: no format specifier error
+    if ($progressRun.Combined -match '格式说明符无效|format specifier') {
+        throw "Progress formatting threw '格式说明符无效' — Double + D2 PS5.1 bug not fixed"
+    }
+    # Assert: returned expected structure (test command exits 0 after 2s sleep)
+    if ($progressRun.Combined -notmatch 'TestDurationMs=') {
+        throw "Progress format test did not return DurationMs — function may have crashed"
+    }
+    if ($progressRun.Combined -match 'TestError=.*异常') {
+        throw "Progress format test has exception in Error field"
+    }
+    Write-Host "[simulate]   progress formatting runtime test OK" -ForegroundColor Green
+
     Write-Host "[simulate] OK" -ForegroundColor Green
 }
 finally {

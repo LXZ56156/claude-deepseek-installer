@@ -3569,6 +3569,36 @@ if ($claudeInstallText -match '(?s)function Install-NodeJsViaWinget\s*\{.*?Invok
     }
 }
 
+# O. P0 fix: Format-CcdiElapsedTime must exist and use [int] conversion
+if ($claudeInstallText -notmatch 'function Format-CcdiElapsedTime') {
+    throw "Format-CcdiElapsedTime helper must exist"
+}
+$formatFunc = if ($claudeInstallText -match '(?s)function Format-CcdiElapsedTime\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+if ($formatFunc -notmatch '\[int\]') {
+    throw "Format-CcdiElapsedTime must use [int] casts for D2 formatting"
+}
+# P. 禁止原始 Double + D2 格式化（PS5.1 下抛"格式说明符无效"）
+if ($claudeInstallText -match '\{0:D2\}:\{1:D2\}.*-f\s*\[Math\]::Floor') {
+    throw "Must NOT use raw [Math]::Floor with D2 format (PS5.1 Double bug); use Format-CcdiElapsedTime"
+}
+# Q. Invoke-InstallCommandCaptured progress output must call Format-CcdiElapsedTime
+if ($claudeInstallText -notmatch 'Format-CcdiElapsedTime\s+-Seconds') {
+    throw "Invoke-InstallCommandCaptured progress must call Format-CcdiElapsedTime"
+}
+# R. Progress output must have try/catch fallback
+if ($claudeInstallText -notmatch '进度提示格式化失败，已降级为秒数显示') {
+    throw "Invoke-InstallCommandCaptured progress must have fallback message on format failure"
+}
+# S. Invoke-InstallCommandCaptured catch must clean up child process
+if ($claudeInstallText -notmatch '\$proc\s*=\s*\$null\s*\n\s*try') {
+    throw "Invoke-InstallCommandCaptured must init `$proc = `$null before try"
+}
+# T. catch block must kill process tree on internal error
+$capturedFuncBody = if ($claudeInstallText -match '(?s)function Invoke-InstallCommandCaptured\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+if ($capturedFuncBody -notmatch '内部异常，正在终止子进程树') {
+    throw "Invoke-InstallCommandCaptured catch must kill child process on internal error"
+}
+
 # H. 全仓库禁止旧等待句
 $allSourceFiles = @(Get-ChildItem -Path $RootDir -Recurse -Include "*.ps1", "*.psm1", "*.cmd", "*.sh", "*.md", "*.txt" -Exclude "*.log", "*.tmp" | Where-Object {
     $_.FullName -notmatch '[\\/]\.sandbox[\\/]' -and
