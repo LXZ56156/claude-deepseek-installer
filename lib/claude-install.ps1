@@ -184,14 +184,18 @@ function Get-ClaudeCommandInventory {
         $seen[$n] = $true
 
         [void]$tempCandidates.Add([PSCustomObject]@{
-            Path    = $CandidatePath
-            Source  = $SourceHint
-            Exists  = $true
-            Usable  = $false
-            Version = $null
-            Risk    = $RiskHint
-            Note    = $NoteHint
-            Error   = ""
+            Path              = $CandidatePath
+            Source            = $SourceHint
+            Exists            = $true
+            Usable            = $false
+            Version           = $null
+            Risk              = $RiskHint
+            Note              = $NoteHint
+            Error             = ""
+            LogicalInstallKey = ""
+            ProbePath         = ""
+            IsShimCompanion   = $false
+            CompanionOf       = ""
         })
     }
 
@@ -352,6 +356,45 @@ function Get-ClaudeCommandInventory {
     }
 
     # ============================================================
+    # LogicalInstallKey 归一化 (v1.3.3 fix: npm shim 组合不误报冲突)
+    # 同目录、同来源的 claude.ps1 + claude.cmd 归为同一个逻辑来源
+    # ============================================================
+    foreach ($candidate in $inventory.Candidates) {
+        $candidateDir = Split-Path -Parent $candidate.Path
+        $candidateDirNorm = try { [System.IO.Path]::GetFullPath($candidateDir).TrimEnd('\').ToLowerInvariant() } catch { $candidateDir.ToLowerInvariant() }
+        $ext = [System.IO.Path]::GetExtension($candidate.Path).ToLowerInvariant()
+
+        switch ($candidate.Source) {
+            "npm_global" {
+                $candidate.LogicalInstallKey = "npm_global:$candidateDirNorm"
+                # .ps1 shim 如果有同目录 .cmd，标记为 shim companion
+                if ($ext -eq '.ps1') {
+                    $siblingCmd = Join-Path $candidateDir "claude.cmd"
+                    if (Test-Path $siblingCmd) {
+                        $candidate.ProbePath = $siblingCmd
+                        $candidate.IsShimCompanion = $true
+                        $candidate.CompanionOf = $siblingCmd
+                        Write-Log "DEBUG" "Get-ClaudeCommandInventory: npm shim companion $($candidate.Path) -> $siblingCmd"
+                    }
+                }
+            }
+            "native_local_bin" {
+                $candidate.LogicalInstallKey = "native_local_bin:$candidateDirNorm"
+            }
+            "winget" {
+                $candidate.LogicalInstallKey = "winget:$candidateDirNorm"
+            }
+            "windowsapps" {
+                $candidate.LogicalInstallKey = "windowsapps:$candidateDirNorm"
+            }
+            default {
+                # 未知来源使用路径作为 fallback key
+                $candidate.LogicalInstallKey = "unknown:$candidateDirNorm"
+            }
+        }
+    }
+
+    # ============================================================
     # Active 判定
     # ============================================================
     # 1. 首选 Get-Command claude 返回的第一个路径
@@ -377,40 +420,64 @@ function Get-ClaudeCommandInventory {
     }
 
     # ============================================================
-    # Conflict 判断
+    # Conflict 判断 (v1.3.3 fix: 使用 LogicalInstallKey 去重)
     # ============================================================
     $hasConflict = $false
     $conflictReasons = [System.Collections.ArrayList]::new()
 
-    if ($inventory.Candidates.Count -gt 1) {
-        $hasConflict = $true
-        [void]$conflictReasons.Add("检测到多个 claude 命令来源，可能存在 PATH 优先级冲突。")
+    # 计算 distinct logical sources（排除 IsShimCompanion 的 .ps1 文件）
+    $nonCompanionCandidates = @($inventory.Candidates | Where-Object { -not $_.IsShimCompanion })
+    $allLogicalKeys = @($nonCompanionCandidates | Where-Object { $_.LogicalInstallKey } | ForEach-Object { $_.LogicalInstallKey } | Select-Object -Unique)
+    $distinctSourceCount = $allLogicalKeys.Count
+
+    # fallback: 如果没有 LogicalInstallKey，用规范化路径
+    if ($distinctSourceCount -eq 0) {
+        $distinctSourceCount = @($nonCompanionCandidates | ForEach-Object { _normalize $_.Path } | Select-Object -Unique).Count
     }
 
+    Write-Log "DEBUG" "Get-ClaudeCommandInventory: Candidates=$($inventory.Candidates.Count), NonCompanion=$($nonCompanionCandidates.Count), DistinctSources=$distinctSourceCount"
+
+    # 多来源冲突：只有当 distinct logical source > 1 时才可能冲突
+    $hasWA = (@($nonCompanionCandidates | Where-Object { $_.Source -eq "windowsapps" })).Count -gt 0
+    $hasNativeOrNpm = (@($nonCompanionCandidates | Where-Object { $_.Source -in @("native_local_bin", "npm_global") })).Count -gt 0
+
+    if ($distinctSourceCount -gt 1) {
+        if ($hasWA -and $hasNativeOrNpm) {
+            $hasConflict = $true
+            [void]$conflictReasons.Add("WindowsApps alias 与 Native Install/npm 安装并存，可能冲突。")
+        }
+        elseif ($hasWA) {
+            # WindowsApps + 其他非 native/npm 来源
+            $hasConflict = $true
+            [void]$conflictReasons.Add("WindowsApps alias 与其他 claude 来源并存，可能抢占真实 CLI。")
+        }
+        elseif ((@($nonCompanionCandidates | Where-Object { $_.Source -in @("native_local_bin", "npm_global", "winget") } | ForEach-Object { $_.LogicalInstallKey } | Select-Object -Unique)).Count -gt 1) {
+            # 多个真正的安装来源 (native + npm, native + winget, npm + winget)
+            $hasConflict = $true
+            [void]$conflictReasons.Add("检测到多个 claude 安装来源（Native Install / npm / winget 并存），可能存在 PATH 优先级冲突。")
+        }
+    }
+
+    # Active 不可用但其他 logical source 可用
     if ($inventory.Active -and -not $inventory.Active.Usable) {
-        $usableOthers = @($inventory.Candidates | Where-Object { $_.Usable -and (_normalize $_.Path) -ne (_normalize $inventory.Active.Path) })
+        $usableOthers = @($nonCompanionCandidates | Where-Object { $_.Usable -and (_normalize $_.Path) -ne (_normalize $inventory.Active.Path) })
         if ($usableOthers) {
             $hasConflict = $true
             [void]$conflictReasons.Add("当前 PATH 优先命中的 claude 不可用，但其他路径存在可用 claude。")
         }
     }
 
+    # Active 是 WindowsApps alias
     if ($inventory.Active -and $inventory.Active.Source -eq "windowsapps") {
         $hasConflict = $true
         [void]$conflictReasons.Add("WindowsApps alias 可能抢占真实 Claude Code CLI。")
     }
 
-    $errorCandidates = @($inventory.Candidates | Where-Object { $_.Risk -eq "ERROR" })
+    # ERROR candidate 处理：跳过 claude.ps1 且同目录 claude.cmd 可用时不作为冲突
+    $errorCandidates = @($nonCompanionCandidates | Where-Object { $_.Risk -eq "ERROR" })
     if ($errorCandidates.Count -gt 0) {
         $hasConflict = $true
         [void]$conflictReasons.Add("存在 $($errorCandidates.Count) 个无法运行的 claude 候选（残留或损坏）。")
-    }
-
-    $hasWA = $inventory.Candidates | Where-Object { $_.Source -eq "windowsapps" }
-    $hasNativeOrNpm = $inventory.Candidates | Where-Object { $_.Source -in @("native_local_bin", "npm_global") }
-    if ($hasWA -and $hasNativeOrNpm) {
-        $hasConflict = $true
-        [void]$conflictReasons.Add("WindowsApps alias 与 Native Install/npm 安装并存，可能冲突。")
     }
 
     $inventory.HasConflict = $hasConflict

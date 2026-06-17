@@ -112,12 +112,13 @@ https://platform.deepseek.com/api_keys
 如需售后，请运行「一键诊断.cmd」。
 
 **售后安全提示：**
-- 只发送生成的 report.txt。
+- 优先发送 support-feedback.txt（汇总反馈文件）。
+- 如没有 support-feedback.txt，再发送 report.txt。
 - 不要发送 backup/、logs/、reports/full-report-*、settings.json。
 - 不要发送完整 API Key。
 - 如果截图，请先确认截图里没有完整 API Key。
 
-诊断报告中的 API Key 已自动脱敏，可以放心发送。
+反馈文件中的 API Key 已自动脱敏，可以放心发送。
 
 ---
 

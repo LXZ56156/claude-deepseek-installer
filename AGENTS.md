@@ -1,92 +1,92 @@
 # AGENTS.md
 
-This repository uses this file as the handoff guide for coding agents working on `claude-deepseek-installer`.
+本文件是会话级交接文件。**每次新会话开始必读**。CLAUDE.md 是持久化项目知识，本文是动态上下文。
 
-## Current Release Context
+---
 
-- Active release branch: `release/v1.3.2-rc`
-- Do not switch to `main`, merge `main`, or return to previous fix branches unless explicitly instructed.
-- Current latest known pushed commit on the release branch: `6e01a04` (`fix(doctor): bound claude doctor diagnostics`).
-- The latest full Windows release validation must be rerun from `6e01a04` or a later commit before final publication, because fixes after the last full ZIP pass touched API/doctor behavior.
+## Active Work
+
+- **Branch**: `fix/v1.3.3-native-path-doctor-ux`
+- **Status**: 遗留收口批（feedback/report/package residuals）完成，全部验收通过
+- **Next**: 真机验收 → 合并到 main → 打 v1.3.3 release ZIP
+- **Latest commit**: (待提交) fix(ux): close feedback/report/package residuals
+
+---
+
+## Progress Log
+
+保留最近 ~10 条（完整历史在 `git log`）。旧条目直接删除即可。
+
+| 日期 | 内容 | Commit |
+|------|------|--------|
+| 2026-06-17 | 遗留收口 — npm shim 冲突修复/support-feedback 单文件反馈/terminal transcript/ZIP docs 白名单/售后口径统一 | (待提交) |
+| 2026-06-17 | P0 真机 UX/diagnostic hotfix 第二批 — Node 提示/winget 去英文/API Key 暂停/Claude 启动提示/ps1 误执行 | 1a8d936 |
+| 2026-06-16 | v1.3.3 acceptance finalized — 验收通过，最终产物记录 | f44fe4e |
+| 2026-06-15 | UX 文案收口 — PATH/ExternalScript 清零 + 双文件 0 容忍扫描 | 23c7249 |
+| 2026-06-14 | P0-UX 第二批文案收口 + 技术词收缩 | c4ef24a, f8dc13e |
+| 2026-06-13 | P0-UX 第二批补丁覆盖 | e9c234b, 2049420 |
+| 2026-06-12 | P0/P1 UX hardening — Native PATH 持久化、fresh shell 验证、doctor CJK crash | 19597a0, 2441aab |
+| 2026-06-10 | v1.3.2-rc 验收完成并移交 | 6e01a04 |
+
+---
 
 ## Safety Rules
 
-- Do not use a real DeepSeek API Key unless the user explicitly asks for a real API test.
-- Do not request the real DeepSeek API during automated validation. Use `-TestSafe`, `-SkipApiTest`, or local mock endpoints.
-- Do not execute real Claude install, real `winget`, or real `npm install/update` during automated validation.
-- Do not pollute the real `%USERPROFILE%\.claude\settings.json`; record hash/length before and after any validation that touches config logic.
-- Do not add runtime artifacts to Git:
-  - `.sandbox/`
-  - `logs/`
-  - `backup/`
-  - `reports/`
-  - `release/`
-  - `report.txt`
-  - `report-share-safe.txt`
-  - `full-report*`
-  - `repair-deps-report*`
-  - `install-report*`
-- Do not use `git add .`. Add only the exact source/documentation files required.
-- Treat P0/P1 validation failures as blockers. Report first; keep fixes minimal and scoped.
+- 不使用真实 DeepSeek API Key，除非用户明确要求真机 API 测试
+- 自动化验证中不执行真实 claude install、winget、npm install/update
+- 不污染真实 `%USERPROFILE%\.claude\settings.json`；涉及配置的验证前后记录 hash/length
+- 不把运行产物加入 Git：`.sandbox/`, `logs/`, `backup/`, `reports/`, `release/`, `report.txt`, `*-report*.txt`
+- 不要 `git add .` —— 只精确 add 需要的源文件/文档
+- P0/P1 验证失败是 blocker，先报告再修，修复保持最小范围
 
-## Normal Start Procedure
-
-Run from a Windows native local disk path such as `D:\projects\claude-deepseek-installer`, not from `\\wsl.localhost` or `\\wsl$`.
-
-```powershell
-git fetch origin --prune
-git checkout release/v1.3.2-rc
-git pull --ff-only origin release/v1.3.2-rc
-git status --short
-git log --oneline --decorate -8
-```
-
-Stop and report if there are unexpected source changes in the worktree.
+---
 
 ## Validation Commands
 
-Core Windows checks:
-
 ```powershell
-git diff --check
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check.ps1
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\check.ps1
+# 日常自检
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode Smoke
+
+# 完整验收（push 前）
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode Full
+
+# 发布验收
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode Release -Version "1.3.3" -RequireClean
+
+# Release ZIP
+powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version "1.3.3"
+
+# TestSafe 核心流程
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Start-Here.ps1 -NonInteractive -SkipDisclaimer -TestSafe
+powershell -NoProfile -ExecutionPolicy Bypass -File .\repair-deps.ps1 -TestSafe
+powershell -NoProfile -ExecutionPolicy Bypass -File .\doctor.ps1 -ShareSafe -SkipApiTest -NoOpenReport
 ```
 
-PowerShell parse check:
+---
 
-```powershell
-powershell.exe -NoProfile -Command "Get-ChildItem . -Filter *.ps1 -Recurse | Where-Object { `$_.FullName -notmatch '\\.git|\\.sandbox|\\backup|\\logs|\\reports|\\release|\\node_modules' } | ForEach-Object { `$tokens = `$null; `$errors = `$null; [System.Management.Automation.Language.Parser]::ParseFile(`$_.FullName, [ref]`$tokens, [ref]`$errors) | Out-Null; if (`$errors.Count -gt 0) { throw ('PowerShell parse failed: ' + `$_.FullName + ' - ' + `$errors[0].Message) } }"
-```
+## Bug Registry
 
-Core TestSafe checks:
+所有有意义的 bug 记录在 `docs/dev/bug-registry.md`。修 bug 后必须：
+1. 在 bug-registry.md 添加条目（按模板）
+2. 在 check.ps1 中补充防回归检查
+3. 在本文件 Progress Log 加一行记录
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-Here.ps1 -NonInteractive -SkipDisclaimer -TestSafe
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\repair-deps.ps1 -TestSafe
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-Here.ps1 -FixDeps -TestSafe
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\doctor.ps1 -ShareSafe -SkipApiTest -NoOpenReport
-```
+---
 
-Release ZIP:
+## 完成前检查（以下每一项，没做就补，做完再声称完成）
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
-```
-
-If Windows/WSL CRLF behavior makes source-worktree `bash -n install_wsl.sh` fail, record it as a Windows environment limitation. The release ZIP copy must still normalize `install_wsl.sh` to LF, and ZIP-internal `bash -n install_wsl.sh` must pass when Bash is available.
+- 修了 bug → `docs/dev/bug-registry.md` 追加条目
+- 新增关键逻辑 → `scripts/check.ps1` 补防回归检查
+- 阶段结束 → 上面 Progress Log 加行
+- 自检通过 → `validate.ps1 -Mode Smoke` 不报错
+- 只 add 需要的文件 → 没有 `git add .`
 
 ## Recent Fix History
 
-- `bb5d159` `fix(path): block archive temp extraction paths`
-  - Fixed archive temp path detection for `Rar$...`, `7z...`, and TEMP `.zip` paths.
-- `4433b64` `fix(config): handle empty env under strict mode`
-  - Fixed empty `env = {}` StrictMode failures during uninstall/restore.
-- `369a9cf` `fix(ux): bound claude doctor quick check`
-  - Bounded install-flow `claude doctor` to 30 seconds.
-- `e708863` `fix(api): handle response-less smoke test errors`
-  - Fixed DeepSeek API smoke-test crashes when exceptions lack a `Response` property.
-- `6e01a04` `fix(doctor): bound claude doctor diagnostics`
-  - Bounded `doctor.ps1` `claude doctor` diagnostic call to 30 seconds with progress output.
+→ 详见 `docs/dev/bug-registry.md` 的完整记录。以下列出最近 5 条：
 
-See `docs/v1.3.2-rc-验收与修复交接.md` for the detailed handoff log.
+- `1a8d936` P0 真机 UX/diagnostic hotfix 第二批 — Node 提示/winget 去英文/API Key 暂停/Claude 启动提示/ps1 误执行
+- `37ea865` ux-check.ps1 Section 32 黑名单改用 $allVisJoined + PATH 0 容忍统一
+- `23c7249` P0-UX 第二批文案收口三次修正 — PATH/ExternalScript 清零 + 双文件 0 容忍扫描
+- `9d6e59c` narrow compressed regex to TEMP-only
+- `53c632b` allow desktop and common extract paths

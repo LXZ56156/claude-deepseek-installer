@@ -1010,13 +1010,13 @@ x-api-key: $TestApiKey
 
     # --- 23g: 文档售后模板检查 ---
     Assert "README.md 包含统一售后安全提示" {
-        $readmeText -match '只发送生成的 report\.txt' -and
+        $readmeText -match 'support-feedback\.txt' -and
         $readmeText -match '不要发送 backup.*logs.*reports/full-report' -and
         $readmeText -match '不要发送完整 API Key' -and
         $readmeText -match '如果截图，请先确认截图里没有完整 API Key'
     } "README.md 必须包含统一售后安全提示模板"
     Assert "QUICK_START.md 包含统一售后安全提示" {
-        $qsText -match '只发送生成的 report\.txt' -and
+        $qsText -match 'support-feedback\.txt' -and
         $qsText -match '不要发送 backup.*logs.*reports/full-report' -and
         $qsText -match '不要发送完整 API Key' -and
         $qsText -match '如果截图，请先确认截图里没有完整 API Key'
@@ -1583,8 +1583,8 @@ x-api-key: $TestApiKey
     }
 
     # --- 27i: 售后安全口径 ---
-    Assert "27i: README.md 必须包含售后安全口径（report.txt + 不要发送完整 API Key）" {
-        $readmeText -match '只发送生成的 report\.txt|不要发送完整 API Key'
+    Assert "27i: README.md 必须包含售后安全口径（support-feedback.txt + 不要发送完整 API Key）" {
+        $readmeText -match 'support-feedback\.txt|不要发送完整 API Key'
     } "README.md 必须保留售后安全口径"
 
     Write-Host ""
@@ -1665,13 +1665,13 @@ x-api-key: $TestApiKey
         $startHereText -notmatch 'function Write-SupportSafeGuidance'
     } "Start-Here.ps1 不应重复定义 Write-SupportSafeGuidance"
 
-    Assert "28c: Write-SupportSafeGuidance 包含 5 条安全口径" {
+    Assert "28c: Write-SupportSafeGuidance 包含 support-feedback.txt 优先发送口径" {
         $funcBody = if ($commonText -match 'function Write-SupportSafeGuidance[\s\S]*?(?=^function |\Z)') { $matches[0] } else { "" }
-        ($funcBody -match '只发送生成的 report\.txt') -and
+        ($funcBody -match 'support-feedback\.txt') -and
         ($funcBody -match '不要发送 backup') -and
         ($funcBody -match '不要发送完整 API Key') -and
         ($funcBody -match '如果截图')
-    } "Write-SupportSafeGuidance 必须包含完整的 5 条安全口径"
+    } "Write-SupportSafeGuidance 必须包含 support-feedback.txt 优先发送口径"
 
     # --- 28d: 白名单 — 售后安全口径出现在关键位置 ---
     Assert "28d: doctor.ps1 使用 Write-SupportSafeGuidance（非 inline 重复）" {
@@ -1723,9 +1723,9 @@ x-api-key: $TestApiKey
     }
     foreach ($docName in $docChecks.Keys) {
         $docText = $docChecks[$docName]
-        Assert "28f: $docName 包含 '只发送 report.txt'" {
-            $docText -match '只发送.*report\.txt|只发送生成的 report\.txt'
-        } "$docName 必须包含 '只发送 report.txt'"
+        Assert "28f: $docName 包含 support-feedback.txt" {
+            $docText -match 'support-feedback\.txt'
+        } "$docName 必须包含 support-feedback.txt"
         Assert "28f: $docName 包含 '不要发送完整 API Key'" {
             $docText -match '不要发送完整 API Key|不要发送.*完整.*API.*Key'
         } "$docName 必须包含 '不要发送完整 API Key'"
@@ -2248,6 +2248,83 @@ x-api-key: $TestApiKey
     Assert "33d: 用户可见文本不含 '这会修改系统环境'" {
         $allSrc -notmatch [regex]::Escape("这会修改系统环境")
     } "仍有 '这会修改系统环境'"
+
+    Write-Host ""
+
+    # ============================================================
+    # 34. v1.3.3 遗留收口: support-feedback / npm shim / docs whitelist
+    # ============================================================
+    Write-CheckHeader "34. v1.3.3 遗留收口: support-feedback / npm shim / docs whitelist"
+
+    # --- 34a: doctor 完成输出包含 "优先发送 support-feedback.txt" ---
+    Assert "34a: doctor.ps1 完成输出包含 '优先发送 support-feedback.txt'" {
+        $doctorText -match '优先发送 support-feedback\.txt'
+    } "doctor.ps1 完成输出必须包含 '优先发送 support-feedback.txt'"
+
+    # --- 34b: Start-Here 完成输出或报告提示包含 support-feedback.txt ---
+    Assert "34b: Start-Here.ps1 包含 support-feedback.txt" {
+        $startHereText -match 'support-feedback\.txt'
+    } "Start-Here.ps1 必须引用 support-feedback.txt"
+
+    # --- 34c: npm shim 组合不应产生吓人的"命令冲突"用户文案 ---
+    $invAreaFull = if ($claudeInstallText -match '(?s)function Get-ClaudeCommandInventory\s*\{.*?(?=^function \w+\s*\{|\Z)') { $matches[0] } else { "" }
+    Assert "34c: Get-ClaudeCommandInventory 使用 IsShimCompanion 避免误报冲突" {
+        $invAreaFull -match 'IsShimCompanion' -and $invAreaFull -match 'nonCompanionCandidates'
+    } "Get-ClaudeCommandInventory 必须使用 IsShimCompanion 归一化 npm shim"
+
+    # --- 34d: 用户可见文案不得正面建议发送 logs/backup/settings.json/full-report/完整 API Key ---
+    $userVisibleLeakPatterns = @(
+        @{Pattern='发送.*logs'; Desc='正面建议发送 logs'},
+        @{Pattern='发送.*backup'; Desc='正面建议发送 backup'},
+        @{Pattern='发送.*settings\.json'; Desc='正面建议发送 settings.json'},
+        @{Pattern='发送.*完整.*API.*Key'; Desc='正面建议发送完整 API Key'},
+        @{Pattern='发送.*full-report'; Desc='正面建议发送 full-report'}
+    )
+    $uvFiles = @{
+        "Start-Here.ps1" = $startHereText
+        "doctor.ps1" = $doctorText
+        "README.md" = $readmeText
+        "QUICK_START.md" = $quickstartText
+        "用户使用教程" = $userGuideText
+    }
+    foreach ($leak in $userVisibleLeakPatterns) {
+        foreach ($file in $uvFiles.Keys) {
+            $text = $uvFiles[$file]
+            $lines = $text -split "`r?`n"
+            $hasLeak = $false
+            foreach ($line in $lines) {
+                if ($line -match $leak.Pattern -and $line -notmatch '不要发送|不要.*发.*|请勿|禁止|不会写入|不会.*记录|用于验证.*Key|没有.*时|备用') {
+                    $hasLeak = $true
+                    break
+                }
+            }
+            Assert "34d: $file 不含正面建议：$($leak.Desc)" {
+                -not $hasLeak
+            } "$file 禁止正面建议：$($leak.Desc)"
+        }
+    }
+
+    # --- 34e: 文档都包含 support-feedback.txt ---
+    $docChecks34 = @{
+        "README.md" = $readmeText
+        "QUICK_START.md" = $quickstartText
+        "用户使用教程" = $userGuideText
+    }
+    foreach ($docName in $docChecks34.Keys) {
+        $docText = $docChecks34[$docName]
+        Assert "34e: $docName 包含 support-feedback.txt" {
+            $docText -match 'support-feedback\.txt'
+        } "$docName 必须包含 support-feedback.txt"
+    }
+
+    # --- 34f: build-release.ps1 whitelist 不包含内部 docs ---
+    $buildReleaseText = Get-Content -Path (Join-Path $ScriptRoot "scripts\build-release.ps1") -Raw -Encoding UTF8
+    $forbiddenBuildDocs = @("docs/闲鱼商品说明.md", "docs/测试清单.md", "docs/视频教程脚本.md", "docs/用户体验验证清单.md", "docs/售后排查话术.md")
+    foreach ($fd in $forbiddenBuildDocs) {
+        Assert "34f: build-release.ps1 whitelist 不含 '$fd'" {
+            $buildReleaseText -notmatch [regex]::Escape($fd)
+        } "build-release.ps1 白名单禁止包含 '$fd'"
+    }
 
     Write-Host ""
 

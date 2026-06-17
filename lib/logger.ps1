@@ -239,3 +239,126 @@ function Get-LogDir {
     #>
     return $script:LogDir
 }
+
+# ============================================================
+# Terminal Transcript 函数 (v1.3.3)
+# ============================================================
+
+$script:TranscriptPath = $null
+$script:TranscriptActive = $false
+
+function Start-CcdiTranscriptSafe {
+    <#
+    .SYNOPSIS
+        安全启动 PowerShell transcript，失败不阻断流程。
+        记录用户实际看到的终端输出，供 support-feedback.txt 摘录使用。
+    .PARAMETER Name
+        Transcript 名称前缀（如 "start-here", "doctor"）
+    .PARAMETER LogDir
+        日志目录，默认使用已初始化的日志目录
+    .RETURNS
+        是否成功启动 transcript
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [string]$LogDir = ""
+    )
+
+    if ($script:TranscriptActive) {
+        Write-Log "DEBUG" "Start-CcdiTranscriptSafe: transcript 已激活，跳过"
+        return $false
+    }
+
+    try {
+        if (-not $LogDir) {
+            $LogDir = $script:LogDir
+        }
+        if (-not $LogDir) {
+            Write-Log "DEBUG" "Start-CcdiTranscriptSafe: 日志目录未初始化，跳过 transcript"
+            return $false
+        }
+
+        if (-not (Test-Path $LogDir)) {
+            New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+        }
+
+        $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        $transcriptFile = Join-Path $LogDir "terminal-$Name-$timestamp.log"
+        $script:TranscriptPath = $transcriptFile
+
+        # try/catch 包裹，兼容 Windows PowerShell 5.1 的各种宿主
+        try {
+            Start-Transcript -Path $transcriptFile -Append -ErrorAction Stop | Out-Null
+            $script:TranscriptActive = $true
+            Write-Log "DEBUG" "Start-CcdiTranscriptSafe: transcript 已启动 -> $transcriptFile"
+            return $true
+        }
+        catch {
+            Write-Log "DEBUG" "Start-CcdiTranscriptSafe: Start-Transcript 失败（可能宿主不支持）: $_"
+            $script:TranscriptPath = $null
+            return $false
+        }
+    }
+    catch {
+        Write-Log "DEBUG" "Start-CcdiTranscriptSafe: 异常: $_"
+        return $false
+    }
+}
+
+function Stop-CcdiTranscriptSafe {
+    <#
+    .SYNOPSIS
+        安全停止 PowerShell transcript，失败不阻断流程。
+    #>
+    if (-not $script:TranscriptActive) {
+        return
+    }
+
+    try {
+        try {
+            Stop-Transcript -ErrorAction Stop | Out-Null
+            Write-Log "DEBUG" "Stop-CcdiTranscriptSafe: transcript 已停止 -> $($script:TranscriptPath)"
+        }
+        catch {
+            Write-Log "DEBUG" "Stop-CcdiTranscriptSafe: Stop-Transcript 失败: $_"
+        }
+    }
+    catch {
+        Write-Log "DEBUG" "Stop-CcdiTranscriptSafe: 异常: $_"
+    }
+    finally {
+        $script:TranscriptActive = $false
+        $script:TranscriptPath = $null
+    }
+}
+
+function Get-LatestCcdiTranscript {
+    <#
+    .SYNOPSIS
+        获取最近一次 terminal transcript 文件的路径。
+    .PARAMETER LogDir
+        日志目录，默认使用已初始化的日志目录
+    .RETURNS
+        最近 transcript 文件路径，不存在则返回 $null
+    #>
+    param([string]$LogDir = "")
+
+    try {
+        if (-not $LogDir) {
+            $LogDir = $script:LogDir
+        }
+        if (-not $LogDir -or -not (Test-Path $LogDir)) {
+            return $null
+        }
+
+        $terminalFiles = @(Get-ChildItem -Path $LogDir -Filter "terminal-*.log" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+        if ($terminalFiles.Count -gt 0) {
+            return $terminalFiles[0].FullName
+        }
+        return $null
+    }
+    catch {
+        return $null
+    }
+}

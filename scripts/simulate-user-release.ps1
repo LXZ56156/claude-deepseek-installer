@@ -304,7 +304,16 @@ function Assert-ZipDoesNotContainForbiddenEntries {
             "scripts/package-release.ps1",
             "CLAUDE.md",
             ".gitignore",
-            "report.txt"
+            "report.txt",
+            "docs/闲鱼商品说明.md",
+            "docs/测试清单.md",
+            "docs/视频教程脚本.md",
+            "docs/用户体验验证清单.md",
+            "docs/售后排查话术.md",
+            "docs/v1.3.3-final-acceptance.md",
+            "docs/release-artifacts.md",
+            "docs/发布前验收清单.md",
+            "docs/交接文档.md"
         )
         foreach ($entry in $entries) {
             foreach ($pattern in $forbidden) {
@@ -784,8 +793,17 @@ Write-Output "2.1.179 (Claude Code)"
                 throw "claude.ps1 was executed directly! Sentinel file found: $($sentinelFiles.FullName)"
             }
 
+            # v1.3.3 遗留收口: Assert HasConflict must be false for single npm shim combo
+            if ($inventory.HasConflict) {
+                throw "Get-ClaudeCommandInventory HasConflict=true for single npm shim combo (expected false). ConflictSummary=$($inventory.ConflictSummary)"
+            }
+            if ($inventory.ConflictSummary -match '多个 claude 命令来源') {
+                throw "Get-ClaudeCommandInventory ConflictSummary must NOT contain '多个 claude 命令来源' for single npm shim"
+            }
+            Write-Host "[simulate]   HasConflict=$($inventory.HasConflict) (expected: false)" -ForegroundColor Green
+
             # Check no ".Count" errors in the output
-            Write-Host "[simulate]   shim test passed: .ps1 not executed, .cmd usable" -ForegroundColor Green
+            Write-Host "[simulate]   shim test passed: .ps1 not executed, .cmd usable, HasConflict=false" -ForegroundColor Green
         }
         finally {
             Pop-Location
@@ -798,6 +816,46 @@ Write-Output "2.1.179 (Claude Code)"
     }
 
     Assert-NoBadRuntimeText -Runs $runs -ReleaseRoot $releaseRoot -DummyKey $DummyApiKey
+
+    # v1.3.3 遗留收口: 运行 doctor 后验证 support-feedback.txt 生成
+    Write-Check "v1.3.3 遗留收口: support-feedback.txt generated after doctor"
+    $fbTestEnv = New-SimEnvironment -ProfileDir $testProfile -DesktopDir $testDesktop -DummyKey $DummyApiKey
+    $fbRun = Invoke-SimCommand -Name "doctor support-feedback generation" -FileName $powerShellExe -Arguments @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $releaseRoot "doctor.ps1"),
+        "-NoOpenReport", "-SkipApiTest"
+    ) -InputText "`r`n" -WorkingDirectory $releaseRoot -Environment $fbTestEnv -TimeoutSec 180
+    [void]$runs.Add($fbRun)
+
+    $supportFeedbackPath = Join-Path $releaseRoot "support-feedback.txt"
+    if (-not (Test-Path $supportFeedbackPath)) {
+        throw "support-feedback.txt was not generated after running doctor.ps1"
+    }
+    $fbContent = Get-Content $supportFeedbackPath -Raw -Encoding UTF8
+    if ($fbContent -notmatch '一、最简结论') {
+        throw "support-feedback.txt missing section '一、最简结论'"
+    }
+    if ($fbContent -notmatch '二、诊断报告 report\.txt') {
+        throw "support-feedback.txt missing section '二、诊断报告 report.txt'"
+    }
+    if ($fbContent -notmatch '四、最近运行日志尾部') {
+        throw "support-feedback.txt missing section '四、最近运行日志尾部'"
+    }
+    if ($fbContent -notmatch '五、最近终端输出尾部') {
+        throw "support-feedback.txt missing section '五、最近终端输出尾部'"
+    }
+    if ($fbContent -match 'sk-[A-Za-z0-9]{20,}') {
+        # Check that the dummy key is NOT exposed in full
+        $fullKeyMatches = [regex]::Matches($fbContent, 'sk-[A-Za-z0-9]{20,}')
+        foreach ($m in $fullKeyMatches) {
+            if ($m.Value -notmatch '\*{4}') {
+                throw "support-feedback.txt contains unmasked API Key: $($m.Value)"
+            }
+        }
+    }
+    if ($fbContent -match '"ANTHROPIC_AUTH_TOKEN"\s*:\s*"sk-') {
+        throw "support-feedback.txt contains full settings.json ANTHROPIC_AUTH_TOKEN"
+    }
+    Write-Host "[simulate]   support-feedback.txt generated with correct structure and sanitization" -ForegroundColor Green
 
     Write-Host "[simulate] OK" -ForegroundColor Green
 }

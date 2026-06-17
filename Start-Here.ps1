@@ -322,7 +322,7 @@ function Write-NextStepCard {
     if ($IncludeSupportFallback) {
         Write-Host ""
         Write-Info "如果以上方法仍无法解决，再生成诊断报告。"
-        Write-Info "如需人工协助，只发送 report.txt。"
+        Write-Info "如需人工协助，优先发送 support-feedback.txt（没有时发 report.txt）。"
         Write-Info "不要发送 settings.json、完整 API Key、backup 或 logs。"
     }
 
@@ -1052,7 +1052,7 @@ claude
 请返回安装工具，选择：
 [4] 运行一键诊断
 
-然后只发送诊断 report.txt 给技术支持。
+然后只发送诊断 support-feedback.txt（优先）或 report.txt 给技术支持。
 不要发送 backup、logs、full-report，也不要发送完整 API Key。
 "@
         $readmePath = Join-Path $testDir "README.md"
@@ -1363,7 +1363,7 @@ claude --version
 1. 「一键修复依赖.cmd」
 2. 「一键诊断.cmd」
 
-如需售后，只发送 report.txt，不要发送 logs、backup、settings.json 或完整 API Key。"
+如需售后，优先发送 support-feedback.txt；没有时发送 report.txt。不要发送 logs、backup、settings.json 或完整 API Key。"
 } elseif ($script:ClaudeInstalled -and $script:ConfigWritten) {
 "安装完成不代表 API 永久可用。
 如果 Claude Code 能启动但模型调用失败，请优先检查：
@@ -1394,6 +1394,55 @@ API Key 始终只保存在您的本机，不会上传或分享。
             Write-Success "安装完成报告已生成: $reportPath"
         }
         Write-Log "INFO" "安装报告已保存: $reportPath"
+
+        # --- 生成 support-feedback.txt ---
+        try {
+            $fbOverallStatus = $overallStatus
+            $fbClaudeStatus = if ($script:TestSafeMode) { "测试安全模式未执行真实安装" } elseif ($claudeVer) { "已安装 ($claudeVer)" } else { "未安装" }
+            $fbDeepSeekStatus = if ($script:ConfigWritten) { "已配置" } else { "未配置" }
+            $fbApiTestStatus = $apiTestStatus
+            $fbFreshShellStatus = if ($freshShellOk) { "通过" } elseif ($script:ClaudeInstalled -and $userPathOk) { "建议手动验证" } else { "未验证" }
+            $fbNextSteps = @()
+            if ($script:TestSafeMode) {
+                $fbNextSteps = @("测试安全模式未执行真实安装，不代表真实环境状态", "真实安装请使用「00-点我开始安装.cmd」")
+            }
+            elseif ($script:ClaudeInstalled -and $script:ConfigWritten) {
+                if (-not $freshShellOk) { $fbNextSteps += "新开 PowerShell 执行 claude --version 确认可用" }
+                $fbNextSteps += "回到安装助手完成页选择 [1] 启动 Claude Code 测试"
+                if ($script:ApiTestFailed) { $fbNextSteps += "检查 DeepSeek Key 和余额" }
+            }
+            else {
+                $fbNextSteps += "运行「00-点我开始安装.cmd」完成安装"
+                $fbNextSteps += "运行「一键诊断.cmd」获取详细报告"
+            }
+
+            $safeReportForFb = Convert-ToSafeReportText -Text $reportContent
+            $supportFeedbackResult = New-SupportFeedbackReport `
+                -OutputPath (Join-Path $ScriptDir "support-feedback.txt") `
+                -ReportText $safeReportForFb `
+                -ScriptDir $ScriptDir `
+                -IncludeLogTail:$true `
+                -IncludeTerminalTail:$true `
+                -MaxLogLines 200 `
+                -MaxTerminalLines 200 `
+                -OverallStatus $fbOverallStatus `
+                -ClaudeStatus $fbClaudeStatus `
+                -DeepSeekStatus $fbDeepSeekStatus `
+                -ApiTestStatus $fbApiTestStatus `
+                -FreshShellStatus $fbFreshShellStatus `
+                -NextSteps $fbNextSteps
+
+            if ($supportFeedbackResult.Success) {
+                $fbPath = (Resolve-Path $supportFeedbackResult.Path -ErrorAction SilentlyContinue).Path
+                if (-not $fbPath) { $fbPath = $supportFeedbackResult.Path }
+                Write-Success "售后反馈文件已生成: $fbPath"
+                Write-Info "如需反馈问题，优先发送此文件。"
+            }
+        }
+        catch {
+            Write-Log "ERROR" "生成 support-feedback.txt 失败: $_"
+            # 不阻断主流程
+        }
     }
     catch {
         Write-Error-Msg "报告生成失败: $($_.Exception.Message)"
@@ -1917,6 +1966,9 @@ function Show-CompletionMenu {
 function Start-LazyInstall {
     Write-Log "INFO" "开始一键安装流程"
 
+    # 安全启动 terminal transcript（失败不阻断）
+    Start-CcdiTranscriptSafe -Name "start-here"
+
     # 初始化/更新状态文件
     Initialize-CcdiState -ScriptVersion $ScriptVersion | Out-Null
 
@@ -2064,6 +2116,9 @@ function Start-LazyInstall {
     # Step 7: 生成报告
     Step-GenerateReport -ApiKey $apiKey -EnvCheckResult $envResult
 
+    # 停止 terminal transcript
+    Stop-CcdiTranscriptSafe
+
     # 最终完成页
     Show-CompletionPage
 }
@@ -2166,7 +2221,7 @@ function Show-MainMenu {
     Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host "  [1] 一键安装（推荐）                                        " -ForegroundColor Green
     Write-Host "      自动检测 → 安装 → 配置 → 测试 → 生成报告               " -ForegroundColor White
-    Write-Host "  [2] 遇到问题：一键诊断（生成可发送的 report.txt）            " -ForegroundColor White
+    Write-Host "  [2] 遇到问题：一键诊断（生成 support-feedback.txt / report.txt）    " -ForegroundColor White
     Write-Host "  [3] 缺少依赖：一键修复依赖（Node.js/npm/Claude）            " -ForegroundColor White
     Write-Host "  [4] 修改 / 恢复 / 卸载配置                                  " -ForegroundColor White
     Write-Host "  [5] 高级选项                                                " -ForegroundColor White

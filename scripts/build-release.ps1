@@ -167,13 +167,9 @@ $AllowedEntries = @(
     "lib/state.ps1",
     "lib/deepseek-env.defaults.json",
     # === docs 文件级白名单（用户可见文档） ===
+    # 内部 docs（闲鱼商品说明/测试清单/视频脚本/验收清单/售后话术等）不进入买家 ZIP
     "docs/用户使用教程.md",
     "docs/常见问题FAQ.md",
-    "docs/闲鱼商品说明.md",
-    "docs/测试清单.md",
-    "docs/视频教程脚本.md",
-    "docs/用户体验验证清单.md",
-    "docs/售后排查话术.md",
     # === examples 文件级白名单 ===
     "examples/settings.deepseek.example.json",
     "examples/report.example.txt",

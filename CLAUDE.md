@@ -8,6 +8,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **核心原则**：配置写入和诊断报告均在本地完成；除用户主动选择 DeepSeek 官方 API 测试外，不向第三方发送 API Key；不提供账号/中转/破解服务。
 
+## Session Trigger
+
+以下规则在对应条件触发时执行，不需要读完整个文档体系：
+
+| 触发条件 | 执行动作 |
+|---------|---------|
+| **每次会话开始** | 读 `AGENTS.md`（简短，秒读）——知道当前分支/状态/下一步 |
+| **遇到 bug / 异常行为 / 报错** | 打开 `docs/dev/bug-registry.md` → 顶部**速查表**按症状定位 → 读对应条目。先查是不是已知问题，再动手修 |
+| **修完一个 bug** | 在 bug-registry.md 对应主题区追加条目（症状→根因→修复→防复发→教训）+ 更新下方检查覆盖索引 |
+| **一个阶段完成 / 准备 commit** | 更新 `AGENTS.md` Progress Log（一行：日期+内容+commit） |
+| **不确定要不要记？** | 记。信息宁可多不可丢 |
+| **完成任务前** | 扫一眼 AGENTS.md 的"完成前检查"（§完成前检查），逐条确认后再声称完成 |
+
 ## Running Scripts
 
 没有编译 build 步骤 — 纯脚本项目，直接交付给用户运行。Release ZIP 打包用 `scripts/build-release.ps1`。轻量自检脚本在 `scripts/check.ps1` 和 `scripts/check.sh`。
@@ -29,7 +42,39 @@ powershell -ExecutionPolicy Bypass -File .\doctor.ps1 -NoSaveReport -SkipApiTest
 powershell -ExecutionPolicy Bypass -File .\repair-deps.ps1 -TestSafe
 ```
 
-## Entry Points（v1.3.2）
+## Validation Workflow
+
+`scripts/validate.ps1` 是统一验收入口，编排多级验证工具链。日常开发和发布前必须运行：
+
+```powershell
+# 快速自检（git diff --check + check.ps1 PS 5.1 + pwsh）
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode Smoke
+
+# 完整验收（Smoke + AST 解析 + UX 检查 + 安装决策矩阵 + Core sandbox 流程）
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode Full
+
+# 发布验收（Full + package-release + simulate-user-release + sandbox 全模拟 + 场景矩阵）
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode Release -RequireClean
+
+# 极端场景（失败目录 + 硬核场景矩阵 + doctor-repair 矩阵）
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode Hardcore
+
+# 全部（Full + Release + Hardcore + 真实 settings.json 不变检查）
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode All
+```
+
+验证层级：**Smoke（每次 commit）→ Full（每次 push）→ Release（发布前）→ Hardcore（专项验证）**
+
+Release ZIP 打包：
+```powershell
+# 直接打包（build-release.ps1）
+powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -Version "1.3.3"
+
+# 向后兼容入口（package-release.ps1，被 validate.ps1 -Mode Release 调用）
+powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
+```
+
+## Entry Points（v1.3.3）
 
 用户第一屏是双击 .cmd 文件，不是 PowerShell 命令：
 
@@ -64,7 +109,7 @@ bootstrap.ps1
 
 ### Key Design Patterns
 
-- **`Invoke-CommandSafe`** (common.ps1)：所有外部命令调用的统一封装，使用 `Start-Process` + 临时文件捕获输出，内置超时机制（默认 60s）。不要直接调用外部命令，用此函数包装。
+- **`Invoke-CommandSafe`** (common.ps1)：所有外部命令调用的统一封装，使用 `Start-Process` + 临时文件捕获输出，内置超时机制（默认 60s）。超时时使用 `taskkill /T /F` 杀进程树，并读取临时文件中的部分输出后再清理。不要直接调用外部命令，用此函数包装。**但安装类长操作（winget/npm/native install）不要用 Invoke-CommandSafe**，改用 `Invoke-VisibleInstallCommand` 让用户看到实时进度。
 - **`Write-Log` / `Write-Info` / `Write-Success` / `Write-Warning` / `Write-Error-Msg`**：统一的日志+控制台输出。`Write-Log` 写日志文件，其他函数同时写日志+彩色控制台输出。
 - **`Write-Result`**：检测结果输出，接受 `OK|WARN|ERROR|SKIP` 状态。
 - **`Mask-ApiKey`**：Key 脱敏，显示前 4 位 + 后 4 位。所有输出 API Key 的地方必须经过此函数。
@@ -72,6 +117,13 @@ bootstrap.ps1
 - **`Get-ApiKeyFromEnvironment`**：非交互模式只从 `CCDI_API_KEY` 或 `DEEPSEEK_API_KEY` 读取 Key，不支持命令行明文 Key 参数。
 - **`Test-UserPathRisk`** (common.ps1)：检测脚本是否从压缩包临时目录运行（WinRAR/7-Zip/Explorer 解压预览），返回 `IsBlocked` + `RiskLevel`（INFO/WARN/BLOCK）。
 - **`Invoke-ClaudeDoctorSafe`** (claude-install.ps1)：安全封装 `claude doctor`（快速诊断，最多 30s 超时），失败不阻塞流程，始终返回结构化结果。
+- **`Invoke-ClaudeDoctorInteractiveSafe`** (claude-install.ps1)：隔离执行 `claude doctor`（通过 cmd.exe 包装或 ProcessStartInfo），设置 `NO_COLOR=1`/`TERM=dumb` 防止分页器，使用 `System.Diagnostics.Process` + `WaitForExit` 超时 + `taskkill /T /F` 杀进程树。`Invoke-ClaudeDoctorSafe` 内部委托给它。**不要在 install 流程中自动调用 claude doctor** — 这是纯诊断工具，安装后验证用 `claude --version` + fresh shell。
+- **`Invoke-VisibleInstallCommand`** (claude-install.ps1)：可见安装命令封装，使用 `Start-Process -NoNewWindow -PassThru` 让用户看到实时输出，超时用 `taskkill /T /F` 杀进程树。用于 winget/npm/native install 等需要向用户展示进度的长操作。**安装类命令不要用 `Invoke-CommandSafe`**（它会隐藏输出，用户不知道发生了什么）。
+- **`Invoke-VisibleFileDownload`** (claude-install.ps1)：可见文件下载封装，用 `Invoke-RestMethod` + 进度条展示。Native Install 下载脚本必须用此函数而非 `Invoke-CommandSafe`。默认 TimeoutSec <= 30。
+- **`Write-JsonFileSafe`** (common.ps1)：JSON 文件安全写入。处理空 env、特殊字符等边界情况。
+- **`Initialize-ConsoleEncodingSafe`** (logger.ps1)：按 PowerShell 版本和终端类型智能初始化控制台编码。**Windows PowerShell 5.1 Desktop + conhost 下不强制 chcp 65001**，避免中文叠字（如"正正在在检检测测"）。入口脚本通过 `bootstrap.ps1` 的 `Initialize-CcdiScript` 自动调用此函数。
+- **`Convert-ToSafeReportText`** (common.ps1)：过滤 claude doctor 输出中的内部字段（GrowthBook、OAuth、tengu_ccr_bridge、organization 等），生成可安全外发的 report.txt。
+- **`Remove-AnsiEscape`** / **`Test-Mojibake`** / **`Normalize-ExternalCommandOutput`** (common.ps1)：文本清理管道 — ANSI 转义序列清除 → 乱码检测（锟斤拷/鈹/鉁等）→ 外部命令输出规范化。
 - **`TestSafe` / `CCDI_TEST_MODE` 模式**：所有安装/网络/外部调用函数支持 `-TestSafe` 开关或环境变量 `$env:CCDI_TEST_MODE=1`，跳过真实操作返回模拟结果。开发/自检时通过 `$env:CCDI_TEST_USERPROFILE` 和 `$env:CCDI_TEST_DESKTOP` 将文件写入重定向到 `.sandbox/` 目录。
 - **`lib/deepseek-env.defaults.json`**：PowerShell 和 WSL 共用的 DeepSeek 默认 env 模板。模型名或默认变量只在这里改。
 
@@ -87,6 +139,12 @@ bootstrap.ps1
 4. **全部输出用 ASCII 标记**：emoji（✅❌⚠）和框线字符（╔═║━┌│）在老终端/远程工具/缺字体环境显示为方块。控制台和报告文件统一用 `[OK]`/`[WARN]`/`[ERROR]`/`[SKIP]`/`[INFO]`。`scripts/check.sh` 会扫描所有文件确保不含风险字符。
 5. **脚本幂等**：已安装不重复安装，有配置先备份再合并。
 6. **不要求管理员权限**：除非确有必要（如 `npm install -g` 权限问题），优先提示用户手动操作而非自动 `sudo`。
+7. **自动化验证安全规则**（来自 AGENTS.md，同样适用于开发）：
+   - 自动化验证中**绝不使用真实 DeepSeek API Key**。用 `-TestSafe`、`-SkipApiTest` 或本地 mock。
+   - 自动化验证中**绝不执行真实 claude install、winget、npm install/update**。
+   - **不污染真实 `%USERPROFILE%\.claude\settings.json`** — 涉及配置逻辑的验证前后记录 hash/length。
+   - **不要 `git add .`** — 只精确 add 需要提交的源文件/文档。
+   - P0/P1 验证失败是 blocker，先报告再修，修复保持最小范围。
 
 ## File Responsibilities
 
@@ -112,8 +170,12 @@ bootstrap.ps1
 | `lib/logger.ps1` | 日志初始化、ASCII 标记输出、日志文件管理。**不使用 emoji 或框线字符** |
 | `lib/deepseek-env.defaults.json` | PowerShell/WSL 共用 DeepSeek env 默认模板。模型名或默认变量只在这里改 |
 | `scripts/build-release.ps1` | Release ZIP 打包：allow-list → 源预扫描 → staging → BOM 规范化 → .cmd 校验 → ZIP → SHA256 |
+| `scripts/package-release.ps1` | 向后兼容的 Release ZIP 入口（封装调用 `build-release.ps1`），被 `validate.ps1 -Mode Release` 使用 |
+| `scripts/validate.ps1` | 统一验收入口（Smoke/Full/Release/Hardcore/All），编排多级验证工具链 |
 | `scripts/check.ps1` | PowerShell 语法/库加载/配置合并/状态守卫/.cmd 编码/安装安全/返回结构检查（支持 `-Network`/`-StrictNetwork`） |
 | `scripts/check.sh` | Bash 语法/JSON 模板一致性/报告标记/敏感输出守卫/函数存在性/风险字符扫描 |
+| `scripts/ux-check.ps1` / `scripts/ux-check.sh` | UX 文案一致性检查（标记、措辞、PATH 0 容忍等） |
+| `scripts/simulate-user-release.ps1` | Release ZIP 用户路径模拟验收（解压→双击 .cmd→ShellExecute→完成页） |
 
 ## DeepSeek Configuration Format
 
@@ -201,8 +263,20 @@ bash scripts/check.sh
 - **`Read-Host -AsSecureString`**：返回 SecureString，需要用 `Marshal` 转换为明文。已封装在 `Read-SecretInput` 中，直接使用即可。
 - **API Key 扫描用 `[List[object]]::new().Add()`**：不要用 `+=` 在函数内追加，PowerShell 函数作用域会创建局部变量导致外层变量不更新。
 - **安装后检测 claude 前先调 `Refresh-CurrentProcessPath`**：Native Install/npm 安装后 PATH 可能已写入但当前进程未刷新。
-- **Release allow-list**：docs/ examples/ 是文件级白名单，不是整目录。新增/删除 docs 文件必须同步更新 `$AllowedEntries`。
+- **Release allow-list**：docs/ examples/ 是文件级白名单，不是整目录。新增/删除 docs 文件必须同步更新 `$AllowedEntries`。**注意：`docs/dev/` 是开发者文档，永远不进入 release allow-list**。
 - **安装 Node.js 后 PATH 不刷新**：提示用户"关闭并重新打开 PowerShell"时，附带原因解释（类比手机装 App 后点图标）。
 - **TestSafe 模式不执行真实外部操作**：所有安装/网络函数检测到 `-TestSafe` 或 `$env:CCDI_TEST_MODE=1` 立即返回模拟结果，不调用 winget/npm/claude/外网。开发测试时用 `$env:CCDI_TEST_USERPROFILE` 将文件写入重定向到 `.sandbox/`。
 - **doctor.ps1 状态用 `$script:DoctorState` 集中管理**：`CheckResults` 和 `Suggestions` 是 `[List[object]]::new()` 脚本级变量，不用 `+=`。`scripts/check.ps1` 会验证此约束。
 - **backup 文件排序按文件名**：`Copy-Item` 保留源文件时间戳，所以按 `LastWriteTime` 排序会错序。按文件名（含 yyyyMMdd-HHmmss-fff）排序。文件名精度至少到毫秒，防止同一秒内多次备份互相覆盖。
+- **安装类命令不要用 `Invoke-CommandSafe`**：winget/npm install/native install 需要让用户看到实时输出。用 `Invoke-VisibleInstallCommand` 或 `Invoke-InstallCommandCaptured`（使用 `Start-Process -NoNewWindow -PassThru`），超时时用 `taskkill /T /F` 杀进程树。
+- **claude doctor 是纯诊断工具，不要在 install 流程中自动调用**：`Install-ClaudeCodeAuto` 不能调用 `Invoke-ClaudeDoctorSafe`/`Invoke-ClaudeDoctorInteractiveSafe`。安装后验证用 `claude --version` + fresh shell 检查。
+- **doctor.ps1 不能自动调用 claude doctor**：Check-Commands 只提供手动指导（"手动输入：claude doctor"），警告不要通过脚本/管道/重定向运行，建议截图或复制终端输出。底层通过 `Invoke-ClaudeDoctorInteractiveSafe` 隔离执行（设置 `NO_COLOR=1`/`TERM=dumb`，cmd.exe 包装或 ProcessStartInfo）。
+- **`Clear-StaleClaudeDoctorProcesses` 必须按 CommandLine 过滤**：不能简单杀所有 claude.exe 进程（会误杀正常运行的 claude 会话）。支持 `-ParentPid` 参数进行局部清理。
+- **`ConvertTo-WindowsCommandLineArgument` 必须处理尾部反斜杠**：路径如 `D:\foo\` 的尾部反斜杠需要双倍转义，否则引号被吞。
+- **WSL base64 管道必须用 `printf` 不用 `echo`**：`Test-WslClaudeComprehensive` 中 decoded 变量双引号包裹后通过 `printf '%s'` 管道到 bash，防止分词和转义问题。必须先用 `command -v base64` 检查可用性。
+- **Encoding 初始化不要直接调 `chcp 65001`**：用 `Initialize-ConsoleEncodingSafe`（由 `Initialize-CcdiScript` 自动调用）。Windows PowerShell 5.1 Desktop + conhost 下强制 UTF-8 会导致中文叠字。
+
+## Related Files
+
+- **`AGENTS.md`**：会话级状态文件（当前分支、最新 commit、最近修复历史、启动流程）。每次新会话都应该读取 AGENTS.md 了解当前工作上下文。本文件（CLAUDE.md）是持久化的项目文档；AGENTS.md 随迭代更新。
+- **`lib/deepseek-env.defaults.json`**：DeepSeek 模型的**唯一权威来源**。任何模型名、默认 env 变量的修改只能在此文件中进行。PowerShell 和 WSL 共用此模板。

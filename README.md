@@ -62,10 +62,11 @@
 
 > **遇到问题？** 按以下顺序排查：
 > 1. 双击「一键修复依赖.cmd」→ 修复缺失的 Node.js/npm/Claude/PATH
-> 2. 双击「一键诊断.cmd」→ 只发送生成的 report.txt
+> 2. 双击「一键诊断.cmd」→ 优先发送生成的 support-feedback.txt
 >
 > **售后安全提示：**
-> - 只发送生成的 report.txt。
+> - 优先发送 support-feedback.txt（汇总反馈文件）。
+> - 如没有 support-feedback.txt，再发送 report.txt。
 > - 不要发送 backup/、logs/、reports/full-report-*、settings.json。
 > - 不要发送完整 API Key。
 > - 如果截图，请先确认截图里没有完整 API Key。
@@ -328,22 +329,25 @@ powershell -ExecutionPolicy Bypass -File .\doctor.ps1 -ShareSafe
 
 ### 第 1 步：双击「一键诊断.cmd」
 
-这会生成分享版报告：
-- `report.txt` — **分享版**（已脱敏，可发送给售后）
+这会生成诊断文件：
+- `support-feedback.txt` — **优先发送**（汇总反馈文件，已脱敏）
+- `report.txt` — **备用**（诊断报告，已脱敏）
 - `reports/report-YYYYMMDD-HHMMSS.txt` — 分享版历史记录
-- `reports/full-report-YYYYMMDD-HHMMSS.txt` — **完整版**（仅本地保存，需手动运行不加 -ShareSafe 的 doctor.ps1）
+- `reports/full-report-YYYYMMDD-HHMMSS.txt` — **完整版**（仅本地保存，不要发送）
 
-### 第 2 步：发送 report.txt
+### 第 2 步：发送 support-feedback.txt
 
-将项目根目录的 `report.txt`（分享版）发送给卖家/技术支持。
+优先将项目根目录的 `support-feedback.txt` 发送给卖家/技术支持。
+如果没有该文件，再发送 `report.txt`。
 
 **售后安全提示：**
-- 只发送生成的 report.txt。
+- 优先发送 support-feedback.txt。
+- 如没有 support-feedback.txt，再发送 report.txt。
 - 不要发送 backup/、logs/、reports/full-report-*、settings.json。
 - 不要发送完整 API Key。
 - 如果截图，请先确认截图里没有完整 API Key。
 
-报告中的 API Key 已自动脱敏处理。
+反馈文件中的 API Key 已自动脱敏处理。
 
 ---
 

@@ -361,7 +361,8 @@ function Write-SupportSafeGuidance {
     .SYNOPSIS
         v1.3.3 UX: 统一售后安全提示。
         所有完成页、报告、README、诊断页共用此模板。
-        只发送 report.txt，不发送 backup/logs/full-report/settings.json/API Key。
+        优先发送 support-feedback.txt；没有时发送 report.txt。
+        不发送 backup/logs/full-report/settings.json/API Key。
     .PARAMETER ForReport
         返回纯文本（用于嵌入报告），而非控制台输出。
     #>
@@ -371,7 +372,8 @@ function Write-SupportSafeGuidance {
 
     $lines = @(
         "如需售后，请运行「一键诊断.cmd」。",
-        "只发送生成的 report.txt。",
+        "优先发送 support-feedback.txt（汇总反馈文件）。",
+        "如没有 support-feedback.txt，再发送 report.txt。",
         "不要发送 backup/、logs/、reports/full-report-*、settings.json。",
         "不要发送完整 API Key。",
         "如果截图，请先确认截图里没有完整 API Key。"
@@ -386,9 +388,295 @@ function Write-SupportSafeGuidance {
     }
 }
 
-# ============================================================
-# JSON 处理函数
-# ============================================================
+function New-SupportFeedbackReport {
+    <#
+    .SYNOPSIS
+        v1.3.3: 生成统一的售后反馈文件 support-feedback.txt。
+        汇总 report.txt、最近日志尾部、终端输出尾部，全部脱敏。
+        以后售后默认只让用户发送此文件。
+    .PARAMETER OutputPath
+        输出路径，默认项目根目录 support-feedback.txt
+    .PARAMETER ReportText
+        report.txt 的脱敏内容（已通过 Convert-ToSafeReportText 处理）
+    .PARAMETER ScriptDir
+        项目根目录（用于查找 logs/、reports/ 等）
+    .PARAMETER IncludeLogTail
+        是否包含最近日志尾部，默认 $true
+    .PARAMETER IncludeTerminalTail
+        是否包含最近终端输出尾部，默认 $true
+    .PARAMETER MaxLogLines
+        日志尾部最大行数，默认 200
+    .PARAMETER MaxTerminalLines
+        终端输出尾部最大行数，默认 200
+    .PARAMETER OverallStatus
+        当前状态：可用 / 基本可用 / 需要修复 / 未完成
+    .PARAMETER ClaudeStatus
+        Claude Code 状态描述
+    .PARAMETER DeepSeekStatus
+        DeepSeek 配置状态描述
+    .PARAMETER ApiTestStatus
+        API 测试状态描述
+    .PARAMETER FreshShellStatus
+        Fresh PowerShell 状态描述
+    .PARAMETER NextSteps
+        下一步建议（字符串数组，最多 3 条）
+    .RETURNS
+        包含 Success, Path, Error 的哈希表
+    #>
+    param(
+        [string]$OutputPath = "",
+        [string]$ReportText = "",
+        [string]$ScriptDir = "",
+        [switch]$IncludeLogTail = $true,
+        [switch]$IncludeTerminalTail = $true,
+        [int]$MaxLogLines = 200,
+        [int]$MaxTerminalLines = 200,
+        [string]$OverallStatus = "未完成",
+        [string]$ClaudeStatus = "",
+        [string]$DeepSeekStatus = "",
+        [string]$ApiTestStatus = "",
+        [string]$FreshShellStatus = "",
+        [string[]]$NextSteps = @()
+    )
+
+    $result = @{
+        Success = $false
+        Path    = ""
+        Error   = ""
+    }
+
+    try {
+        # 确定输出路径
+        if (-not $OutputPath) {
+            if ($ScriptDir) {
+                $OutputPath = Join-Path $ScriptDir "support-feedback.txt"
+            }
+            else {
+                $OutputPath = Join-Path (Get-Location) "support-feedback.txt"
+            }
+        }
+        $result.Path = $OutputPath
+
+        $scriptVersion = "1.3.3"
+        $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        $sb = New-Object System.Text.StringBuilder
+
+        # ============================================================
+        # 文件头
+        # ============================================================
+        [void]$sb.AppendLine("Claude Code + DeepSeek 配置助手 - 售后反馈文件")
+        [void]$sb.AppendLine("生成时间：$timestamp")
+        [void]$sb.AppendLine("工具版本：$scriptVersion")
+        [void]$sb.AppendLine("说明：本文件已脱敏，可发送给售后。不要发送 settings.json、backup、logs、full-report 或完整 API Key。")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("=" * 73)
+
+        # ============================================================
+        # 一、最简结论
+        # ============================================================
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("一、最简结论")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("  - 当前状态：$OverallStatus")
+        if ($ClaudeStatus) { [void]$sb.AppendLine("  - Claude Code：$ClaudeStatus") }
+        if ($DeepSeekStatus) { [void]$sb.AppendLine("  - DeepSeek 配置：$DeepSeekStatus") }
+        if ($ApiTestStatus) { [void]$sb.AppendLine("  - API 测试：$ApiTestStatus") }
+        if ($FreshShellStatus) { [void]$sb.AppendLine("  - Fresh PowerShell：$FreshShellStatus") }
+
+        if ($NextSteps -and (@($NextSteps)).Count -gt 0) {
+            [void]$sb.AppendLine("  - 下一步建议：")
+            $stepNum = 1
+            foreach ($step in $NextSteps) {
+                if ($stepNum -gt 3) { break }
+                [void]$sb.AppendLine("    $stepNum. $step")
+                $stepNum++
+            }
+        }
+
+        # ============================================================
+        # 二、诊断报告 report.txt
+        # ============================================================
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("=" * 73)
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("二、诊断报告 report.txt")
+        [void]$sb.AppendLine("")
+        if ($ReportText) {
+            # ReportText 已经过 Convert-ToSafeReportText 处理，再次确保脱敏
+            $safeReport = Sanitize-SecretLikeText -Text $ReportText
+            [void]$sb.AppendLine($safeReport)
+        }
+        else {
+            [void]$sb.AppendLine("  未提供诊断报告内容。")
+        }
+
+        # ============================================================
+        # 三、最近安装报告摘要
+        # ============================================================
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("=" * 73)
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("三、最近安装报告摘要")
+        [void]$sb.AppendLine("")
+
+        $foundInstallReport = $false
+        if ($ScriptDir) {
+            # 查找 reports/ 下的 install-report 或安装完成报告
+            $reportsDir = Join-Path $ScriptDir "reports"
+            $installReports = @()
+            if (Test-Path $reportsDir) {
+                $installReports = @(Get-ChildItem -Path $reportsDir -Filter "install-report-*" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+            }
+            # 也检查项目根目录
+            $rootReports = @(Get-ChildItem -Path $ScriptDir -Filter "install-report-*" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+            $installReports = @(@($installReports) + @($rootReports) | Sort-Object LastWriteTime -Descending)
+
+            if ($installReports.Count -gt 0) {
+                $foundInstallReport = $true
+                $latestReport = $installReports[0]
+                try {
+                    $reportContent = Get-Content $latestReport.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                    if ($reportContent) {
+                        $safeContent = Sanitize-SecretLikeText -Text $reportContent
+                        # 只取关键摘要段（前 100 行或 5000 字符）
+                        $lines = $safeContent -split "`r?`n"
+                        $summaryLines = $lines | Select-Object -First 100
+                        $summaryText = ($summaryLines -join "`r`n")
+                        if ($summaryText.Length -gt 5000) {
+                            $summaryText = $summaryText.Substring(0, 5000) + "`r`n...[摘要截断]"
+                        }
+                        [void]$sb.AppendLine("  最近安装报告：$($latestReport.Name)")
+                        [void]$sb.AppendLine("")
+                        [void]$sb.AppendLine($summaryText)
+                    }
+                }
+                catch {
+                    Write-Log "WARN" "New-SupportFeedbackReport: 读取安装报告失败 $($latestReport.FullName): $_"
+                }
+            }
+        }
+        if (-not $foundInstallReport) {
+            [void]$sb.AppendLine("  未找到安装报告。")
+        }
+
+        # ============================================================
+        # 四、最近运行日志尾部
+        # ============================================================
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("=" * 73)
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("四、最近运行日志尾部")
+        [void]$sb.AppendLine("")
+
+        if ($IncludeLogTail -and $ScriptDir) {
+            $logsDir = Join-Path $ScriptDir "logs"
+            if (Test-Path $logsDir) {
+                $logFiles = @(Get-ChildItem -Path $logsDir -Filter "*.log" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+                $shownLogs = 0
+                $maxLogFiles = 3
+                foreach ($logFile in $logFiles) {
+                    if ($shownLogs -ge $maxLogFiles) { break }
+                    try {
+                        $logContent = Get-Content $logFile.FullName -Tail $MaxLogLines -Encoding UTF8 -ErrorAction SilentlyContinue
+                        if ($logContent) {
+                            $logText = ($logContent -join "`r`n")
+                            $safeLog = Sanitize-SecretLikeText -Text $logText
+                            $safeLog = Sanitize-PathForReport -Text $safeLog
+                            [void]$sb.AppendLine("  --- $($logFile.Name)（尾部 $MaxLogLines 行）---")
+                            [void]$sb.AppendLine($safeLog)
+                            [void]$sb.AppendLine("")
+                            $shownLogs++
+                        }
+                    }
+                    catch {
+                        Write-Log "WARN" "New-SupportFeedbackReport: 读取日志失败 $($logFile.FullName): $_"
+                    }
+                }
+                if ($shownLogs -eq 0) {
+                    [void]$sb.AppendLine("  日志目录存在但无可读日志文件。")
+                }
+            }
+            else {
+                [void]$sb.AppendLine("  日志目录不存在。")
+            }
+        }
+        else {
+            [void]$sb.AppendLine("  日志尾部已跳过或项目目录未知。")
+        }
+
+        # ============================================================
+        # 五、最近终端输出尾部
+        # ============================================================
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("=" * 73)
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("五、最近终端输出尾部")
+        [void]$sb.AppendLine("")
+
+        if ($IncludeTerminalTail -and $ScriptDir) {
+            $terminalDir = Join-Path $ScriptDir "logs"
+            if (Test-Path $terminalDir) {
+                $terminalFiles = @(Get-ChildItem -Path $terminalDir -Filter "terminal-*.log" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+                if ($terminalFiles.Count -gt 0) {
+                    $latestTerminal = $terminalFiles[0]
+                    try {
+                        $termContent = Get-Content $latestTerminal.FullName -Tail $MaxTerminalLines -Encoding UTF8 -ErrorAction SilentlyContinue
+                        if ($termContent) {
+                            $termText = ($termContent -join "`r`n")
+                            $safeTerm = Sanitize-SecretLikeText -Text $termText
+                            $safeTerm = Sanitize-PathForReport -Text $safeTerm
+                            [void]$sb.AppendLine("  --- $($latestTerminal.Name)（尾部 $MaxTerminalLines 行）---")
+                            [void]$sb.AppendLine($safeTerm)
+                        }
+                    }
+                    catch {
+                        Write-Log "WARN" "New-SupportFeedbackReport: 读取终端输出失败: $_"
+                    }
+                }
+                else {
+                    [void]$sb.AppendLine("  未启用或未找到终端输出记录。")
+                }
+            }
+            else {
+                [void]$sb.AppendLine("  未启用或未找到终端输出记录。")
+            }
+        }
+        else {
+            [void]$sb.AppendLine("  终端输出尾部已跳过。")
+        }
+
+        # ============================================================
+        # 六、隐私检查说明
+        # ============================================================
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("=" * 73)
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("六、隐私检查说明")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("  - 完整 API Key：已脱敏")
+        [void]$sb.AppendLine("  - 用户名/真实路径：已脱敏或最小化")
+        [void]$sb.AppendLine("  - settings.json：未包含")
+        [void]$sb.AppendLine("  - backup/：未包含")
+        [void]$sb.AppendLine("  - full-report：未包含")
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("=" * 73)
+        [void]$sb.AppendLine("  反馈文件结束")
+        [void]$sb.AppendLine("=" * 73)
+
+        # 写入文件
+        [System.IO.File]::WriteAllText($OutputPath, $sb.ToString(), $utf8NoBom)
+        $result.Success = $true
+        Write-Log "INFO" "New-SupportFeedbackReport: 已生成 $OutputPath"
+    }
+    catch {
+        $result.Error = "生成 support-feedback.txt 异常: $($_.Exception.Message)"
+        Write-Log "ERROR" $result.Error
+    }
+
+    return $result
+}
 
 function Read-JsonFileSafe {
     <#

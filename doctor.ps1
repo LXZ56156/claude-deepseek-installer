@@ -1584,6 +1584,9 @@ function Main {
     Write-Host "           Claude Code 环境诊断工具 v$ScriptVersion                   " -ForegroundColor Cyan
     Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host ""
+    # 安全启动 terminal transcript（失败不阻断）
+    Start-CcdiTranscriptSafe -Name "doctor"
+
     Write-Info "正在全面检测您的环境配置..."
     if ($SkipApiTest) {
         Write-Info "本次已按参数跳过 DeepSeek API 在线测试。"
@@ -1722,7 +1725,7 @@ function Main {
         Write-Success "已生成诊断报告:"
 
         if ($isShareSafeMode) {
-            Write-Info "  分享版报告（可发送）: $fullSharePath"
+            Write-Info "  分享版报告（备用）: $fullSharePath"
             Write-Host ""
             Write-Info "已启用分享安全模式（-ShareSafe），仅生成脱敏报告。"
             Write-Info "报告中已隐藏用户名、路径、API Key 和内部字段，可安全分享。"
@@ -1738,15 +1741,86 @@ function Main {
             $fullLocalPath = (Resolve-Path $fullReportPath -ErrorAction SilentlyContinue).Path
             if (-not $fullLocalPath) { $fullLocalPath = $fullReportPath }
 
-            Write-Info "  分享版报告（可发送）: $fullSharePath"
-            Write-Info "  分享版历史: $fullHistoryPath"
+            Write-Info "  诊断报告（备用）: $fullSharePath"
             Write-Info "  完整版报告（仅本地保存）: $fullLocalPath"
-            Write-Host ""
-            Write-Info "如需售后，请发送 report.txt 给技术支持。"
-            Write-Warning "不要发送 full-report-xxx.txt（包含完整路径信息）！"
         }
-        Write-Warning "不要发送您的 API Key！报告中已自动脱敏处理。"
-        Write-Info "只发送 report.txt。不要发送 backup/、logs/、reports/full-report-*、settings.json。"
+
+        # --- 提取一眼结论信息用于 support-feedback ---
+        $fbOverallStatus = "未完成"
+        $fbClaudeStatus = ""
+        $fbDeepSeekStatus = ""
+        $fbApiTestStatus = ""
+        $fbFreshShellStatus = ""
+        $fbNextSteps = @()
+
+        $statusLine = $script:DoctorState.ReportLines | Where-Object { $_ -match '当前状态：' } | Select-Object -First 1
+        if ($statusLine) { $fbOverallStatus = ($statusLine -replace '.*当前状态：', '').Trim() }
+
+        $claudeCliLine = $script:DoctorState.ReportLines | Where-Object { $_ -match 'Claude Code：' } | Select-Object -First 1
+        if ($claudeCliLine) { $fbClaudeStatus = ($claudeCliLine -replace '.*Claude Code：', '').Trim() }
+
+        $configLine = $script:DoctorState.ReportLines | Where-Object { $_ -match 'DeepSeek 配置：' } | Select-Object -First 1
+        if ($configLine) { $fbDeepSeekStatus = ($configLine -replace '.*DeepSeek 配置：', '').Trim() }
+
+        $apiLine = $script:DoctorState.ReportLines | Where-Object { $_ -match 'API 测试：' } | Select-Object -First 1
+        if ($apiLine) { $fbApiTestStatus = ($apiLine -replace '.*API 测试：', '').Trim() }
+
+        $freshLine = $script:DoctorState.ReportLines | Where-Object { $_ -match 'Fresh PowerShell：' } | Select-Object -First 1
+        if ($freshLine) { $fbFreshShellStatus = ($freshLine -replace '.*Fresh PowerShell：', '').Trim() }
+
+        # 提取下一步操作
+        $nextLineIdx = -1
+        for ($i = 0; $i -lt $script:DoctorState.ReportLines.Count; $i++) {
+            if ($script:DoctorState.ReportLines[$i] -match '下一步：') {
+                $nextLineIdx = $i
+                break
+            }
+        }
+        if ($nextLineIdx -ge 0) {
+            $fbNextSteps = @()
+            for ($j = $nextLineIdx + 1; $j -lt [Math]::Min($nextLineIdx + 4, $script:DoctorState.ReportLines.Count); $j++) {
+                $stepLine = $script:DoctorState.ReportLines[$j].Trim()
+                if ($stepLine -match '^\d+\.\s+(.+)$') {
+                    $fbNextSteps += $matches[1]
+                }
+            }
+        }
+
+        # --- 生成 support-feedback.txt ---
+        try {
+            $supportFeedbackResult = New-SupportFeedbackReport `
+                -OutputPath (Join-Path $ScriptDir "support-feedback.txt") `
+                -ReportText $safeReport `
+                -ScriptDir $ScriptDir `
+                -IncludeLogTail:$true `
+                -IncludeTerminalTail:$true `
+                -MaxLogLines 200 `
+                -MaxTerminalLines 200 `
+                -OverallStatus $fbOverallStatus `
+                -ClaudeStatus $fbClaudeStatus `
+                -DeepSeekStatus $fbDeepSeekStatus `
+                -ApiTestStatus $fbApiTestStatus `
+                -FreshShellStatus $fbFreshShellStatus `
+                -NextSteps $fbNextSteps
+
+            if ($supportFeedbackResult.Success) {
+                Write-Host ""
+                $fbPath = (Resolve-Path $supportFeedbackResult.Path -ErrorAction SilentlyContinue).Path
+                if (-not $fbPath) { $fbPath = $supportFeedbackResult.Path }
+                Write-Success "已生成售后反馈文件（优先发送）: $fbPath"
+                Write-Info "如需售后，请优先发送 support-feedback.txt。"
+            }
+        }
+        catch {
+            Write-Log "ERROR" "生成 support-feedback.txt 失败: $_"
+            # 不阻断主流程
+        }
+
+        Write-Host ""
+        Write-Info "售后安全提示："
+        Write-Info "  优先发送 support-feedback.txt（汇总反馈文件）。"
+        Write-Info "  如没有 support-feedback.txt，再发送 report.txt。"
+        Write-Warning "不要发送 settings.json、backup/、logs/、reports/full-report-* 或完整 API Key。"
         Write-Info "如果截图，请先确认截图里没有完整 API Key。"
     }
 
@@ -1780,6 +1854,9 @@ function Main {
             }
         }
     }
+
+    # 停止 terminal transcript
+    Stop-CcdiTranscriptSafe
 
     Write-Host ""
 }

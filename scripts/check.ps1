@@ -2455,9 +2455,9 @@ if ($inventoryFuncText -notmatch '只有存在才进入 Candidates.*不存在路
     throw "Get-ClaudeCommandInventory must have comment: 只有存在才进入 Candidates"
 }
 
-# 4. Conflict 判断基于 Candidates.Count（不是 MissingKnownPaths）
-if ($inventoryFuncText -notmatch '\$inventory\.Candidates\.Count\s+-gt\s+1') {
-    throw "Get-ClaudeCommandInventory HasConflict must use `$inventory.Candidates.Count"
+# 4. Conflict 判断基于 LogicalInstallKey 去重（非 Candidates.Count 裸值）
+if ($inventoryFuncText -notmatch 'LogicalInstallKey' -and $inventoryFuncText -notmatch 'nonCompanionCandidates') {
+    throw "Get-ClaudeCommandInventory HasConflict must use LogicalInstallKey or nonCompanionCandidates"
 }
 
 # 5. doctor.ps1 Claude Code CLI 检测必须使用 inventory.Active 或 Get-ClaudeCommandInventory
@@ -2741,8 +2741,8 @@ $docAssertions = @(
     @{Name="docs/用户使用教程.md"; Text=$userGuideText}
 )
 foreach ($doc in $docAssertions) {
-    if ($doc.Text -notmatch '只发送.*report\.txt') {
-        throw "$($doc.Name) must contain '只发送 report.txt'"
+    if ($doc.Text -notmatch 'support-feedback\.txt') {
+        throw "$($doc.Name) must contain 'support-feedback.txt'"
     }
     if ($doc.Text -notmatch '不要发送.*完整.*API.*Key|不要发送完整 API Key') {
         throw "$($doc.Name) must contain '不要发送完整 API Key'"
@@ -3866,5 +3866,106 @@ if ($invArea -notmatch '@\(\$inventory\.Candidates\s*\|') {
 Write-Host "[check]   5. @(...) guards for .Count OK"
 
 Write-Host "[check] v1.3.3 P5 anti-regression OK"
+
+Write-Host "[check] v1.3.3 fix: feedback/report/package residuals anti-regression"
+$commonText = Get-Content (Join-Path $RootDir "lib\common.ps1") -Raw -Encoding UTF8
+$buildReleaseText = Get-Content (Join-Path $RootDir "scripts\build-release.ps1") -Raw -Encoding UTF8
+$simulateUserReleaseText = Get-Content (Join-Path $RootDir "scripts\simulate-user-release.ps1") -Raw -Encoding UTF8
+$loggerText = Get-Content (Join-Path $RootDir "lib\logger.ps1") -Raw -Encoding UTF8
+
+# 1. Write-SupportSafeGuidance 包含 support-feedback.txt
+if ($commonText -notmatch 'function Write-SupportSafeGuidance') {
+    throw "Write-SupportSafeGuidance must exist in common.ps1"
+}
+$wsgFunc = if ($commonText -match '(?s)function Write-SupportSafeGuidance\s*\{.*?(?=\nfunction \w|\n# =+|\Z)') { $matches[0] } else { "" }
+if ($wsgFunc -notmatch 'support-feedback\.txt') {
+    throw "Write-SupportSafeGuidance must reference support-feedback.txt"
+}
+Write-Host "[check]   1. Write-SupportSafeGuidance references support-feedback.txt OK"
+
+# 2. doctor.ps1 会生成 support-feedback.txt
+if ($doctorText -notmatch 'support-feedback\.txt') {
+    throw "doctor.ps1 must generate support-feedback.txt"
+}
+if ($doctorText -notmatch 'New-SupportFeedbackReport') {
+    throw "doctor.ps1 must call New-SupportFeedbackReport"
+}
+Write-Host "[check]   2. doctor.ps1 generates support-feedback.txt OK"
+
+# 3. support-feedback 生成逻辑调用 Convert-ToSafeReportText 或 Sanitize-SecretLikeText
+$nsfrFunc = if ($commonText -match '(?s)function New-SupportFeedbackReport\s*\{.*?(?=\nfunction \w|\n# =+|\Z)') { $matches[0] } else { "" }
+if ($nsfrFunc -notmatch 'Sanitize-SecretLikeText|Convert-ToSafeReportText') {
+    throw "New-SupportFeedbackReport must call Sanitize-SecretLikeText or Convert-ToSafeReportText"
+}
+Write-Host "[check]   3. New-SupportFeedbackReport sanitizes secrets OK"
+
+# 4. support-feedback 不得包含 settings.json 原文拼接逻辑
+if ($nsfrFunc -match 'settings\.json' -and $nsfrFunc -notmatch '未包含|不要发送|已脱敏') {
+    throw "New-SupportFeedbackReport must NOT include raw settings.json content"
+}
+Write-Host "[check]   4. New-SupportFeedbackReport does not include raw settings.json OK"
+
+# 5. support-feedback 不得复制 backup/、logs/、reports/full-report-* 全量内容
+if ($nsfrFunc -match 'Copy-Item.*backup|Copy-Item.*logs|复制.*backup|复制.*logs|全量.*log') {
+    throw "New-SupportFeedbackReport must NOT copy full backup/logs directories"
+}
+Write-Host "[check]   5. New-SupportFeedbackReport does not copy full directories OK"
+
+# 6. Start-CcdiTranscriptSafe / Stop-CcdiTranscriptSafe 存在
+if ($loggerText -notmatch 'function Start-CcdiTranscriptSafe') {
+    throw "logger.ps1 must define Start-CcdiTranscriptSafe"
+}
+if ($loggerText -notmatch 'function Stop-CcdiTranscriptSafe') {
+    throw "logger.ps1 must define Stop-CcdiTranscriptSafe"
+}
+Write-Host "[check]   6. Start/Stop-CcdiTranscriptSafe defined OK"
+
+# 7. Start-Here.ps1 和 doctor.ps1 至少调用 Start-CcdiTranscriptSafe
+if ($startHereText -notmatch 'Start-CcdiTranscriptSafe') {
+    throw "Start-Here.ps1 must call Start-CcdiTranscriptSafe"
+}
+if ($doctorText -notmatch 'Start-CcdiTranscriptSafe') {
+    throw "doctor.ps1 must call Start-CcdiTranscriptSafe"
+}
+Write-Host "[check]   7. Start-Here.ps1 + doctor.ps1 call Start-CcdiTranscriptSafe OK"
+
+# 8. Get-ClaudeCommandInventory 使用 LogicalInstallKey 或等价机制
+$invAreaFull = if ($claudeInstallText -match '(?s)function Get-ClaudeCommandInventory\s*\{.*?(?=^function \w+\s*\{|\Z)') { $matches[0] } else { "" }
+if ($invAreaFull -notmatch 'LogicalInstallKey') {
+    throw "Get-ClaudeCommandInventory must use LogicalInstallKey"
+}
+Write-Host "[check]   8. Get-ClaudeCommandInventory uses LogicalInstallKey OK"
+
+# 9. 同目录 claude.ps1 + claude.cmd 不得直接触发 HasConflict（通过 IsShimCompanion 归一化）
+if ($invAreaFull -notmatch 'IsShimCompanion') {
+    throw "Get-ClaudeCommandInventory must have IsShimCompanion field"
+}
+if ($invAreaFull -notmatch 'nonCompanionCandidates|not.*IsShimCompanion') {
+    throw "Get-ClaudeCommandInventory must filter out IsShimCompanion in conflict detection"
+}
+Write-Host "[check]   9. Get-ClaudeCommandInventory shim companion dedup OK"
+
+# 10. build-release.ps1 whitelist 不包含内部 docs
+$forbiddenBuildDocs = @(
+    "docs/闲鱼商品说明.md",
+    "docs/测试清单.md",
+    "docs/视频教程脚本.md",
+    "docs/用户体验验证清单.md",
+    "docs/售后排查话术.md"
+)
+foreach ($fd in $forbiddenBuildDocs) {
+    if ($buildReleaseText -match [regex]::Escape($fd)) {
+        throw "build-release.ps1 whitelist must NOT contain '$fd'"
+    }
+}
+Write-Host "[check]   10. build-release.ps1 whitelist excludes internal docs OK"
+
+# 11. simulate-user-release.ps1 forbidden entries 包含内部 docs
+if ($simulateUserReleaseText -notmatch 'docs/闲鱼商品说明|docs/测试清单|docs/售后排查话术|docs/v1\.3\.3-final-acceptance|docs/release-artifacts|docs/发布前验收清单|docs/交接文档|CLAUDE\.md') {
+    throw "simulate-user-release.ps1 must check for internal docs in ZIP"
+}
+Write-Host "[check]   11. simulate-user-release.ps1 checks for internal docs OK"
+
+Write-Host "[check] v1.3.3 feedback/report/package residuals anti-regression OK"
 
 Write-Host "[check] OK"
