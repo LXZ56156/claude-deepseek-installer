@@ -2129,7 +2129,7 @@ x-api-key: $TestApiKey
     $startHereText = Get-Content (Join-Path $ScriptRoot "Start-Here.ps1") -Raw -Encoding UTF8
     $claudeInstallText = Get-Content (Join-Path $ScriptRoot "lib\claude-install.ps1") -Raw -Encoding UTF8
 
-    function Get-VisLines { param([string]$T) $T -split "`r?`n" | Where-Object { $_ -match '^\s*(Write-Info|Write-Warning|Write-Success|Write-Error-Msg|Write-ResultLine)\b' } }
+    function Get-VisLines { param([string]$T) $T -split "`r?`n" | Where-Object { $_ -match '^\s*(Write-Info|Write-Warning|Write-Success|Write-Error-Msg|Write-ResultLine|Write-CheckProgress)\b' } }
     $allVisLines = @((Get-VisLines $startHereText)) + @((Get-VisLines $claudeInstallText))
     $allVisJoined = $allVisLines -join "`n"
 

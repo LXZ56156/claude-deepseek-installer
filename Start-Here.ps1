@@ -562,7 +562,7 @@ function Step-CheckEnvironment {
     }
 
     # winget 检测
-    Write-CheckProgress -Current 6 -Total 7 -Name "winget"
+    Write-CheckProgress -Current 6 -Total 7 -Name "系统安装工具"
     $wingetOk = Test-CommandAvailable -CommandName "winget"
     if ($wingetOk) {
         Write-ResultLine "系统安装工具" "OK" "可用"
@@ -1701,11 +1701,7 @@ function Show-CompletionPage {
             Write-Host "==============================================================" -ForegroundColor Yellow
             Write-Host ""
             Write-Success "Claude Code 已安装: $($finalClaude.Version)"
-            $sourceForReport = Convert-ClaudeInstallMethodForReport `
-                -Method $(if ($script:ClaudeInstallMethod) { $script:ClaudeInstallMethod } else { "" }) `
-                -Source $finalClaude.Source `
-                -Path $finalClaude.Path
-            Write-Success "安装来源: $sourceForReport"
+            Write-Success "已检测到可用的 Claude Code。"
             $configStatus = Get-DeepSeekConfigStatus
             if (-not $configStatus.IsConfigured) {
                 Write-Warning "DeepSeek API Key 尚未配置或配置不完整。"

@@ -3734,7 +3734,7 @@ $claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.p
 function Get-UserVisibleLines {
     param([string]$Text)
     return ($Text -split "`r?`n") | Where-Object {
-        $_ -match '^\s*(Write-Info|Write-Warning|Write-Success|Write-Error-Msg|Write-ResultLine)\b' -and
+        $_ -match '^\s*(Write-Info|Write-Warning|Write-Success|Write-Error-Msg|Write-ResultLine|Write-CheckProgress)\b' -and
         $_ -notmatch '^\s*#'
     }
 }
@@ -3811,7 +3811,7 @@ if ($userFriendlyBody -notmatch 'InstallFailed') { throw "Missing InstallFailed 
 
 # --- M. raw Source 检查（完成页不得直接暴露 PowerShell 内部词）---
 if ($startHereText -match 'Write-Success\s+"安装来源:\s*\$\(\$finalClaude\.Source\)') {
-    throw "Completion page must NOT directly output `$finalClaude.Source (use Convert-ClaudeInstallMethodForReport)"
+    throw "Completion page must NOT directly output `$finalClaude.Source"
 }
 
 Write-Host "[check] P0-UX batch 2 UX copy polish v3 OK"
