@@ -173,7 +173,7 @@ function Convert-ClaudeInstallMethodForReport {
         '^existing_native$' { return '已存在：Claude 官方 Native Install' }
         '^winget$' { return 'winget 安装' }
         '^npm_npmmirror$' { return '备用下载方式（npm 镜像）' }
-        '^existing$' { return '已存在：系统 PATH 中检测到 Claude Code' }
+        '^existing$' { return '已存在，跳过安装' }
         '^native_local_bin$' { return 'Claude 官方 Native Install' }
         '^npm_global$' { return 'npm 全局安装' }
         '^final_fallback$' { return '最终验证检测到 Claude Code' }
@@ -187,7 +187,7 @@ function Convert-ClaudeInstallMethodForReport {
 
             # 再处理 PowerShell CommandType / Source 内部词，不暴露给用户
             if ($Source -eq 'ExternalScript') { return '系统 PATH 中检测到 Claude Code' }
-            if ($Source -eq 'Application') { return '系统 PATH 中检测到 Claude Code' }
+            if ($Source -eq 'Application') { return '本机应用路径检测到 Claude Code' }
             if ($Source -eq 'Function') { return '系统函数或别名中检测到 Claude Code' }
             if ($Source -eq 'Cmdlet') { return 'PowerShell 命令中检测到 Claude Code' }
 
@@ -1168,15 +1168,25 @@ function Step-GenerateReport {
         elseif ($script:ApiTestFailed) { "失败" }
         else { "未执行" }
 
-    # --- PATH 验证 (v1.3.3) ---
+    # --- PATH 验证 + 安装位置 (v1.3.3) ---
     $nativeBinPath = Get-NativeClaudeBinPath
     $nativeClaudeExe = Get-NativeClaudeExePath
+    $claudeCmdCheck = Test-ClaudeCommandExisting
     $claudeInstallLocation = if (Test-Path $nativeClaudeExe) {
-        $nativeClaudeExe
+        Sanitize-PathForReport -Path $nativeClaudeExe
+    }
+    elseif ($claudeCmdCheck.Path -and $claudeCmdCheck.Usable) {
+        Sanitize-PathForReport -Path $claudeCmdCheck.Path
+    }
+    elseif ($claudeCmdCheck.Path) {
+        # 命令存在但不可用，仍显示路径帮助诊断
+        Sanitize-PathForReport -Path $claudeCmdCheck.Path
+    }
+    elseif ($claudeVer) {
+        "已安装（路径未识别）"
     }
     else {
-        $claudeVerPath = if ($claudeVer) { "已安装（非 Native Install 路径）" } else { "未安装" }
-        $claudeVerPath
+        "未安装"
     }
     $userPathStatus = if (Test-Path $nativeClaudeExe) {
         $check = Test-UserPathContains -TargetPath $nativeBinPath
@@ -1278,8 +1288,11 @@ function Step-GenerateReport {
     $testSafeNotice = if ($script:TestSafeMode) { "测试安全模式流程完成，不代表真实安装/API 已验证。" } else { "" }
 
     # 安装方式映射：内部值 → 用户可读中文
-    $claudeCmdCheck = Test-ClaudeCommandExisting
     $installMethodForReport = Convert-ClaudeInstallMethodForReport -Method $script:ClaudeInstallMethod -Source $claudeCmdCheck.Source -Path $claudeCmdCheck.Path
+
+    # 官方 Native Install 成功时 Node.js/npm 标注"无需"
+    $isOfficialNativeSuccess = ($script:ClaudeInstallMethod -in @("official_native", "existing_native")) -or
+                               ($installMethodForReport -match "Native")
 
     $reportContent = @"
 $reportTitle
@@ -1294,8 +1307,8 @@ $reportTitle
 运行环境: Windows ($($winInfo.Version))
 Claude Code: $(if ($script:TestSafeMode) { "测试安全模式未执行真实安装" } elseif ($claudeVer) { "已安装 ($claudeVer)" } elseif (($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart"))) { "已安装但需重开终端" } else { "未安装" })
 Claude Code 安装位置: $claudeInstallLocation
-Node.js: $(if ($nodeInfo.Installed) { "$($nodeInfo.Version)" } else { "未安装" })
-npm: $(if ($npmInfo.Installed) { "$($npmInfo.Version)" } else { "不可用" })
+Node.js: $(if ($nodeInfo.Installed) { "$($nodeInfo.Version)" } elseif ($isOfficialNativeSuccess) { "未安装（当前官方安装方式无需 Node.js）" } else { "未安装" })
+npm: $(if ($npmInfo.Installed) { "$($npmInfo.Version)" } elseif ($isOfficialNativeSuccess) { "不可用（当前官方安装方式无需 npm）" } else { "不可用" })
 DeepSeek 配置: $(if ($script:ConfigWritten) { "已配置" } else { "未配置" })
 API 测试: $apiTestStatus$(if ($script:ApiTestFailed) { " ($script:ApiTestFailReason)" } elseif ($script:ApiTestSkipped) { " - 未验证 API 是否可用" } else { "" })
 User PATH: $userPathStatus
@@ -1443,6 +1456,7 @@ API Key 始终只保存在您的本机，不会上传或分享。
                 -DeepSeekStatus $fbDeepSeekStatus `
                 -ApiTestStatus $fbApiTestStatus `
                 -FreshShellStatus $fbFreshShellStatus `
+                -InstallMethod $installMethodForReport `
                 -NextSteps $fbNextSteps
 
             if ($supportFeedbackResult.Success) {

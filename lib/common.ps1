@@ -436,6 +436,7 @@ function New-SupportFeedbackReport {
         [string]$DeepSeekStatus = "",
         [string]$ApiTestStatus = "",
         [string]$FreshShellStatus = "",
+        [string]$InstallMethod = "",
         [string[]]$NextSteps = @()
     )
 
@@ -481,6 +482,7 @@ function New-SupportFeedbackReport {
         [void]$sb.AppendLine("")
         [void]$sb.AppendLine("  - 当前状态：$OverallStatus")
         if ($ClaudeStatus) { [void]$sb.AppendLine("  - Claude Code：$ClaudeStatus") }
+        if ($InstallMethod) { [void]$sb.AppendLine("  - 安装方式：$InstallMethod") }
         if ($DeepSeekStatus) { [void]$sb.AppendLine("  - DeepSeek 配置：$DeepSeekStatus") }
         if ($ApiTestStatus) { [void]$sb.AppendLine("  - API 测试：$ApiTestStatus") }
         if ($FreshShellStatus) { [void]$sb.AppendLine("  - Fresh PowerShell：$FreshShellStatus") }

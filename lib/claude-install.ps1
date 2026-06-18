@@ -1442,9 +1442,9 @@ function Install-ClaudeCodeNative {
         }
         else {
             # 只记录详细错误到日志，不向用户展示 PowerShell 堆栈或失败提示
-            $result.Error = "Native Install 安装脚本返回非零退出码或异常"
+            $result.Error = "Native Install 安装脚本 ExitCode 为空或非零"
             $result.RawError = $installResult.Error
-            Write-Log "INFO" "Native Install 安装脚本返回非零退出码 (ExitCode=$($installResult.ExitCode), DurationMs=$($installResult.DurationMs))，将进行后验验证判断真实结果"
+            Write-Log "INFO" "Native Install 安装脚本 ExitCode 为空或非零 (ExitCode=$($installResult.ExitCode), DurationMs=$($installResult.DurationMs))，将进行后验验证判断真实结果"
             if ($installResult.Error) {
                 Write-Log "DEBUG" "Native Install 详情: Error=$($installResult.Error)"
             }
@@ -2992,7 +2992,7 @@ function Install-NodeJsViaWinget {
     Write-Log "INFO" "Installing Node.js LTS via winget"
     Write-Info "正在安装 Node.js LTS，请不要关闭窗口。"
     Write-Info "这一步通常需要 1-5 分钟，取决于网络和电脑速度。"
-    Write-Info '如果弹出权限确认窗口，请选择"是"；如果没看到，请看任务栏是否闪烁。'
+    Write-Info '如果弹出权限确认窗口，请选择“是”；如果没看到，请看任务栏是否闪烁。'
     Write-Host ""
 
     return Invoke-InstallCommandCaptured -FilePath "winget" -Arguments @(
@@ -3003,7 +3003,7 @@ function Install-NodeJsViaWinget {
         "--silent"
     ) -TimeoutSec $TimeoutSec -ProgressIntervalSec 10 -FriendlyName "Node.js LTS 安装" `
         -ProgressTitle "Node.js LTS 安装中" `
-        -ProgressHint '如有权限弹窗请选择"是"' `
+        -ProgressHint '如有权限弹窗请选择“是”' `
         -SlowNoticeAfterSec 120 `
         -SlowNoticeMessage "Node.js 安装耗时较长，工具仍在正常等待。首次安装通常需要几分钟，请不要关闭窗口。" `
         -StartMessage ""
@@ -3031,7 +3031,7 @@ function Install-ClaudeCodeViaWinget {
     Write-Log "INFO" "执行: winget install Anthropic.ClaudeCode"
     Write-Info "正在通过系统安装工具安装 Claude Code。"
     Write-Info "这一步可能需要几分钟，请不要关闭窗口。"
-    Write-Info '如果弹出权限确认窗口，请选择"是"；如果没看到，请看任务栏是否闪烁。'
+    Write-Info '如果弹出权限确认窗口，请选择“是”；如果没看到，请看任务栏是否闪烁。'
 
     return Invoke-InstallCommandCaptured -FilePath "winget" -Arguments @(
         "install", "Anthropic.ClaudeCode",
@@ -3042,7 +3042,7 @@ function Install-ClaudeCodeViaWinget {
         -StartMessage "" `
         -ProgressIntervalSec 10 `
         -ProgressTitle "Claude Code 系统安装中" `
-        -ProgressHint '如有权限弹窗请选择"是"' `
+        -ProgressHint '如有权限弹窗请选择“是”' `
         -SlowNoticeAfterSec 120 `
         -SlowNoticeMessage "系统安装方式较慢，工具仍在等待；如果后续未确认成功，会自动切换备用下载方式。" `
         -TimeoutMessage "系统安装方式等待过久，正在确认安装结果；如未成功会自动切换备用下载方式。" `

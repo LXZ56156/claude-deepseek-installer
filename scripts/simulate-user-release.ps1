@@ -1161,6 +1161,82 @@ Write-Output "WCCR_CHECK=HasVersion=$([bool]$ready.Version)"
         throw "Wait-ClaudeCommandReady function not loadable in release staging"
     }
 
+    # v1.3.3 report accuracy: install method + location + Node/npm "无需" static checks
+    Write-Check "v1.3.3 report accuracy: install method + location + Node/npm static checks"
+
+    $shContent3 = Get-Content (Join-Path $releaseRoot "Start-Here.ps1") -Raw -Encoding UTF8
+    $ciContent3 = Get-Content (Join-Path $releaseRoot "lib\claude-install.ps1") -Raw -Encoding UTF8
+    $cmContent3 = Get-Content (Join-Path $releaseRoot "lib\common.ps1") -Raw -Encoding UTF8
+
+    # 1. official_native → "Claude 官方 Native Install"
+    if ($shContent3 -notmatch [regex]::Escape('Claude 官方 Native Install')) {
+        throw "official_native must map to 'Claude 官方 Native Install'"
+    }
+    # 2. npm_npmmirror → "备用下载方式（npm 镜像）"
+    if ($shContent3 -notmatch [regex]::Escape('备用下载方式（npm 镜像）')) {
+        throw "npm_npmmirror must map to '备用下载方式（npm 镜像）'"
+    }
+    # 3. No fixed "已安装（非 Native Install 路径）"
+    if ($shContent3 -match [regex]::Escape('已安装（非 Native Install 路径）')) {
+        throw "Install location must NOT use fixed '已安装（非 Native Install 路径）'"
+    }
+    # 4. Install location uses Sanitize-PathForReport
+    if ($shContent3 -notmatch 'Sanitize-PathForReport') {
+        throw "Step-GenerateReport must use Sanitize-PathForReport for install location"
+    }
+    # 5. Node.js "无需" for official Native
+    if ($shContent3 -notmatch [regex]::Escape('未安装（当前官方安装方式无需 Node.js）')) {
+        throw "Report must show '未安装（当前官方安装方式无需 Node.js）' for official Native scenario"
+    }
+    # 6. npm "无需" for official Native
+    if ($shContent3 -notmatch [regex]::Escape('不可用（当前官方安装方式无需 npm）')) {
+        throw "Report must show '不可用（当前官方安装方式无需 npm）' for official Native scenario"
+    }
+    # 7. No straight double quotes in user-facing text
+    if ($ciContent3 -match '请选择\x22是\x22') {
+        throw “User-facing text must use curly quotes, not straight quotes”
+    }
+    # 8. Native ExitCode log wording
+    if ($ciContent3 -notmatch [regex]::Escape('ExitCode 为空或非零')) {
+        throw "Native Install log must say 'ExitCode 为空或非零'"
+    }
+    # 9. support-feedback has InstallMethod parameter
+    if ($cmContent3 -notmatch '\[string\]\$InstallMethod') {
+        throw "New-SupportFeedbackReport must accept -InstallMethod parameter"
+    }
+    if ($cmContent3 -notmatch [regex]::Escape('安装方式：')) {
+        throw "New-SupportFeedbackReport summary must render 安装方式"
+    }
+    Write-Host "[simulate]   report accuracy static checks OK" -ForegroundColor Green
+
+    # Minimal runtime test: verify Sanitize-PathForReport returns userprofile-masked path
+    $sanitizeTestEnv = New-SimEnvironment -ProfileDir $testProfile -DesktopDir $testDesktop -DummyKey $DummyApiKey
+    $sanitizeTestEnv["CCDI_TEST_MODE"] = "1"
+    $sanitizeTestScript = @'
+$scriptRoot = "{0}"
+. "$scriptRoot\lib\bootstrap.ps1"
+$null = Initialize-CcdiScript -ScriptName "sim-sanitize"
+
+$testPath = if ($env:CCDI_TEST_USERPROFILE) {{ Join-Path $env:CCDI_TEST_USERPROFILE "AppData\Roaming\npm\claude.cmd" }} else {{ Join-Path $env:USERPROFILE "AppData\Roaming\npm\claude.cmd" }}
+$sanitized = Sanitize-PathForReport -Text $testPath
+Write-Output "SANITIZE_IN=$sanitized"
+Write-Output "SANITIZE_HAS_USERPROFILE=$($sanitized -match '%USERPROFILE%')"
+Write-Output "SANITIZE_NO_REAL_NAME=$($sanitized -notmatch [regex]::Escape($env:USERNAME))"
+Write-Output "SANITIZE_LEN=$($sanitized.Length)"
+'@ -f $releaseRoot
+    $sanitizeTestPath = Join-Path $tempRoot "test_sanitize.ps1"
+    Set-Content -Path $sanitizeTestPath -Value $sanitizeTestScript -Encoding UTF8
+
+    $sanitizeRun = Invoke-SimCommand -Name "sanitize path runtime" -FileName $powerShellExe -Arguments @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $sanitizeTestPath
+    ) -WorkingDirectory $releaseRoot -Environment $sanitizeTestEnv -TimeoutSec 30
+    [void]$runs.Add($sanitizeRun)
+
+    if ($sanitizeRun.Combined -notmatch 'SANITIZE_HAS_USERPROFILE=True') {
+        throw "Sanitize-PathForReport did not mask username with %USERPROFILE%"
+    }
+    Write-Host "[simulate]   Sanitize-PathForReport runtime OK" -ForegroundColor Green
+
     Write-Host "[simulate] OK" -ForegroundColor Green
 }
 finally {

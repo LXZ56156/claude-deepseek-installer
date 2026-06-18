@@ -2342,7 +2342,7 @@ x-api-key: $TestApiKey
         $claudeInstallText -match '已等待'
     } "claude-install.ps1 必须显示已等待时间"
     Assert "34g: 包含 UAC 权限弹窗提示" {
-        $claudeInstallText -match [regex]::Escape('如有权限弹窗请选择"是"') -or $claudeInstallText -match [regex]::Escape('如果弹出权限确认窗口，请选择"是"')
+        $claudeInstallText -match '如有权限弹窗请选择.' -or $claudeInstallText -match '如果弹出权限确认窗口，请选择.'
     } "claude-install.ps1 必须保留 UAC 权限弹窗提示"
     Assert "34g: 不含前台 winget 失败原文" {
         $claudeInstallText -notmatch 'winget Node\.js 安装返回: Success=False' -and $claudeInstallText -notmatch 'Write-Host.*\$stdout' -and $claudeInstallText -notmatch 'Write-Host.*\$stderr'
@@ -2373,7 +2373,7 @@ x-api-key: $TestApiKey
         $claudeInstallText -match [regex]::Escape('如果超过约 5 分钟会自动切换备用方式')
     } "claude-install.ps1 必须包含 5 分钟超时说明"
     Assert "34h: 包含 UAC 权限提示" {
-        $claudeInstallText -match [regex]::Escape('如有权限弹窗请选择"是"') -or $claudeInstallText -match [regex]::Escape('如果弹出权限确认窗口，请选择"是"')
+        $claudeInstallText -match '如有权限弹窗请选择.' -or $claudeInstallText -match '如果弹出权限确认窗口，请选择.'
     } "claude-install.ps1 必须保留 UAC 权限弹窗提示"
     Assert "34h: 包含镜像提示 '正在从备用下载源获取 Claude Code'" {
         $claudeInstallText -match [regex]::Escape('正在从备用下载源获取 Claude Code')
@@ -2488,6 +2488,40 @@ x-api-key: $TestApiKey
     Assert "35g: final fallback 不暴露 ExternalScript 为 Method" {
         $startHereText35 -match 'knownInstallMethods'
     } "Start-Here.ps1 必须使用 knownInstallMethods 保护 installResult.Method"
+
+    Write-Host ""
+
+    # ============================================================
+    # 36. v1.3.3 report accuracy UX 文案检查
+    # ============================================================
+    Write-CheckHeader "36. v1.3.3 report accuracy UX 文案检查"
+
+    $startHereText36 = Get-Content (Join-Path $ScriptRoot "Start-Here.ps1") -Raw -Encoding UTF8
+    $claudeInstallText36 = Get-Content (Join-Path $ScriptRoot "lib\claude-install.ps1") -Raw -Encoding UTF8
+
+    Assert "36a: 包含 '未安装（当前官方安装方式无需 Node.js）'" {
+        $startHereText36 -match [regex]::Escape('未安装（当前官方安装方式无需 Node.js）')
+    } "报告 Node.js 必须对官方 Native 场景显示无需"
+
+    Assert "36b: 包含 '不可用（当前官方安装方式无需 npm）'" {
+        $startHereText36 -match [regex]::Escape('不可用（当前官方安装方式无需 npm）')
+    } "报告 npm 必须对官方 Native 场景显示无需"
+
+    Assert "36c: 包含 '备用下载方式（npm 镜像）'" {
+        $startHereText36 -match [regex]::Escape('备用下载方式（npm 镜像）')
+    } "报告安装方式映射必须包含 '备用下载方式（npm 镜像）'"
+
+    Assert "36d: no ASCII straight quotes in user-facing text" {
+        $claudeInstallText36 -notmatch '请选择\x22是\x22'
+    } "用户可见文案不得使用直引号"
+
+    Assert "36e: 包含 Sanitize-PathForReport 用于安装位置" {
+        $startHereText36 -match 'Sanitize-PathForReport'
+    } "安装位置必须使用 Sanitize-PathForReport 脱敏"
+
+    Assert "36f: 包含 isOfficialNativeSuccess" {
+        $startHereText36 -match 'isOfficialNativeSuccess'
+    } "报告生成必须包含 isOfficialNativeSuccess 判断"
 
     Write-Host ""
 

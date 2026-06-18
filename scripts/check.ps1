@@ -4470,4 +4470,65 @@ Write-Host "[check]   9. No duplicate npm mirror WARN logs OK"
 
 Write-Host "[check] v1.3.3 native path doctor UX anti-regression OK"
 
+Write-Host ""
+Write-Host "[check] v1.3.3 report accuracy anti-regression"
+
+$claudeInstallText3 = Get-Content (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+$startHereText3 = Get-Content (Join-Path $RootDir "Start-Here.ps1") -Raw -Encoding UTF8
+$commonText2 = Get-Content (Join-Path $RootDir "lib\common.ps1") -Raw -Encoding UTF8
+
+# 1. npm_npmmirror 映射到 "备用下载方式（npm 镜像）"
+if ($startHereText3 -notmatch [regex]::Escape('备用下载方式（npm 镜像）')) {
+    throw "npm_npmmirror must map to '备用下载方式（npm 镜像）' in Convert-ClaudeInstallMethodForReport"
+}
+Write-Host "[check]   1. npm_npmmirror mapping OK"
+
+# 2. official_native 映射到 "Claude 官方 Native Install"
+if ($startHereText3 -notmatch [regex]::Escape('Claude 官方 Native Install')) {
+    throw "official_native must map to 'Claude 官方 Native Install'"
+}
+Write-Host "[check]   2. official_native mapping OK"
+
+# 3. 报告安装位置不得固定为 "已安装（非 Native Install 路径）"
+if ($startHereText3 -match [regex]::Escape('已安装（非 Native Install 路径）')) {
+    throw "Install location must NOT use fixed '已安装（非 Native Install 路径）' (should show real path or '路径未识别')"
+}
+Write-Host "[check]   3. No fixed '非 Native Install 路径' OK"
+
+# 4. 用户可见文案不得包含请选择\x22是\x22（ASCII直引号）
+if ($claudeInstallText3 -match '请选择\x22是\x22') {
+    throw “User-facing text must NOT use ASCII straight double quotes around shi (use curly quotes)”
+}
+Write-Host "[check]   4. No straight double quotes in user-facing text OK"
+
+# 5. Native ExitCode 日志必须包含 "为空或非零"
+if ($claudeInstallText3 -notmatch [regex]::Escape('ExitCode 为空或非零')) {
+    throw "Native Install log must say 'ExitCode 为空或非零' instead of '返回非零退出码'"
+}
+Write-Host "[check]   5. Native ExitCode log wording OK"
+
+# 6. support-feedback 支持 InstallMethod 参数
+if ($commonText2 -notmatch '\[string\]\$InstallMethod') {
+    throw "New-SupportFeedbackReport must accept -InstallMethod parameter"
+}
+if ($commonText2 -notmatch '安装方式：') {
+    throw "New-SupportFeedbackReport must render InstallMethod in the summary"
+}
+Write-Host "[check]   6. support-feedback InstallMethod parameter OK"
+
+# 7. Sanitize-PathForReport 用于安装位置脱敏
+$genReportBody = if ($startHereText3 -match '(?s)function Step-GenerateReport\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+if ($genReportBody -notmatch 'Sanitize-PathForReport') {
+    throw "Step-GenerateReport must use Sanitize-PathForReport for install location"
+}
+Write-Host "[check]   7. Install location uses Sanitize-PathForReport OK"
+
+# 8. $isOfficialNativeSuccess 变量存在
+if ($genReportBody -notmatch '\$isOfficialNativeSuccess') {
+    throw "Step-GenerateReport must define `$isOfficialNativeSuccess for Node/npm '无需' logic"
+}
+Write-Host "[check]   8. isOfficialNativeSuccess exists OK"
+
+Write-Host "[check] v1.3.3 report accuracy anti-regression OK"
+
 Write-Host "[check] OK"
