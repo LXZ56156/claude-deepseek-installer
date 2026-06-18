@@ -437,6 +437,7 @@ function New-SupportFeedbackReport {
         [string]$ApiTestStatus = "",
         [string]$FreshShellStatus = "",
         [string]$InstallMethod = "",
+        [string]$NodeJsStatus = "",
         [string[]]$NextSteps = @()
     )
 
@@ -483,6 +484,7 @@ function New-SupportFeedbackReport {
         [void]$sb.AppendLine("  - 当前状态：$OverallStatus")
         if ($ClaudeStatus) { [void]$sb.AppendLine("  - Claude Code：$ClaudeStatus") }
         if ($InstallMethod) { [void]$sb.AppendLine("  - 安装方式：$InstallMethod") }
+        if ($NodeJsStatus) { [void]$sb.AppendLine("  - Node.js：$NodeJsStatus") }
         if ($DeepSeekStatus) { [void]$sb.AppendLine("  - DeepSeek 配置：$DeepSeekStatus") }
         if ($ApiTestStatus) { [void]$sb.AppendLine("  - API 测试：$ApiTestStatus") }
         if ($FreshShellStatus) { [void]$sb.AppendLine("  - Fresh PowerShell：$FreshShellStatus") }
@@ -543,16 +545,24 @@ function New-SupportFeedbackReport {
                     if ($reportContent) {
                         $safeContent = Sanitize-SecretLikeText -Text $reportContent
                         $safeContent = Sanitize-PathForReport -Text $safeContent
-                        # 只取关键摘要段（前 100 行或 5000 字符）
-                        $lines = $safeContent -split "`r?`n"
-                        $summaryLines = $lines | Select-Object -First 100
-                        $summaryText = ($summaryLines -join "`r`n")
-                        if ($summaryText.Length -gt 5000) {
-                            $summaryText = $summaryText.Substring(0, 5000) + "`r`n...[摘要截断]"
+                        # v1.3.3: 如果安装报告与上方 report.txt 完全一致，省略重复正文
+                        if ($ReportText -and ($safeContent.Trim() -eq $ReportText.Trim())) {
+                            [void]$sb.AppendLine("  最近安装报告：$($latestReport.Name)")
+                            [void]$sb.AppendLine("")
+                            [void]$sb.AppendLine("  （与上方 report.txt 内容一致，已省略重复正文。）")
                         }
-                        [void]$sb.AppendLine("  最近安装报告：$($latestReport.Name)")
-                        [void]$sb.AppendLine("")
-                        [void]$sb.AppendLine($summaryText)
+                        else {
+                            # 只取关键摘要段（前 100 行或 5000 字符）
+                            $lines = $safeContent -split "`r?`n"
+                            $summaryLines = $lines | Select-Object -First 100
+                            $summaryText = ($summaryLines -join "`r`n")
+                            if ($summaryText.Length -gt 5000) {
+                                $summaryText = $summaryText.Substring(0, 5000) + "`r`n...[摘要截断]"
+                            }
+                            [void]$sb.AppendLine("  最近安装报告：$($latestReport.Name)")
+                            [void]$sb.AppendLine("")
+                            [void]$sb.AppendLine($summaryText)
+                        }
                     }
                 }
                 catch {

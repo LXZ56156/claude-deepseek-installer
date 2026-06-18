@@ -4585,4 +4585,47 @@ Write-Host "[check]   4. test-matrix table structure OK"
 
 Write-Host "[check] v1.3.3 test matrix anti-regression OK"
 
+Write-Host ""
+Write-Host "[check] v1.3.3 support-feedback polish anti-regression"
+
+$commonText3 = Get-Content (Join-Path $RootDir "lib\common.ps1") -Raw -Encoding UTF8
+
+# 1. support-feedback 最简结论必须包含安装方式
+if ($commonText3 -notmatch '安装方式：') {
+    throw "New-SupportFeedbackReport summary must include '安装方式'"
+}
+Write-Host "[check]   1. support-feedback includes InstallMethod OK"
+
+# 2. support-feedback 头部必须包含隐私提示
+if ($commonText3 -notmatch '不要发送 settings\.json' -or $commonText3 -notmatch 'backup' -or $commonText3 -notmatch 'logs') {
+    throw "New-SupportFeedbackReport header must include privacy warnings (settings.json/backup/logs)"
+}
+Write-Host "[check]   2. support-feedback privacy warnings OK"
+
+# 3. 不得要求用户发送完整 API Key
+if ($commonText3 -notmatch '完整 API Key') {
+    throw "New-SupportFeedbackReport must warn against sending full API Key"
+}
+Write-Host "[check]   3. support-feedback API Key warning OK"
+
+# 4. 安装报告摘要去重逻辑存在
+if ($commonText3 -notmatch '与上方 report\.txt 内容一致') {
+    throw "New-SupportFeedbackReport must deduplicate identical install report content"
+}
+Write-Host "[check]   4. support-feedback dedup logic OK"
+
+# 5. terminal tail 仍保留
+if ($commonText3 -notmatch '终端输出尾部') {
+    throw "New-SupportFeedbackReport must retain terminal output tail section"
+}
+Write-Host "[check]   5. terminal tail preserved OK"
+
+# 6. NodeJsStatus 参数存在
+if ($commonText3 -notmatch '\$NodeJsStatus') {
+    throw "New-SupportFeedbackReport must accept -NodeJsStatus parameter"
+}
+Write-Host "[check]   6. NodeJsStatus parameter exists OK"
+
+Write-Host "[check] v1.3.3 support-feedback polish anti-regression OK"
+
 Write-Host "[check] OK"

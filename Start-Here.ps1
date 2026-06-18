@@ -1448,6 +1448,7 @@ API Key 始终只保存在您的本机，不会上传或分享。
             }
 
             $safeReportForFb = Convert-ToSafeReportText -Text $reportContent
+            $fbNodeJsStatus = if ($nodeInfo.Installed) { $nodeInfo.Version } elseif ($isOfficialNativeSuccess) { "未安装（当前安装方式无需）" } else { "" }
             $supportFeedbackResult = New-SupportFeedbackReport `
                 -OutputPath (Join-Path $ScriptDir "support-feedback.txt") `
                 -ReportText $safeReportForFb `
@@ -1462,6 +1463,7 @@ API Key 始终只保存在您的本机，不会上传或分享。
                 -ApiTestStatus $fbApiTestStatus `
                 -FreshShellStatus $fbFreshShellStatus `
                 -InstallMethod $installMethodForReport `
+                -NodeJsStatus $fbNodeJsStatus `
                 -NextSteps $fbNextSteps
 
             if ($supportFeedbackResult.Success) {

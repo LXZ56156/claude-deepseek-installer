@@ -2557,6 +2557,42 @@ x-api-key: $TestApiKey
     Write-Host ""
 
     # ============================================================
+    # 38. v1.3.3 support-feedback 润色 UX 检查
+    # ============================================================
+    Write-CheckHeader "38. v1.3.3 support-feedback polish UX"
+
+    $commonText38 = Get-Content (Join-Path $ScriptRoot "lib\common.ps1") -Raw -Encoding UTF8
+    $startHereText38 = Get-Content (Join-Path $ScriptRoot "Start-Here.ps1") -Raw -Encoding UTF8
+    $doctorText38 = Get-Content (Join-Path $ScriptRoot "doctor.ps1") -Raw -Encoding UTF8
+
+    Assert "38a: 完整成功下一步包含 '启动 Claude Code 测试'" {
+        $startHereText38 -match '启动 Claude Code 测试'
+    } "完成页必须引导用户启动测试"
+
+    Assert "38b: support-feedback 头部不得出现完整 API Key" {
+        $commonText38 -notmatch 'ANTHROPIC_AUTH_TOKEN.*sk-[a-zA-Z0-9]{32,}'
+    } "support-feedback 头部不得包含示例完整 Key"
+
+    Assert "38c: support-feedback 提示不要发送 settings.json" {
+        $commonText38 -match '不要发送 settings\.json'
+    } "support-feedback 必须提示不要发送 settings.json"
+
+    Assert "38d: support-feedback 不得提示发送 logs" {
+        $commonText38 -match '不要.*发送.*logs|不要.*发送.*log' -or
+        $commonText38 -notmatch '发送.*logs 目录|发送.*logs 文件'
+    } "support-feedback 不得提示发送原始 logs 文件/目录"
+
+    Assert "38e: 安装方式字段存在" {
+        $commonText38 -match '安装方式：.*\$InstallMethod'
+    } "support-feedback 最简结论必须渲染安装方式"
+
+    Assert "38f: Node.js 字段存在" {
+        $commonText38 -match 'Node\.js：.*\$NodeJsStatus'
+    } "support-feedback 最简结论必须渲染 Node.js 状态"
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""
