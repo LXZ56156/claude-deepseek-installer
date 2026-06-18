@@ -4720,4 +4720,219 @@ Write-Host "[check]   17. no .cmd files have .ps1 args inside -File quotes OK"
 
 Write-Host "[check] v1.3.3 support-feedback polish anti-regression OK"
 
+# ============================================================
+Write-Host ""
+Write-Host "[check] v1.3.3 buyer documentation safety"
+
+# 1. 买家文档文件存在性检查
+$buyerRequiredFiles = @(
+    "01-先看我-安装说明.txt",
+    "02-安装完成后怎么开始使用.txt",
+    "03-常用提示词模板.txt",
+    "04-常见问题和售后.txt",
+    "提示词模板/00-先用这个-检查环境和项目.txt",
+    "提示词模板/01-接手已有代码项目.txt",
+    "提示词模板/02-补装开发环境和依赖.txt",
+    "提示词模板/03-微信小程序开发.txt",
+    "提示词模板/04-网页前端项目.txt",
+    "提示词模板/05-Python脚本开发.txt",
+    "提示词模板/06-安全修改代码.txt",
+    "提示词模板/07-生成README和使用说明.txt"
+)
+
+foreach ($file in $buyerRequiredFiles) {
+    $fullPath = Join-Path $RootDir $file
+    if (-not (Test-Path -LiteralPath $fullPath)) {
+        throw "买家文档缺失: $file"
+    }
+}
+Write-Host "[check]   1. 所有买家文档文件存在 OK"
+
+# 2. 买家文档内容安全检查
+$buyerDocFiles = @(
+    "01-先看我-安装说明.txt",
+    "02-安装完成后怎么开始使用.txt",
+    "03-常用提示词模板.txt",
+    "04-常见问题和售后.txt"
+)
+
+$promptFilesInDir = Get-ChildItem -LiteralPath (Join-Path $RootDir "提示词模板") -Filter "*.txt" -File -ErrorAction SilentlyContinue |
+    ForEach-Object { "提示词模板/$($_.Name)" }
+
+$allBuyerFiles = $buyerDocFiles + @(@($promptFilesInDir))
+
+$requiredTerms = @(
+    "support-feedback.txt",
+    "一键诊断.cmd",
+    "00-点我开始安装.cmd",
+    "不提供 Claude 账号",
+    "不提供 DeepSeek API Key",
+    "不提供代理 API"
+)
+
+$forbiddenBuyerTerms = @(
+    "只发送 report.txt",
+    "CCDI_TEST_MODE",
+    "TestSafe",
+    "scripts/check.ps1",
+    "scripts/ux-check.ps1",
+    "OpenCode",
+    "STEP18",
+    "HARD-CLEAN",
+    "C:\CCDI-VM"
+)
+
+# 禁止买家文档引用旧的 .md 文件名（第 4.5 批已统一改为 .txt）
+$staleMdRefs = @(
+    "02-安装完成后怎么开始使用.md",
+    "03-常用提示词模板.md",
+    "04-常见问题和售后.md"
+)
+
+# 2a. 汇总所有买家文档内容，检查必需项
+$allBuyerContent = ""
+foreach ($file in $allBuyerFiles) {
+    $fullPath = Join-Path $RootDir $file
+    if (Test-Path -LiteralPath $fullPath) {
+        $allBuyerContent += [System.IO.File]::ReadAllText($fullPath, [System.Text.Encoding]::UTF8)
+    }
+}
+
+foreach ($term in $requiredTerms) {
+    if ($allBuyerContent -notmatch [regex]::Escape($term)) {
+        throw "买家文档缺失必需内容: $term"
+    }
+}
+Write-Host "[check]   2. 买家文档必需内容齐全 OK"
+
+# 2b. 逐文件检查禁用项
+foreach ($file in $allBuyerFiles) {
+    $fullPath = Join-Path $RootDir $file
+    if (Test-Path -LiteralPath $fullPath) {
+        $fileContent = [System.IO.File]::ReadAllText($fullPath, [System.Text.Encoding]::UTF8)
+        foreach ($term in $forbiddenBuyerTerms) {
+            if ($fileContent -match [regex]::Escape($term)) {
+                throw "买家文档 $file 包含禁用内容: $term"
+            }
+        }
+    }
+}
+Write-Host "[check]   3. 买家文档无禁用内容 OK"
+
+# 2c. 检查买家文档无旧 .md 引用残留
+foreach ($file in $allBuyerFiles) {
+    $fullPath = Join-Path $RootDir $file
+    if (Test-Path -LiteralPath $fullPath) {
+        $fileContent = [System.IO.File]::ReadAllText($fullPath, [System.Text.Encoding]::UTF8)
+        foreach ($stale in $staleMdRefs) {
+            if ($fileContent -match [regex]::Escape($stale)) {
+                throw "买家文档 $file 包含旧 .md 文件名引用: $stale（应引用 .txt）"
+            }
+        }
+    }
+}
+Write-Host "[check]   4. 买家文档无旧 .md 引用 OK"
+
+Write-Host "[check] v1.3.3 buyer documentation safety OK"
+
+# ============================================================
+Write-Host ""
+Write-Host "[check] v1.3.3 release ZIP content check"
+
+$releaseZip = Join-Path $RootDir "release\ClaudeCode-DeepSeek-本地配置助手-v1.3.3.zip"
+
+if (Test-Path $releaseZip) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($releaseZip)
+    try {
+        $zipEntryNames = $zip.Entries | ForEach-Object { $_.FullName.Replace('\', '/').TrimEnd('/') }
+
+        # 1. 必须存在的买家文档
+        $mustExistInZip = @(
+            "01-先看我-安装说明.txt",
+            "02-安装完成后怎么开始使用.txt",
+            "03-常用提示词模板.txt",
+            "04-常见问题和售后.txt"
+        )
+        foreach ($name in $mustExistInZip) {
+            if ($zipEntryNames -notcontains $name) {
+                throw "Release ZIP 缺失必需文件: $name"
+            }
+        }
+        Write-Host "[check]   1. 买家文档在 ZIP 中存在 OK"
+
+        # 2. 提示词模板目录含 8 个文件
+        $promptZipEntries = $zipEntryNames | Where-Object { $_ -match "^提示词模板\/.+\.txt$" }
+        $promptZipCount = @($promptZipEntries).Count
+        if ($promptZipCount -ne 8) {
+            throw "Release ZIP 提示词模板文件数应为 8，实际: $promptZipCount"
+        }
+        Write-Host "[check]   2. 提示词模板 8 个文件在 ZIP 中存在 OK"
+
+        # 3. 不得存在的禁用条目
+        $forbiddenZipPatterns = @(
+            "QUICK_START.md",
+            "docs/",
+            "examples/",
+            "scripts/",
+            ".git/",
+            ".github/",
+            "release/",
+            "reports/",
+            "runs/",
+            "logs/",
+            "backup/",
+            "archive/",
+            ".env",
+            "settings.json",
+            "report.txt",
+            "support-feedback.txt",
+            "full-report",
+            "install-report",
+            "terminal-",
+            "doctor-"
+        )
+        foreach ($pattern in $forbiddenZipPatterns) {
+            $matched = $zipEntryNames | Where-Object { $_ -like "*$pattern*" } | Select-Object -First 1
+            if ($matched) {
+                throw "Release ZIP 包含禁用条目: $matched (匹配规则: $pattern)"
+            }
+        }
+        Write-Host "[check]   3. ZIP 中无禁用条目 OK"
+
+        # 4. 扫描文件内容：API Key 泄露与 OpenCode 引用
+        $skPattern = 'sk-[A-Za-z0-9]{20,}'
+        $scanExts = @('.txt', '.md', '.ps1', '.cmd', '.json', '.env', '.log', '.yml', '.yaml', '.cfg', '.ini', '.xml', '.html', '.htm', '.css', '.js', '.ts', '.py', '.sh', '.bat')
+        foreach ($entry in $zip.Entries) {
+            if ($entry.FullName.EndsWith('/')) { continue }
+            $ext = [System.IO.Path]::GetExtension($entry.FullName).ToLowerInvariant()
+            if ($ext -notin $scanExts) { continue }
+            $stream = $entry.Open()
+            $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+            $content = $reader.ReadToEnd()
+            $reader.Close()
+            $stream.Close()
+            if ($content -match $skPattern) {
+                throw "Release ZIP 包含疑似 API Key: $($entry.FullName)"
+            }
+            if ($content -match 'OpenCode') {
+                throw "Release ZIP 内容包含 OpenCode 引用: $($entry.FullName)"
+            }
+            foreach ($stale in $staleMdRefs) {
+                if ($content -match [regex]::Escape($stale)) {
+                    throw "Release ZIP 内容包含旧 .md 文件名引用: $stale in $($entry.FullName)"
+                }
+            }
+        }
+        Write-Host "[check]   4. ZIP 内容无 API Key 泄露和 OpenCode 引用 OK"
+    }
+    finally {
+        $zip.Dispose()
+    }
+    Write-Host "[check] v1.3.3 release ZIP content check OK"
+}
+else {
+    Write-Host "[check] Release ZIP 未找到，跳过 ZIP 内容检查"
+}
+
 Write-Host "[check] OK"

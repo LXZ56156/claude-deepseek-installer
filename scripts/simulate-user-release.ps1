@@ -381,21 +381,16 @@ function Assert-ZipDoesNotContainForbiddenEntries {
             "backup/",
             "reports/",
             "release/",
-            "scripts/build-release.ps1",
-            "scripts/simulate-user-release.ps1",
-            "scripts/package-release.ps1",
             "CLAUDE.md",
             ".gitignore",
             "report.txt",
-            "docs/闲鱼商品说明.md",
-            "docs/测试清单.md",
-            "docs/视频教程脚本.md",
-            "docs/用户体验验证清单.md",
-            "docs/售后排查话术.md",
-            "docs/v1.3.3-final-acceptance.md",
-            "docs/release-artifacts.md",
-            "docs/发布前验收清单.md",
-            "docs/交接文档.md"
+            "QUICK_START.md",
+            "docs/",
+            "examples/",
+            "scripts/",
+            "02-安装完成后怎么开始使用.md",
+            "03-常用提示词模板.md",
+            "04-常见问题和售后.md"
         )
         foreach ($entry in $entries) {
             foreach ($pattern in $forbidden) {
@@ -407,6 +402,109 @@ function Assert-ZipDoesNotContainForbiddenEntries {
     }
     finally {
         $zip.Dispose()
+    }
+}
+
+function Assert-ZipContainsRequiredEntries {
+    param([string]$ZipPath)
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $entries = $zip.Entries | ForEach-Object { $_.FullName }
+        $required = @(
+            "01-先看我-安装说明.txt",
+            "02-安装完成后怎么开始使用.txt",
+            "03-常用提示词模板.txt",
+            "04-常见问题和售后.txt",
+            "提示词模板/00-先用这个-检查环境和项目.txt",
+            "提示词模板/01-接手已有代码项目.txt",
+            "提示词模板/02-补装开发环境和依赖.txt",
+            "提示词模板/03-微信小程序开发.txt",
+            "提示词模板/04-网页前端项目.txt",
+            "提示词模板/05-Python脚本开发.txt",
+            "提示词模板/06-安全修改代码.txt",
+            "提示词模板/07-生成README和使用说明.txt"
+        )
+        # Normalize entries to forward-slash for comparison
+        $normalized = $entries | ForEach-Object { $_ -replace '\\', '/' }
+        foreach ($req in $required) {
+            $normalizedReq = $req -replace '\\', '/'
+            if ($normalizedReq -notin $normalized) {
+                throw "ZIP is missing required entry: $req"
+            }
+        }
+    }
+    finally {
+        $zip.Dispose()
+    }
+}
+
+function Assert-ZipDoesNotContainForbiddenText {
+    param([string]$ZipPath)
+
+    $staleMdRefs = @(
+        "02-安装完成后怎么开始使用.md",
+        "03-常用提示词模板.md",
+        "04-常见问题和售后.md"
+    )
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $textExts = @('.txt', '.md', '.ps1', '.cmd', '.json', '.sh', '.bat', '.yml', '.yaml', '.xml', '.ini', '.cfg', '.conf')
+        foreach ($entry in $zip.Entries) {
+            if ($entry.FullName.EndsWith('/')) { continue }
+            $ext = [System.IO.Path]::GetExtension($entry.FullName).ToLowerInvariant()
+            if ($ext -notin $textExts) { continue }
+            $stream = $entry.Open()
+            $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+            $content = $reader.ReadToEnd()
+            $reader.Close(); $stream.Close()
+            foreach ($stale in $staleMdRefs) {
+                if ($content -match [regex]::Escape($stale)) {
+                    throw "ZIP text contains stale .md reference: $stale (in $($entry.FullName))"
+                }
+            }
+        }
+    }
+    finally {
+        $zip.Dispose()
+    }
+}
+
+function Assert-ExtractedBuyerDocsDoNotContainStaleMdRefs {
+    param([string]$ExtractRoot)
+
+    $staleMdRefs = @(
+        "02-安装完成后怎么开始使用.md",
+        "03-常用提示词模板.md",
+        "04-常见问题和售后.md"
+    )
+
+    $buyerDocs = @(
+        "01-先看我-安装说明.txt",
+        "02-安装完成后怎么开始使用.txt",
+        "03-常用提示词模板.txt",
+        "04-常见问题和售后.txt"
+    )
+
+    $promptDir = Join-Path $ExtractRoot "提示词模板"
+    if (Test-Path $promptDir) {
+        Get-ChildItem -LiteralPath $promptDir -Filter "*.txt" -File | ForEach-Object {
+            $buyerDocs += (Join-Path "提示词模板" $_.Name)
+        }
+    }
+
+    foreach ($doc in $buyerDocs) {
+        $fullPath = if ([System.IO.Path]::IsPathRooted($doc)) { $doc } else { Join-Path $ExtractRoot $doc }
+        if (-not (Test-Path -LiteralPath $fullPath)) { continue }
+        $content = [System.IO.File]::ReadAllText($fullPath, [System.Text.Encoding]::UTF8)
+        foreach ($stale in $staleMdRefs) {
+            if ($content -match [regex]::Escape($stale)) {
+                throw "Extracted buyer doc contains stale .md reference: $stale (in $doc)"
+            }
+        }
     }
 }
 
@@ -447,9 +545,13 @@ try {
     }
 
     Assert-ZipDoesNotContainForbiddenEntries -ZipPath $zip.FullName
+    Assert-ZipContainsRequiredEntries -ZipPath $zip.FullName
+    Assert-ZipDoesNotContainForbiddenText -ZipPath $zip.FullName
 
     Write-Check "extract ZIP to $extractRoot"
     Expand-Archive -LiteralPath $zip.FullName -DestinationPath $extractRoot -Force
+
+    Assert-ExtractedBuyerDocsDoNotContainStaleMdRefs -ExtractRoot $extractRoot
 
     $releaseRoot = $extractRoot
     New-TestClaudeConfig -ProfileDir $testProfile -DummyKey $DummyApiKey
@@ -690,7 +792,7 @@ try {
     )) {
         Copy-Item -Path (Join-Path $releaseRoot $launcher) -Destination (Join-Path $missingDir $launcher) -Force
         $run = Invoke-SimCommand -Name "missing package: $launcher" -FileName $cmdExe -Arguments @("/c", (".\" + $launcher)) -InputText "`r`n" -WorkingDirectory $missingDir -ExpectedExitCode 1 -Environment $envVars
-        if ($run.Combined -notmatch "Please extract the full ZIP package first") {
+        if ($run.Combined -notmatch "Please extract the (full|complete) ZIP") {
             throw "$launcher did not show extract-full-ZIP guidance"
         }
         [void]$runs.Add($run)
