@@ -2621,6 +2621,216 @@ x-api-key: $TestApiKey
     Write-Host ""
 
     # ============================================================
+    # 39. 买家入口清晰度 UX 检查
+    # ============================================================
+    Write-CheckHeader "39. 买家入口清晰度 UX 检查"
+
+    $readmeTop80 = Get-Content (Join-Path $ScriptRoot "README.md") -Encoding UTF8 | Select-Object -First 80 | Out-String
+
+    Assert "39a: README top 80 行包含 '普通买家先看这里'" {
+        $readmeTop80 -match '普通买家先看这里'
+    } "README.md 前 80 行必须包含买家入口引导区块"
+
+    Assert "39b: README top 80 行包含 01-04 买家文档名称引用" {
+        $readmeTop80 -match '01-先看我' -and
+        $readmeTop80 -match '02-安装完成后' -and
+        $readmeTop80 -match '03-常用提示词模板' -and
+        $readmeTop80 -match '04-常见问题和售后'
+    } "README.md 前 80 行必须引用全部 4 份买家文档名称"
+
+    Assert "39c: README top 80 行包含 'support-feedback.txt'" {
+        $readmeTop80 -match 'support-feedback\.txt'
+    } "README.md 前 80 行必须提及售后文件 support-feedback.txt"
+
+    $buyerDocs39 = @(
+        "01-先看我-安装说明.txt",
+        "02-安装完成后怎么开始使用.md",
+        "03-常用提示词模板.md",
+        "04-常见问题和售后.md"
+    )
+    Assert "39d: 4 份买家文档存在于仓库根目录" {
+        $allExist39 = $true
+        foreach ($doc in $buyerDocs39) {
+            if (-not (Test-Path (Join-Path $ScriptRoot $doc))) { $allExist39 = $false; break }
+        }
+        $allExist39
+    } "买家文档 01-04 必须全部存在于仓库根目录"
+
+    $promptDir39 = Join-Path $ScriptRoot "提示词模板"
+    $promptFiles39 = Get-ChildItem -LiteralPath $promptDir39 -Filter "*.txt" -ErrorAction SilentlyContinue
+    Assert "39e: 提示词模板/ 目录存在且包含 8 个 .txt 文件" {
+        (Test-Path $promptDir39) -and (@($promptFiles39).Count -eq 8)
+    } "提示词模板/ 目录必须包含恰好 8 个 .txt 模板文件"
+
+    Write-Host ""
+
+    # ============================================================
+    # 40. 售后体验 UX 检查
+    # ============================================================
+    Write-CheckHeader "40. 售后体验 UX 检查"
+
+    $buyerDocPaths40 = @(
+        (Join-Path $ScriptRoot "01-先看我-安装说明.txt"),
+        (Join-Path $ScriptRoot "02-安装完成后怎么开始使用.md"),
+        (Join-Path $ScriptRoot "03-常用提示词模板.md"),
+        (Join-Path $ScriptRoot "04-常见问题和售后.md")
+    )
+    $promptFiles40 = Get-ChildItem -LiteralPath (Join-Path $ScriptRoot "提示词模板") -Filter "*.txt" -ErrorAction SilentlyContinue
+    $allBuyerContent40 = ""
+    foreach ($f in $buyerDocPaths40) {
+        if (Test-Path $f) { $allBuyerContent40 += (Get-Content $f -Raw -Encoding UTF8 -ErrorAction SilentlyContinue) }
+    }
+    foreach ($f in $promptFiles40) {
+        $allBuyerContent40 += (Get-Content $f.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)
+    }
+
+    Assert "40a: 买家文档包含 '优先发送 support-feedback.txt'" {
+        $allBuyerContent40 -match '优先发送 support-feedback\.txt'
+    } "买家文档必须引导优先发送 support-feedback.txt"
+
+    Assert "40b: 买家文档包含 '不要发送完整 API Key' 安全警告" {
+        $allBuyerContent40 -match '不要发送完整 API Key|不要把完整 API Key 发给任何人|不要把完整 API Key 复制粘贴发给'
+    } "买家文档必须包含不要发送完整 API Key 警告"
+
+    Assert "40c: 买家文档包含 '不要发送 settings.json' 安全警告" {
+        $allBuyerContent40 -match '不要发送 settings\.json|不要把 settings\.json 发给任何人'
+    } "买家文档必须包含不要发送 settings.json 警告"
+
+    Assert "40d: 买家文档包含 '不要只发截图'" {
+        $allBuyerContent40 -match '不要只发截图'
+    } "买家文档必须包含不要只发截图提示"
+
+    Assert "40e: 买家文档包含 '一键诊断.cmd'" {
+        $allBuyerContent40 -match '一键诊断\.cmd'
+    } "买家文档必须引导用户运行一键诊断.cmd"
+
+    Assert "40f: 买家文档不得将 '只发送 report.txt' 作为优先售后指引" {
+        $allBuyerContent40 -notmatch '只发送 report\.txt'
+    } "买家文档不得以 '只发送 report.txt' 作为唯一/优先售后指引"
+
+    Assert "40g: 买家文档不得出现 '发送 settings.json' 正面指令" {
+        $allBuyerContent40 -notmatch '(?<!不要)发送 settings\.json|(?<!不要)把 settings\.json 发给'
+    } "买家文档不得包含发送 settings.json 的正面指令（警告性否定句除外）"
+
+    Assert "40h: 买家文档不得出现 '发送完整 API Key' 正面指令" {
+        $allBuyerContent40 -notmatch '(?<!不要)发送.*完整 API Key|(?<!不要)把完整 API Key 发给'
+    } "买家文档不得包含发送完整 API Key 的正面指令（警告性否定句除外）"
+
+    Write-Host ""
+
+    # ============================================================
+    # 41. 提示词模板体验 UX 检查
+    # ============================================================
+    Write-CheckHeader "41. 提示词模板体验 UX 检查"
+
+    $promptDir41 = Join-Path $ScriptRoot "提示词模板"
+    $promptFiles41 = Get-ChildItem -LiteralPath $promptDir41 -Filter "*.txt" -ErrorAction SilentlyContinue
+
+    $usageHeaderOk41 = $true
+    $negativeApiKeyOk41 = $true
+    $negativeSettingsOk41 = $true
+    $planConfirmOk41 = $true
+
+    $needPlanConfirm41 = @("00", "02", "04", "05", "06")
+
+    foreach ($f in $promptFiles41) {
+        $content41 = Get-Content $f.FullName -Raw -Encoding UTF8
+
+        if ($content41 -notmatch '^使用方法') {
+            $usageHeaderOk41 = $false
+        }
+
+        if ($content41 -match '完整 API Key 发给') {
+            $negativeApiKeyOk41 = $false
+        }
+
+        if ($content41 -match '输出 settings\.json 原文') {
+            $negativeSettingsOk41 = $false
+        }
+
+        $baseName41 = $f.BaseName
+        foreach ($prefix in $needPlanConfirm41) {
+            if ($baseName41.StartsWith($prefix)) {
+                if ($content41 -notmatch '先列计划|等用户确认|等我确认') {
+                    $planConfirmOk41 = $false
+                }
+                break
+            }
+        }
+    }
+
+    Assert "41a: 每个提示词模板以 '使用方法' 行开头" { $usageHeaderOk41 } "每个模板文件必须以使用方法行开头"
+    Assert "41b: 模板 00/02/04/05/06 包含 '先列计划'/'等用户确认'/'等我确认'" { $planConfirmOk41 } "关键模板必须包含计划确认用语"
+    Assert "41c: 提示词模板不包含 '完整 API Key 发给' 正面指令" { $negativeApiKeyOk41 } "模板不得引导用户发送完整 API Key"
+    Assert "41d: 提示词模板不包含 '输出 settings.json 原文' 指令" { $negativeSettingsOk41 } "模板不得引导 AI 输出 settings.json 原文"
+
+    Write-Host ""
+
+    # ============================================================
+    # 42. Release ZIP 买家体验检查
+    # ============================================================
+    Write-CheckHeader "42. Release ZIP 买家体验检查"
+
+    $zipPath42 = Join-Path $ScriptRoot "release\ClaudeCode-DeepSeek-本地配置助手-v1.3.3.zip"
+    if (Test-Path $zipPath42) {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip42 = [System.IO.Compression.ZipFile]::OpenRead($zipPath42)
+        try {
+            $zipEntries42 = $zip42.Entries | ForEach-Object { $_.FullName -replace '/$', '' }
+
+            Assert "42a: ZIP 包含 01-先看我-安装说明.txt" {
+                ($zipEntries42 -match '01-先看我-安装说明\.txt').Count -gt 0
+            } "ZIP 必须包含买家文档 01"
+            Assert "42b: ZIP 包含 02-安装完成后怎么开始使用.md" {
+                ($zipEntries42 -match '02-安装完成后怎么开始使用\.md').Count -gt 0
+            } "ZIP 必须包含买家文档 02"
+            Assert "42c: ZIP 包含 03-常用提示词模板.md" {
+                ($zipEntries42 -match '03-常用提示词模板\.md').Count -gt 0
+            } "ZIP 必须包含买家文档 03"
+            Assert "42d: ZIP 包含 04-常见问题和售后.md" {
+                ($zipEntries42 -match '04-常见问题和售后\.md').Count -gt 0
+            } "ZIP 必须包含买家文档 04"
+
+            $promptInZip42 = $zipEntries42 | Where-Object { $_ -match '提示词模板[/\\].*\.txt$' }
+            Assert "42e: ZIP 包含 提示词模板/ 下 8 个 .txt 文件" {
+                @($promptInZip42).Count -eq 8
+            } "ZIP 提示词模板/ 必须包含 8 个 .txt 文件"
+
+            Assert "42f: ZIP 不包含 QUICK_START.md" {
+                ($zipEntries42 -match '^QUICK_START\.md$').Count -eq 0
+            } "ZIP 不得包含 QUICK_START.md"
+
+            Assert "42g: ZIP 不包含 docs/ 目录" {
+                ($zipEntries42 -match '^docs[/\\]').Count -eq 0
+            } "ZIP 不得包含 docs/ 目录"
+
+            Assert "42h: ZIP 不包含 examples/ 目录" {
+                ($zipEntries42 -match '^examples[/\\]').Count -eq 0
+            } "ZIP 不得包含 examples/ 目录"
+
+            Assert "42i: ZIP 不包含 scripts/ 目录" {
+                ($zipEntries42 -match '^scripts[/\\]').Count -eq 0
+            } "ZIP 不得包含 scripts/ 目录"
+
+            Assert "42j: ZIP 不包含 CCDI_TEST_MODE 或 TestSafe 痕迹" {
+                ($zipEntries42 -match 'CCDI_TEST_MODE|TestSafe').Count -eq 0
+            } "ZIP 不得包含测试模式痕迹"
+
+            Assert "42k: ZIP 不包含 scripts/check.ps1 引用" {
+                ($zipEntries42 -match 'scripts[/\\]check\.ps1').Count -eq 0
+            } "ZIP 不得包含 check.ps1 引用"
+        }
+        finally {
+            $zip42.Dispose()
+        }
+    }
+    else {
+        Write-Host "  [SKIP] release/ClaudeCode-DeepSeek-本地配置助手-v1.3.3.zip 不存在，跳过 ZIP 检查" -ForegroundColor Yellow
+    }
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""
