@@ -963,21 +963,21 @@ if (Test-Path $oldChineseLauncher) {
     throw "Old launcher 开始安装.cmd must not remain after rename to 00-点我开始安装.cmd"
 }
 # Content checks for the new primary launcher
-$primaryLauncherText = Get-Content -Path $primaryLauncher -Raw -Encoding ASCII
+$primaryLauncherText = Get-Content -Path $primaryLauncher -Raw -Encoding UTF8
 if ($primaryLauncherText -notmatch 'Start-Here\.ps1') {
     throw "00-点我开始安装.cmd must call Start-Here.ps1"
 }
-if ($primaryLauncherText -notmatch 'Please extract the full ZIP package first') {
+if ($primaryLauncherText -notmatch '完整解压 ZIP 到普通文件夹' -and $primaryLauncherText -notmatch '完整解压') {
     throw "00-点我开始安装.cmd must show full ZIP extraction guidance"
 }
 if ($primaryLauncherText -notmatch 'exit /b') {
     throw "00-点我开始安装.cmd must propagate exit code with exit /b"
 }
 $launcherBytes = [System.IO.File]::ReadAllBytes($primaryLauncher)
-foreach ($b in $launcherBytes) {
-    if ($b -gt 0x7F) {
-        throw "00-点我开始安装.cmd must be ASCII-only"
-    }
+# v1.3.3: allow Chinese characters in .cmd ZIP guard messages (target audience is Chinese Windows)
+$launcherText = [System.Text.Encoding]::UTF8.GetString($launcherBytes)
+if ($launcherText -notmatch '完整解压|全部解压|不要在压缩包') {
+    throw "00-点我开始安装.cmd must contain Chinese ZIP extraction guidance"
 }
 # build-release.ps1 whitelist must include new name, keep English, drop old name
 $buildReleaseText = Get-Content -Path (Join-Path $RootDir "scripts\build-release.ps1") -Raw -Encoding UTF8
@@ -1594,15 +1594,15 @@ foreach ($cmdFile in $cmdFiles) {
     $bytes = [System.IO.File]::ReadAllBytes($cmdFile)
     # BOM check: first 3 bytes must not be EF BB BF
     if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-        throw "$([System.IO.Path]::GetFileName($cmdFile)) has UTF-8 BOM (will garble Chinese path on CMD)"
+        throw "$([System.IO.Path]::GetFileName($cmdFile)) has UTF-8 BOM"
     }
-    # ASCII check: no byte > 0x7F (all .cmd content must be pure ASCII)
-    $nonAscii = $bytes | Where-Object { $_ -gt 0x7F }
-    if ($nonAscii) {
-        throw "$([System.IO.Path]::GetFileName($cmdFile)) contains non-ASCII bytes (will garble on CMD)"
+    # v1.3.3: allow UTF-8 Chinese ZIP guard messages, require chcp 65001 for correct rendering
+    $content = [System.Text.Encoding]::UTF8.GetString($bytes)
+    if ($content -notmatch 'chcp 65001') {
+        throw "$([System.IO.Path]::GetFileName($cmdFile)) must include chcp 65001 for UTF-8 Chinese content"
     }
 }
-Write-Host "[check] .cmd launchers: no BOM, pure ASCII"
+Write-Host "[check] .cmd launchers: no BOM, chcp 65001 present"
 
 Write-Host "[check] Legacy install.ps1 entry point guardrails"
 $installPs1Text = Get-Content -Path (Join-Path $RootDir "install.ps1") -Raw -Encoding UTF8
@@ -3270,7 +3270,8 @@ foreach ($entry in $userEntryFiles) {
     $encoding = if ($entry -like "*.cmd") { "ASCII" } else { "UTF8" }
     $text = Get-Content -Path $entryPath -Raw -Encoding $encoding
 
-    if ($text -match '(?m)^[^#\r\n]*chcp\s+65001') {
+    # v1.3.3: .cmd files may use chcp 65001 for UTF-8 Chinese ZIP guard messages before PowerShell bootstrap
+    if ($text -match '(?m)^[^#\r\n]*chcp\s+65001' -and $entry -notlike "*.cmd") {
         throw "User entry file must not call chcp 65001 directly: $entry. Use Initialize-ConsoleEncodingSafe via bootstrap/logger."
     }
 }
@@ -4676,6 +4677,33 @@ if ($supportScriptText -notmatch '优先发送 support-feedback\.txt') {
     throw "docs/售后排查话术.md must include '优先发送 support-feedback.txt'"
 }
 Write-Host "[check]   13. support script doc prioritizes support-feedback.txt OK"
+
+# 14. .cmd 文件不得包含英文 ZIP 预览拦截提示
+$cmdFiles = Get-ChildItem -LiteralPath $RootDir -Filter "*.cmd" -File | Where-Object { $_.FullName -notmatch '\\release\\|\\archive\\|\\runs\\' }
+$enForbidden = @('Please extract', 'Failed to enter script directory', 'Press any key to exit', 'Missing Start-Here.ps1', 'Missing doctor.ps1', 'Missing lib\\bootstrap.ps1')
+foreach ($cmdFile in $cmdFiles) {
+    $cmdContent = Get-Content -LiteralPath $cmdFile.FullName -Raw -Encoding ASCII
+    foreach ($pattern in $enForbidden) {
+        if ($cmdContent -match $pattern) {
+            throw "$($cmdFile.Name) must NOT contain English text '$pattern'. Use Chinese ZIP extraction guidance."
+        }
+    }
+}
+Write-Host "[check]   14. .cmd files do not contain English ZIP guard messages OK"
+
+# 15. .cmd 文件必须包含中文解压提示
+$zhRequired = @('完整解压|压缩包预览|不要在压缩包里直接运行|全部解压')
+foreach ($cmdFile in $cmdFiles) {
+    $cmdContent = Get-Content -LiteralPath $cmdFile.FullName -Raw -Encoding UTF8
+    $found = $false
+    foreach ($pattern in $zhRequired) {
+        if ($cmdContent -match $pattern) { $found = $true; break }
+    }
+    if (-not $found) {
+        throw "$($cmdFile.Name) must contain Chinese ZIP extraction guidance"
+    }
+}
+Write-Host "[check]   15. .cmd files contain Chinese ZIP extraction guidance OK"
 
 Write-Host "[check] v1.3.3 support-feedback polish anti-regression OK"
 

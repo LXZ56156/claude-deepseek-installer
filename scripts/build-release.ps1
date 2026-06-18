@@ -386,24 +386,25 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
         }
     }
 
-    # .cmd: 验证无 BOM + 纯 ASCII
+    # .cmd: 验证无 BOM + chcp 65001 用于 UTF-8 中文 ZIP 拦截提示
     $cmdFiles = Get-ChildItem -Path $stagingDir -Filter "*.cmd" -Recurse -ErrorAction SilentlyContinue
     foreach ($f in $cmdFiles) {
         $raw = [System.IO.File]::ReadAllBytes($f.FullName)
         $hasBom = ($raw.Length -ge 3 -and $raw[0] -eq 0xEF -and $raw[1] -eq 0xBB -and $raw[2] -eq 0xBF)
-        $nonAscii = $raw | Where-Object { $_ -gt 0x7F }
         if ($hasBom) {
-            Write-Host "  错误: $($f.Name) 包含 UTF-8 BOM，CMD 会乱码" -ForegroundColor Red
-            Write-Host "  请确保 .cmd 文件为纯 ASCII 无 BOM。" -ForegroundColor Yellow
+            Write-Host "  错误: $($f.Name) 包含 UTF-8 BOM" -ForegroundColor Red
+            Write-Host "  请移除 .cmd 文件的 BOM。" -ForegroundColor Yellow
             Remove-Item $ZipFilePath -Force -ErrorAction SilentlyContinue
             Remove-Item $Sha256FilePath -Force -ErrorAction SilentlyContinue
             Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
             if (Test-Path $OutputDir) { Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue }
             exit 1
         }
-        if ($nonAscii) {
-            Write-Host "  错误: $($f.Name) 包含 $($nonAscii.Count) 个非 ASCII 字节，CMD 会乱码" -ForegroundColor Red
-            Write-Host "  请将 .cmd 文件改为纯 ASCII。" -ForegroundColor Yellow
+        # v1.3.3: allow UTF-8 Chinese ZIP guard messages, require chcp 65001
+        $content = [System.Text.Encoding]::UTF8.GetString($raw)
+        if ($content -notmatch 'chcp 65001') {
+            Write-Host "  错误: $($f.Name) 缺少 chcp 65001（UTF-8 中文内容必需）" -ForegroundColor Red
+            Write-Host "  请在 .cmd 文件开头添加 chcp 65001 >nul 2>&1。" -ForegroundColor Yellow
             Remove-Item $ZipFilePath -Force -ErrorAction SilentlyContinue
             Remove-Item $Sha256FilePath -Force -ErrorAction SilentlyContinue
             Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
