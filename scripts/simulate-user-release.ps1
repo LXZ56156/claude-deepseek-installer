@@ -387,7 +387,10 @@ function Assert-ZipDoesNotContainForbiddenEntries {
             "QUICK_START.md",
             "docs/",
             "examples/",
-            "scripts/"
+            "scripts/",
+            "02-安装完成后怎么开始使用.md",
+            "03-常用提示词模板.md",
+            "04-常见问题和售后.md"
         )
         foreach ($entry in $entries) {
             foreach ($pattern in $forbidden) {

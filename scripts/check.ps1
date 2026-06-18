@@ -4782,6 +4782,13 @@ $forbiddenBuyerTerms = @(
     "C:\CCDI-VM"
 )
 
+# 禁止买家文档引用旧的 .md 文件名（第 4.5 批已统一改为 .txt）
+$staleMdRefs = @(
+    "02-安装完成后怎么开始使用.md",
+    "03-常用提示词模板.md",
+    "04-常见问题和售后.md"
+)
+
 # 2a. 汇总所有买家文档内容，检查必需项
 $allBuyerContent = ""
 foreach ($file in $allBuyerFiles) {
@@ -4811,6 +4818,20 @@ foreach ($file in $allBuyerFiles) {
     }
 }
 Write-Host "[check]   3. 买家文档无禁用内容 OK"
+
+# 2c. 检查买家文档无旧 .md 引用残留
+foreach ($file in $allBuyerFiles) {
+    $fullPath = Join-Path $RootDir $file
+    if (Test-Path -LiteralPath $fullPath) {
+        $fileContent = [System.IO.File]::ReadAllText($fullPath, [System.Text.Encoding]::UTF8)
+        foreach ($stale in $staleMdRefs) {
+            if ($fileContent -match [regex]::Escape($stale)) {
+                throw "买家文档 $file 包含旧 .md 文件名引用: $stale（应引用 .txt）"
+            }
+        }
+    }
+}
+Write-Host "[check]   4. 买家文档无旧 .md 引用 OK"
 
 Write-Host "[check] v1.3.3 buyer documentation safety OK"
 
@@ -4895,7 +4916,12 @@ if (Test-Path $releaseZip) {
                 throw "Release ZIP 包含疑似 API Key: $($entry.FullName)"
             }
             if ($content -match 'OpenCode') {
-                throw "Release ZIP 包含 OpenCode 引用: $($entry.FullName)"
+                throw "Release ZIP 内容包含 OpenCode 引用: $($entry.FullName)"
+            }
+            foreach ($stale in $staleMdRefs) {
+                if ($content -match [regex]::Escape($stale)) {
+                    throw "Release ZIP 内容包含旧 .md 文件名引用: $stale in $($entry.FullName)"
+                }
             }
         }
         Write-Host "[check]   4. ZIP 内容无 API Key 泄露和 OpenCode 引用 OK"

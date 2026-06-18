@@ -2716,6 +2716,18 @@ x-api-key: $TestApiKey
         $allBuyerContent40 -notmatch '(?<!不要)发送.*完整 API Key|(?<!不要)把完整 API Key 发给'
     } "买家文档不得包含发送完整 API Key 的正面指令（警告性否定句除外）"
 
+    # 40i: 买家文档不得引用旧 .md 文件名
+    $staleMdPatterns40 = @("02-安装完成后怎么开始使用\.md", "03-常用提示词模板\.md", "04-常见问题和售后\.md")
+    $allBuyerContentClean40 = $allBuyerContent40
+    $staleMdHits40 = $false
+    foreach ($pat in $staleMdPatterns40) {
+        if ($allBuyerContentClean40 -match $pat) {
+            $staleMdHits40 = $true
+            break
+        }
+    }
+    Assert "40i: 买家文档不得引用旧 .md 文件名" { -not $staleMdHits40 } "买家文档中禁止出现 02/03/04 .md 引用（应使用 .txt）"
+
     Write-Host ""
 
     # ============================================================
