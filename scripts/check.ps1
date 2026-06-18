@@ -4546,4 +4546,43 @@ Write-Host "[check]   10. No curly quotes in check.ps1 code OK"
 
 Write-Host "[check] v1.3.3 report accuracy anti-regression OK"
 
+Write-Host ""
+Write-Host "[check] v1.3.3 test matrix anti-regression"
+
+$simulateText = Get-Content (Join-Path $RootDir "scripts\simulate-user-release.ps1") -Raw -Encoding UTF8
+$testMatrixPath = Join-Path $RootDir "docs\dev\test-matrix-v1.3.3.md"
+
+# 1. simulate-user-release.ps1 contains scenario names
+$expectedScenarios = @("Scenario B:", "Scenario C:", "Scenario D:", "Scenario F:", "Scenario G:")
+foreach ($s in $expectedScenarios) {
+    if ($simulateText -notmatch [regex]::Escape($s)) {
+        throw "simulate-user-release.ps1 must contain '$s'"
+    }
+}
+Write-Host "[check]   1. simulate scenarios B/C/D/F/G present OK"
+
+# 2. Assert-TextOrder function exists
+if ($simulateText -notmatch 'function Assert-TextOrder') {
+    throw "simulate-user-release.ps1 must define Assert-TextOrder"
+}
+Write-Host "[check]   2. Assert-TextOrder exists OK"
+
+# 3. docs/dev/test-matrix-v1.3.3.md exists
+if (-not (Test-Path $testMatrixPath)) {
+    throw "docs/dev/test-matrix-v1.3.3.md must exist"
+}
+Write-Host "[check]   3. test-matrix-v1.3.3.md exists OK"
+
+# 4. test-matrix contains expected columns
+$matrixContent = Get-Content -Path $testMatrixPath -Raw -Encoding UTF8
+if ($matrixContent -notmatch '场景.*环境.*预期安装方式.*预期结果') {
+    throw "test-matrix-v1.3.3.md must contain expected table columns"
+}
+if ($matrixContent -notmatch 'A.*B.*C') {
+    throw "test-matrix-v1.3.3.md must cover scenarios A/B/C at minimum"
+}
+Write-Host "[check]   4. test-matrix table structure OK"
+
+Write-Host "[check] v1.3.3 test matrix anti-regression OK"
+
 Write-Host "[check] OK"

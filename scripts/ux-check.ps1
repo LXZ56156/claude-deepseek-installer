@@ -2526,6 +2526,37 @@ x-api-key: $TestApiKey
     Write-Host ""
 
     # ============================================================
+    # 37. v1.3.3 test matrix UX 检查
+    # ============================================================
+    Write-CheckHeader "37. v1.3.3 test matrix UX anti-regression"
+
+    $simulateText37 = Get-Content (Join-Path $ScriptRoot "scripts\simulate-user-release.ps1") -Raw -Encoding UTF8
+    $simulateContent37 = $simulateText37
+
+    Assert "37a: 包含 Assert-TextOrder 输出顺序断言" {
+        $simulateContent37 -match 'function Assert-TextOrder'
+    } "simulate-user-release.ps1 必须包含输出顺序断言函数"
+
+    Assert "37b: 包含 text order 通过提示" {
+        $simulateContent37 -match 'text order OK'
+    } "simulate 必须输出 text order 通过提示"
+
+    Assert "37c: 完成页下一步文案仍存在" {
+        $startHereText36 -match '启动 Claude Code 测试' -or $startHereText36 -match '下一步'
+    } "Start-Here.ps1 必须保留完成页下一步建议"
+
+    Assert "37d: support-feedback 安全提示仍存在" {
+        $commonText36 = Get-Content (Join-Path $ScriptRoot "lib\common.ps1") -Raw -Encoding UTF8
+        $commonText36 -match '优先发送 support-feedback.txt'
+    } "common.ps1 必须保留 support-feedback 安全提示"
+
+    Assert "37e: test-matrix-v1.3.3.md 存在" {
+        Test-Path (Join-Path $ScriptRoot "docs\dev\test-matrix-v1.3.3.md")
+    } "docs/dev/test-matrix-v1.3.3.md 必须存在"
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""
