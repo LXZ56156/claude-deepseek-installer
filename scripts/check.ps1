@@ -4664,6 +4664,19 @@ if ($npmRiskArea -notmatch 'INFO') {
 }
 Write-Host "[check]   11. npm risk check handles Native Install downgrade OK"
 
+# 12. docs/售后排查话术.md 不得包含旧 report.txt 引导口径
+$supportScriptText = Get-Content (Join-Path $RootDir "docs\售后排查话术.md") -Raw -Encoding UTF8
+if ($supportScriptText -match '把 report\.txt 发给我|把生成的 report\.txt 发给我|请只发送.*report\.txt') {
+    throw "docs/售后排查话术.md must NOT contain legacy '把 report.txt 发给我' wording. Use '优先发送 support-feedback.txt'."
+}
+Write-Host "[check]   12. support script doc does not contain legacy report.txt guidance OK"
+
+# 13. docs/售后排查话术.md 必须包含新口径
+if ($supportScriptText -notmatch '优先发送 support-feedback\.txt') {
+    throw "docs/售后排查话术.md must include '优先发送 support-feedback.txt'"
+}
+Write-Host "[check]   13. support script doc prioritizes support-feedback.txt OK"
+
 Write-Host "[check] v1.3.3 support-feedback polish anti-regression OK"
 
 Write-Host "[check] OK"

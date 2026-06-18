@@ -2606,6 +2606,18 @@ x-api-key: $TestApiKey
         $npmRiskArea -match 'INFO'
     } "Native Install 时 npm 风险不得为 WARN"
 
+    # --- v1.3.3 P1: 售后排查话术文档口径 ---
+    $supportScriptText = Get-Content (Join-Path $ScriptRoot "docs\售后排查话术.md") -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+    if ($supportScriptText) {
+        Assert "38j: docs/售后排查话术.md 不含旧 '把 report.txt 发给我'" {
+            $supportScriptText -notmatch '把 report\.txt 发给我|把生成的 report\.txt 发给我'
+        } "售后排查话术不得再引导只发送 report.txt"
+
+        Assert "38k: docs/售后排查话术.md 包含 '优先发送 support-feedback.txt'" {
+            $supportScriptText -match '优先发送 support-feedback\.txt'
+        } "售后排查话术必须包含新口径"
+    }
+
     Write-Host ""
 
     # ============================================================
