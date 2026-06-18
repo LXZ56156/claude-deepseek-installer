@@ -807,6 +807,23 @@ if ($simText -match '\[System\.Diagnostics\.Process\]::Start\("cmd\.exe",\s*"/c 
     throw "simulate-user-release.ps1 ShellExecute capability test must use ProcessStartInfo with WindowStyle=Hidden (not bare Process.Start)"
 }
 
+# ShellExecute launcher wait must stay short (2000ms), not 8000ms
+if ($simShellExecuteSection -notmatch '\$shellExecuteInitWaitMs\s*=\s*2000') {
+    throw "simulate-user-release.ps1 ShellExecute launcher wait must be 2000ms"
+}
+if ($simShellExecuteSection -match 'WaitForExit\s*\(\s*8000\s*\)') {
+    throw "simulate-user-release.ps1 ShellExecute launcher wait must not regress to WaitForExit(8000)"
+}
+if ($simShellExecuteSection -match 'running after 8s') {
+    throw "simulate-user-release.ps1 ShellExecute launcher message must not hard-code 8s"
+}
+if ($simShellExecuteSection -notmatch 'not a full interactive UX test') {
+    throw "simulate-user-release.ps1 ShellExecute launcher comment must explain it is not a full interactive UX test"
+}
+if ($simShellExecuteSection -notmatch 'launcher starts successfully') {
+    throw "simulate-user-release.ps1 ShellExecute launcher comment must explain it verifies launcher start"
+}
+
 # 18d. release-artifacts.md anti-regression checks (v1.3.2 final)
 $releaseArtifactsPath = Join-Path $RootDir "docs\release-artifacts.md"
 if (-not (Test-Path $releaseArtifactsPath)) {

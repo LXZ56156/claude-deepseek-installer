@@ -703,14 +703,19 @@ try {
 
                     $started = $true
 
-                    # Wait briefly for the process to initialize
-                    $proc.WaitForExit(8000) | Out-Null
+                    $shellExecuteInitWaitMs = 2000
+
+                    # Wait briefly for the process to initialize.
+                    # This ShellExecute smoke only verifies that the launcher starts successfully;
+                    # it is not a full interactive UX test, so 2 seconds is enough.
+                    $proc.WaitForExit($shellExecuteInitWaitMs) | Out-Null
 
                     if (-not $proc.HasExited) {
                         $realPid = $proc.Id
                         try { & taskkill.exe /PID $realPid /T /F 2>$null | Out-Null; Start-Sleep -Milliseconds 500 } catch { }
                         if (-not $proc.HasExited) { try { Stop-Process -Id $realPid -Force -ErrorAction SilentlyContinue } catch { } }
-                        Write-Host "[simulate]   $launcherName started (running after 8s, killed)" -ForegroundColor Green
+                        $waitSec = [math]::Round($shellExecuteInitWaitMs / 1000, 1)
+                        Write-Host "[simulate]   $launcherName started (running after ${waitSec}s, killed)" -ForegroundColor Green
                     }
                     else {
                         $exitCode = $proc.ExitCode
