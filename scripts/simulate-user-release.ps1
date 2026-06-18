@@ -195,10 +195,10 @@ function Assert-CmdAsciiNoBom {
     if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
         throw "$($File.FullName) has UTF-8 BOM"
     }
-    # v1.3.3: allow UTF-8 Chinese ZIP guard messages, require chcp 65001
-    $content = [System.Text.Encoding]::UTF8.GetString($bytes)
-    if ($content -notmatch 'chcp 65001') {
-        throw "$($File.FullName) must include chcp 65001 for UTF-8 Chinese content"
+    foreach ($b in $bytes) {
+        if ($b -gt 0x7F) {
+            throw "$($File.FullName) contains non-ASCII byte $b"
+        }
     }
 }
 

@@ -368,14 +368,9 @@ try {
                 Write-SandboxFail "B3. CMD BOM $($f.Name)" "has UTF-8 BOM"
                 $cmdAsciiOk = $false
             }
-            # v1.3.3: allow UTF-8 with chcp 65001 for Chinese ZIP guard messages
-            $content = [System.Text.Encoding]::UTF8.GetString($bytes)
-            if ($content -notmatch 'chcp 65001') {
-                Write-SandboxFail "B3. CMD chcp $($f.Name)" "missing chcp 65001"
-                $cmdAsciiOk = $false
-            }
+            # v1.3.3: GBK encoding OK for Chinese ZIP guard messages on Chinese Windows
         }
-        if ($cmdAsciiOk) { Write-SandboxPass "B3. All .cmd no BOM, chcp 65001 present" }
+        if ($cmdAsciiOk) { Write-SandboxPass "B3. All .cmd no BOM, GBK OK" }
 
         # No terminal-risk chars in docs
         $badPattern = '\p{So}|[─-╿]|️'
