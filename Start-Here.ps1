@@ -172,7 +172,7 @@ function Convert-ClaudeInstallMethodForReport {
         '^official_native$' { return 'Claude 官方 Native Install' }
         '^existing_native$' { return '已存在：Claude 官方 Native Install' }
         '^winget$' { return 'winget 安装' }
-        '^npm_npmmirror$' { return 'npm 镜像安装' }
+        '^npm_npmmirror$' { return '备用下载方式（npm 镜像）' }
         '^existing$' { return '已存在：系统 PATH 中检测到 Claude Code' }
         '^native_local_bin$' { return 'Claude 官方 Native Install' }
         '^npm_global$' { return 'npm 全局安装' }
@@ -725,9 +725,22 @@ function Step-InstallClaudeCode {
             # v1.3.3 P1-2: 兜底检测必须包含 fresh shell 验证
             $freshFinal = Test-ClaudeCommandInFreshShell
 
+            # 优先保留 installResult.Method（如 npm_npmmirror），不被 Source=ExternalScript 覆盖
+            $knownInstallMethods = @("official_native", "winget", "npm_npmmirror", "existing", "existing_native")
+            $resolvedMethod = if ($installResult.Method -in $knownInstallMethods) {
+                $installResult.Method
+            }
+            elseif ($script:ClaudeInstallMethod -in $knownInstallMethods) {
+                $script:ClaudeInstallMethod
+            }
+            else {
+                "final_fallback"
+            }
+            Write-Log "INFO" "final fallback source=$($finalCheck.Source), path=$($finalCheck.Path), preservedMethod=$resolvedMethod"
+
             if ($freshFinal.Success) {
                 $script:ClaudeInstalled = $true
-                $script:ClaudeInstallMethod = if ($finalCheck.Source) { $finalCheck.Source } else { "final_fallback" }
+                $script:ClaudeInstallMethod = $resolvedMethod
                 $script:ClaudeInstallStatus = "installed"
                 Write-Success "Claude Code 已安装并确认可用。"
                 Write-Log "INFO" "final verification succeeded: version=$($finalCheck.Version), fresh shell OK"
@@ -735,7 +748,7 @@ function Step-InstallClaudeCode {
             }
             else {
                 $script:ClaudeInstalled = $true
-                $script:ClaudeInstallMethod = if ($finalCheck.Source) { $finalCheck.Source } else { "final_fallback" }
+                $script:ClaudeInstallMethod = $resolvedMethod
                 $script:ClaudeInstallStatus = "installed_needs_restart_or_path_fix"
                 Write-Warning "当前窗口可以识别 Claude Code，但新打开的 PowerShell 还没有确认可用。"
                 Write-Info "本工具会继续配置 DeepSeek API Key。"
@@ -1997,16 +2010,26 @@ function Start-LazyInstall {
                 # v1.3.3 P1-2: 兜底检测必须包含 fresh shell 验证
                 $freshFinal = Test-ClaudeCommandInFreshShell
 
+                # 优先保留 installResult.Method（如 npm_npmmirror），不被 Source=ExternalScript 覆盖
+                $knownInstallMethods = @("official_native", "winget", "npm_npmmirror", "existing", "existing_native")
+                $resolvedMethod = if ($script:ClaudeInstallMethod -in $knownInstallMethods) {
+                    $script:ClaudeInstallMethod
+                }
+                else {
+                    "final_fallback"
+                }
+                Write-Log "INFO" "Start-LazyInstall final fallback source=$($finalCheck.Source), path=$($finalCheck.Path), preservedMethod=$resolvedMethod"
+
                 if ($freshFinal.Success) {
                     $script:ClaudeInstalled = $true
-                    $script:ClaudeInstallMethod = if ($finalCheck.Source) { $finalCheck.Source } else { "final_fallback" }
+                    $script:ClaudeInstallMethod = $resolvedMethod
                     $script:ClaudeInstallStatus = "installed"
                     Write-UserFriendlyInstallMessage -Type "InstallSuccess" -Detail "final check version: $($finalCheck.Version)"
                     Write-Log "INFO" "Start-LazyInstall 兜底通过: fresh shell 可用, 继续流程"
                 }
                 else {
                     $script:ClaudeInstalled = $true
-                    $script:ClaudeInstallMethod = if ($finalCheck.Source) { $finalCheck.Source } else { "final_fallback" }
+                    $script:ClaudeInstallMethod = $resolvedMethod
                     $script:ClaudeInstallStatus = "installed_needs_restart_or_path_fix"
 
                     Write-Warning "当前窗口可以识别 Claude Code，但新打开的 PowerShell 还没有确认可用。"

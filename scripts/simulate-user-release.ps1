@@ -1087,6 +1087,75 @@ Write-Output "TestError=$($result.Error)"
     }
     Write-Host "[simulate]   progress formatting runtime test OK" -ForegroundColor Green
 
+    # v1.3.3 UX: npm mirror + Wait-ClaudeCommandReady static + runtime checks
+    Write-Check "v1.3.3 UX: npm mirror Wait-ClaudeCommandReady anti-regression"
+
+    # Static checks
+    $ciContent2 = Get-Content (Join-Path $releaseRoot "lib\claude-install.ps1") -Raw -Encoding UTF8
+    $shContent2 = Get-Content (Join-Path $releaseRoot "Start-Here.ps1") -Raw -Encoding UTF8
+
+    if ($ciContent2 -notmatch 'function Wait-ClaudeCommandReady') {
+        throw "Wait-ClaudeCommandReady function not found in claude-install.ps1"
+    }
+    if ($ciContent2 -notmatch 'Wait-ClaudeCommandReady\s+-TotalWaitSec\s+30\s+-IntervalSec\s+2\s+-RequireFreshShell') {
+        throw "npm mirror install must call Wait-ClaudeCommandReady -TotalWaitSec 30 -IntervalSec 2 -RequireFreshShell"
+    }
+    if ($ciContent2 -notmatch '正在确认 Claude Code 是否已经可用') {
+        throw "npm mirror install must show '正在确认 Claude Code 是否已经可用'"
+    }
+    if ($ciContent2 -notmatch '备用下载方式暂未完成确认') {
+        throw "npm mirror must show '备用下载方式暂未完成确认' only after Wait-ClaudeCommandReady fails"
+    }
+    if ($shContent2 -notmatch [regex]::Escape('备用下载方式（npm 镜像）')) {
+        throw "Convert-ClaudeInstallMethodForReport missing '备用下载方式（npm 镜像）' mapping"
+    }
+    if ($shContent2 -notmatch 'knownInstallMethods') {
+        throw "Start-Here.ps1 final fallback must use knownInstallMethods to preserve installResult.Method"
+    }
+    Write-Host "[simulate]   npm mirror Wait-ClaudeCommandReady static checks OK" -ForegroundColor Green
+
+    # Minimal runtime test: load Wait-ClaudeCommandReady in TestSafe mode and verify structure
+    $wccrTestEnv = New-SimEnvironment -ProfileDir $testProfile -DesktopDir $testDesktop -DummyKey $DummyApiKey
+    $wccrTestEnv["CCDI_TEST_MODE"] = "1"
+    $wccrTestScript = @'
+$scriptRoot = "{0}"
+. "$scriptRoot\lib\bootstrap.ps1"
+$null = Initialize-CcdiScript -ScriptName "sim-wccr"
+
+# Verify function exists
+$fn = Get-Command Wait-ClaudeCommandReady -ErrorAction SilentlyContinue
+if (-not $fn) {{
+    Write-Output "WCCR_CHECK=function_not_found"
+    exit 1
+}}
+
+# Verify in TestSafe mode the function returns proper structure
+$ready = Wait-ClaudeCommandReady -TotalWaitSec 5 -IntervalSec 1 -Context "simulate test"
+Write-Output "WCCR_CHECK=Ready=$($ready.Ready)"
+Write-Output "WCCR_CHECK=Status=$($ready.Status)"
+Write-Output "WCCR_CHECK=Attempts=$($ready.Attempts)"
+Write-Output "WCCR_CHECK=HasVersion=$([bool]$ready.Version)"
+'@ -f $releaseRoot
+    $wccrTestPath = Join-Path $tempRoot "test_wccr.ps1"
+    Set-Content -Path $wccrTestPath -Value $wccrTestScript -Encoding UTF8
+
+    $wccrRun = Invoke-SimCommand -Name "Wait-ClaudeCommandReady runtime test" -FileName $powerShellExe -Arguments @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $wccrTestPath
+    ) -WorkingDirectory $releaseRoot -Environment $wccrTestEnv -TimeoutSec 30
+    [void]$runs.Add($wccrRun)
+
+    if ($wccrRun.Combined -notmatch 'WCCR_CHECK=function_not_found') {
+        if ($wccrRun.Combined -match 'WCCR_CHECK=Status=') {
+            Write-Host "[simulate]   Wait-ClaudeCommandReady runtime structure OK" -ForegroundColor Green
+        }
+        else {
+            throw "Wait-ClaudeCommandReady did not return expected Status field in TestSafe mode"
+        }
+    }
+    else {
+        throw "Wait-ClaudeCommandReady function not loadable in release staging"
+    }
+
     Write-Host "[simulate] OK" -ForegroundColor Green
 }
 finally {

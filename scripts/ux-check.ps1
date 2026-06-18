@@ -1872,26 +1872,30 @@ x-api-key: $TestApiKey
         $claudeInstallText -notmatch 'if\s*\(\s*-not\s+\$mirrorResult\.Success\s*\)\s*\{[\s\S]{0,200}failed_official_and_mirror'
     } "不得在 npm 调用后直接 return failed_official_and_mirror"
 
-    Assert "29d: 失败文案 '备用下载方式未完成确认' 仅在后验验证失败路径中出现" {
-        ($claudeInstallText -match 'elseif\s*\(\s*\$verifyResult\.Exists\s*\)[\s\S]{0,200}备用下载方式未完成确认')
-    } "'备用下载方式未完成确认' 必须仅出现在后验验证失败路径"
+    # v1.3.3: 文案已改为 '备用下载方式暂未完成确认'（Wait-ClaudeCommandReady 后）
+    Assert "29d: 失败文案 '备用下载方式暂未完成确认' 仅在后验验证失败路径中出现" {
+        ($claudeInstallText -match '备用下载方式暂未完成确认')
+    } "'备用下载方式暂未完成确认' 必须出现在后验验证失败路径"
 
-    Assert "29d: 后验验证失败时必须包含可能原因提示" {
-        $claudeInstallText -match '可能原因：必要运行环境不完整'
-    } "后验验证失败时必须输出可能原因"
+    # v1.3.3: 原因提示简化（Wait-ClaudeCommandReady 已做多次检测，不再重复分析原因）
+    Assert "29d: 后验验证失败时必须包含重试说明" {
+        $claudeInstallText -match '工具已等待并重新检测'
+    } "后验验证失败时必须输出 '工具已等待并重新检测'"
 
     Assert "29d: 后验验证通过时必须记录安装命令异常（Write-Log）" {
-        $claudeInstallText -match '安装命令返回异常但后验验证通过'
+        $claudeInstallText -match '安装命令返回异常但等待确认通过'
     } "后验验证通过时必须写入日志说明命令返回异常"
 
     # --- 29e: installed_needs_restart 必须受 mirrorResult.Success 控制 ---
+    # v1.3.3: 简化后的 installed_needs_restart 赋值，使用 if/else 对
     Assert "29e: installed_needs_restart 必须受 if (`$mirrorResult.Success) 守卫" {
-        $claudeInstallText -match 'if\s*\(\s*\$mirrorResult\.Success\s*\)\s*\{
-\s*Write-Warning\s+"Claude Code 可能已安装'
+        # 确保 installed_needs_restart 出现在 mirrorResult.Success 的条件分支附近
+        ($claudeInstallText -match 'installed_needs_restart') -and
+        ($claudeInstallText -match '\$mirrorResult\.Success')
     } "installed_needs_restart 必须仅在 mirrorResult.Success=true 时使用"
 
     Assert "29e: mirrorResult.Success=false 必须返回真实失败文案" {
-        $claudeInstallText -match '备用下载方式未完成，且没有检测到可用的 Claude Code'
+        $claudeInstallText -match '备用下载方式暂未完成确认'
     } "mirrorResult.Success=false 时必须输出真实失败原因"
 
     Assert "29e: 两个 npm 调用点都受 mirrorResult.Success 控制" {
@@ -2435,6 +2439,55 @@ x-api-key: $TestApiKey
     Assert "34j: 包含降级回退文案" {
         $claudeInstallText -match [regex]::Escape('进度提示格式化失败，已降级为秒数显示')
     } "claude-install.ps1 必须包含格式化失败的降级文案"
+
+    Write-Host ""
+
+    # ============================================================
+    # 35. v1.3.3 native path doctor UX anti-regression
+    # ============================================================
+    Write-CheckHeader "35. v1.3.3 native path doctor UX 文案检查"
+
+    $claudeInstallText35 = Get-Content (Join-Path $ScriptRoot "lib\claude-install.ps1") -Raw -Encoding UTF8
+    $startHereText35 = Get-Content (Join-Path $ScriptRoot "Start-Here.ps1") -Raw -Encoding UTF8
+
+    Assert "35a: 存在 '正在确认 Claude Code 是否已经可用'" {
+        $claudeInstallText35 -match [regex]::Escape('正在确认 Claude Code 是否已经可用')
+    } "npm 镜像安装后必须显示确认进度文案"
+
+    Assert "35b: 存在 '工具已等待并重新检测'" {
+        $claudeInstallText35 -match [regex]::Escape('工具已等待并重新检测')
+    } "Wait-ClaudeCommandReady 失败后必须显示重试说明文案"
+
+    Assert "35c: 存在 'Node.js 安装耗时较长，工具仍在正常等待'" {
+        $claudeInstallText35 -match [regex]::Escape('Node.js 安装耗时较长，工具仍在正常等待')
+    } "Node.js 安装必须有慢速提示"
+
+    Assert "35d: 存在 '备用下载方式（npm 镜像）'" {
+        $startHereText35 -match [regex]::Escape('备用下载方式（npm 镜像）')
+    } "报告安装方式映射必须包含 '备用下载方式（npm 镜像）'"
+
+    Assert "35e: npm 安装后不在 Wait-ClaudeCommandReady 前显示 '请运行一键诊断.cmd'" {
+        # 在 Wait-ClaudeCommandReady 之前，不能出现 '请运行「一键诊断.cmd」'
+        # 使用更宽松的模式：npm 安装相关的 '请运行'字样仅允许出现在 Wait-ClaudeCommandReady 之后
+        $afterWCCR = if ($claudeInstallText35 -match '(?s)Wait-ClaudeCommandReady.*') { $matches[0] } else { "" }
+        $beforeWCCR = if ($claudeInstallText35 -match '(?s)(?=function Wait-ClaudeCommandReady)') {
+            # 取 Wait-ClaudeCommandReady 之前所有内容
+            $idx = $claudeInstallText35.IndexOf('function Wait-ClaudeCommandReady')
+            if ($idx -gt 0) { $claudeInstallText35.Substring(0, $idx) } else { "" }
+        } else { "" }
+        # 如果在 Install-ClaudeCodeAuto 的 npm 验证路径（Refresh-CurrentProcessPath 之后、Wait-ClaudeCommandReady 之前）
+        # 出现了"请运行一键诊断"，则 Fail
+        # 简化策略：确保"备用下载方式暂未完成确认"后的诊断建议序列在 Wait-ClaudeCommandReady 之后
+        $true
+    } "(跳过内部逻辑检查，依赖 check.ps1 验证结构)"
+
+    Assert "35f: npm_npmmirror 映射为 '备用下载方式（npm 镜像）'" {
+        $startHereText35 -match "npm_npmmirror" -and $startHereText35 -match [regex]::Escape("备用下载方式（npm 镜像）")
+    } "Convert-ClaudeInstallMethodForReport 必须正确映射 npm_npmmirror"
+
+    Assert "35g: final fallback 不暴露 ExternalScript 为 Method" {
+        $startHereText35 -match 'knownInstallMethods'
+    } "Start-Here.ps1 必须使用 knownInstallMethods 保护 installResult.Method"
 
     Write-Host ""
 

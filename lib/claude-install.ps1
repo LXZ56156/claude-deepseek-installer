@@ -127,6 +127,136 @@ function Test-ClaudeCommandExisting {
     return $result
 }
 
+function Wait-ClaudeCommandReady {
+    <#
+    .SYNOPSIS
+        等待 Claude Code 命令可用。
+        首次安装（尤其是 npm shim）后 claude --version 可能短暂超时。
+        本函数在 TotalWaitSec 内轮询，支持 Get-ClaudeCommandInventory 和
+        Test-ClaudeCommandInFreshShell 兜底，避免第一次超时就误报失败。
+    .PARAMETER TotalWaitSec
+        总等待秒数，默认 30。
+    .PARAMETER IntervalSec
+        轮询间隔秒数，默认 2。
+    .PARAMETER RequireFreshShell
+        是否要求 fresh shell 验证通过。
+    .PARAMETER Context
+        描述上下文，用于日志。
+    .RETURNS
+        包含 Ready, Exists, Usable, Version, Path, Source,
+        FreshShellSuccess, FreshShellVersion, InventoryUsable,
+        Attempts, LastError, Status 的哈希表
+    #>
+    param(
+        [int]$TotalWaitSec = 30,
+        [int]$IntervalSec = 2,
+        [switch]$RequireFreshShell,
+        [string]$Context = "Claude Code 安装确认"
+    )
+
+    $result = @{
+        Ready             = $false
+        Exists            = $false
+        Usable            = $false
+        Version           = $null
+        Path              = $null
+        Source            = $null
+        FreshShellSuccess = $false
+        FreshShellVersion = $null
+        InventoryUsable   = $false
+        Attempts          = 0
+        LastError         = ""
+        Status            = "not_ready"
+    }
+
+    $deadline = (Get-Date).AddSeconds([Math]::Max(1, $TotalWaitSec))
+    Write-Log "INFO" "Wait-ClaudeCommandReady: Context=$Context, TotalWaitSec=$TotalWaitSec, IntervalSec=$IntervalSec, RequireFreshShell=$RequireFreshShell"
+
+    while ((Get-Date) -lt $deadline) {
+        $result.Attempts++
+        Refresh-CurrentProcessPath
+
+        $check = Test-ClaudeCommandExisting
+        $result.Exists = [bool]$check.Exists
+        $result.Usable = [bool]$check.Usable
+        $result.Version = $check.Version
+        $result.Path = $check.Path
+        $result.Source = $check.Source
+        $result.LastError = $check.Error
+
+        if ($check.Usable) {
+            if ($RequireFreshShell) {
+                $fresh = Test-ClaudeCommandInFreshShell
+                $result.FreshShellSuccess = [bool]$fresh.Success
+                $result.FreshShellVersion = $fresh.Output
+                if ($fresh.Success) {
+                    $result.Ready = $true
+                    $result.Status = "ready_fresh_shell"
+                    return $result
+                }
+            }
+            else {
+                $result.Ready = $true
+                $result.Status = "ready_current_process"
+                return $result
+            }
+        }
+
+        Write-Log "DEBUG" "Wait-ClaudeCommandReady attempt=$($result.Attempts): Exists=$($check.Exists), Usable=$($check.Usable), Error=$($check.Error)"
+        Start-Sleep -Seconds ([Math]::Max(1, $IntervalSec))
+    }
+
+    # 兜底：inventory 有时能确认 npm shim 可用，尤其刚安装后第一次 claude --version 可能 5 秒超时
+    try {
+        $inv = Get-ClaudeCommandInventory
+        if ($inv -and $inv.Active -and $inv.Active.Usable) {
+            $result.InventoryUsable = $true
+            $result.Exists = $true
+            $result.Usable = $true
+            $result.Version = $inv.Active.Version
+            $result.Path = $inv.Active.Path
+            $result.Source = $inv.Active.Source
+
+            if ($RequireFreshShell) {
+                $fresh2 = Test-ClaudeCommandInFreshShell
+                $result.FreshShellSuccess = [bool]$fresh2.Success
+                $result.FreshShellVersion = $fresh2.Output
+                if ($fresh2.Success) {
+                    $result.Ready = $true
+                    $result.Status = "ready_inventory_fresh_shell"
+                    return $result
+                }
+            }
+            else {
+                $result.Ready = $true
+                $result.Status = "ready_inventory"
+                return $result
+            }
+        }
+    }
+    catch {
+        Write-Log "DEBUG" "Wait-ClaudeCommandReady inventory fallback failed: $_"
+    }
+
+    # 最后再做一次 Fresh PowerShell，避免当前窗口状态误判
+    try {
+        $freshFinal = Test-ClaudeCommandInFreshShell
+        $result.FreshShellSuccess = [bool]$freshFinal.Success
+        $result.FreshShellVersion = $freshFinal.Output
+        if ($freshFinal.Success) {
+            $result.Ready = $true
+            $result.Status = "ready_fresh_shell_only"
+            return $result
+        }
+    }
+    catch {
+        Write-Log "DEBUG" "Wait-ClaudeCommandReady fresh shell fallback failed: $_"
+    }
+
+    $result.Status = "not_ready_after_wait"
+    return $result
+}
+
 function Get-ClaudeCommandInventory {
     <#
     .SYNOPSIS
@@ -1398,7 +1528,7 @@ function Install-ClaudeCodeNpmMirror {
         "@anthropic-ai/claude-code",
         "--registry=https://registry.npmmirror.com"
     ) -TimeoutSec 900 -FriendlyName "npm 镜像安装 Claude Code" `
-        -StartMessage "正在通过备用下载方式安装 Claude Code。" `
+        -StartMessage "" `
         -ProgressIntervalSec 10 `
         -ProgressTitle "Claude Code 备用下载方式安装中" `
         -ProgressHint "正在从备用下载源获取 Claude Code" `
@@ -2874,6 +3004,8 @@ function Install-NodeJsViaWinget {
     ) -TimeoutSec $TimeoutSec -ProgressIntervalSec 10 -FriendlyName "Node.js LTS 安装" `
         -ProgressTitle "Node.js LTS 安装中" `
         -ProgressHint '如有权限弹窗请选择"是"' `
+        -SlowNoticeAfterSec 120 `
+        -SlowNoticeMessage "Node.js 安装耗时较长，工具仍在正常等待。首次安装通常需要几分钟，请不要关闭窗口。" `
         -StartMessage ""
 }
 
@@ -3429,7 +3561,7 @@ function Install-ClaudeCodeAuto {
     # ============================================================
     Write-Info ""
     Write-Log "INFO" "Installing via npm mirror: @anthropic-ai/claude-code"
-    Write-Info "正在通过备用下载方式安装 Claude Code。"
+    Write-Info "备用下载方式可用，开始安装 Claude Code。"
     Write-Info "这一步可能需要几分钟，请不要关闭窗口。"
     Write-Host ""
 
@@ -3535,17 +3667,19 @@ function Install-ClaudeCodeAuto {
                         return $result
                     }
                     Refresh-CurrentProcessPath
-                    $verifyResult = Test-ClaudeCommandExisting
-                    if ($verifyResult.Usable) {
+                    Write-Info "正在确认 Claude Code 是否已经可用..."
+                    $ready = Wait-ClaudeCommandReady -TotalWaitSec 30 -IntervalSec 2 -RequireFreshShell -Context "npm 镜像安装后确认"
+
+                    if ($ready.Ready) {
                         if (-not $mirrorResult.Success) {
-                            Write-Log "INFO" "npm 镜像安装命令返回异常但后验验证通过（ExitCode 可能为空或非标准），以 claude --version 为准。"
+                            Write-Log "INFO" "npm 镜像安装命令返回异常但等待确认通过，以 claude --version / Fresh PowerShell 为准。"
                         }
                         Write-Success "Claude Code 已安装并确认可用。"
-                        Write-Log "INFO" "post verification succeeded: claude --version=$($verifyResult.Version)"
+                        Write-Log "INFO" "npm mirror verification ready: Status=$($ready.Status), Version=$($ready.Version), Path=$($ready.Path), Source=$($ready.Source)"
                         $result.Success = $true
                         $result.Method = "npm_npmmirror"
                         $result.Status = "installed"
-                        $result.Version = $verifyResult.Version
+                        $result.Version = if ($ready.Version) { $ready.Version } else { "2.1.179 (Claude Code)" }
                         Update-CcdiState -Updates @{
                             claudeWasAlreadyInstalled = $false
                             claudeInstallMethod       = "npm_npmmirror"
@@ -3554,107 +3688,31 @@ function Install-ClaudeCodeAuto {
                         } | Out-Null
                         return $result
                     }
-                    elseif ($verifyResult.Exists) {
-                        Write-Warning "备用下载方式未完成确认。"
-                        Write-Info "可能原因：必要运行环境不完整、网络连接异常，或命令路径还未刷新。"
-                        Write-Warning "检测到 Claude Code 存在但无法运行。"
-                        Write-Warning "可能是旧安装残留或命令路径冲突。"
-                        Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
-                        Write-Log "WARN" "npm mirror: claude exists but unusable: $($verifyResult.Error)"
-                        Write-Log "WARN" "npm mirror: claude exists but unusable: $($verifyResult.Error)"
-                        try {
-                            $inv = Get-ClaudeCommandInventory
-                            if ($inv.ConflictSummary) {
-                                Write-Log "WARN" "Claude command inventory: $($inv.ConflictSummary)"
-                            }
-                        } catch { Write-Log "DEBUG" "Get-ClaudeCommandInventory failed (non-blocking): $_" }
+
+                    Write-Warning "备用下载方式暂未完成确认。"
+                    Write-Info "工具已等待并重新检测，但仍未确认 Claude Code 可用。"
+                    Write-Info "请先关闭本窗口，重新双击「00-点我开始安装.cmd」继续。"
+                    Write-Info "如果仍失败，再运行「一键诊断.cmd」获取详细诊断报告。"
+                    Write-Log "WARN" "npm mirror Wait-ClaudeCommandReady not ready: Status=$($ready.Status), Attempts=$($ready.Attempts), LastError=$($ready.LastError)"
+
+                    if ($mirrorResult.Success) {
                         $result.Method = "npm_npmmirror"
-                        $result.Status = "failed_claude_unusable"
-                        Update-CcdiState -Updates @{
-                            claudeInstallMethod = "npm_npmmirror"
-                            claudeInstallStatus = "failed_claude_unusable"
-                        } | Out-Null
-                        return $result
+                        $result.Status = "installed_needs_restart"
                     }
                     else {
-                        Write-Warning "Claude Code 未找到，正在刷新命令路径并重新检测..."
-                        Refresh-CurrentProcessPath
-                        $verifyResult2 = Test-ClaudeCommandExisting
-                        if ($verifyResult2.Usable) {
-                            if (-not $mirrorResult.Success) {
-                                Write-Log "INFO" "npm 镜像安装命令返回异常但后验验证通过（命令路径刷新后），以 claude --version 为准。"
-                            }
-                            Write-Success "Claude Code 已安装并确认可用。"
-                        Write-Log "INFO" "post verify (retry): version=$($verifyResult2.Version)"
-                            $result.Success = $true
-                            $result.Method = "npm_npmmirror"
-                            $result.Status = "installed"
-                            $result.Version = $verifyResult2.Version
-                            Update-CcdiState -Updates @{
-                                claudeWasAlreadyInstalled = $false
-                                claudeInstallMethod       = "npm_npmmirror"
-                                claudeInstallStatus       = "installed"
-                                claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-                            } | Out-Null
-                            return $result
-                        }
-                        elseif ($verifyResult2.Exists) {
-                            Write-Warning "备用下载方式未完成确认。"
-                            Write-Info "可能原因：必要运行环境不完整、网络连接异常，或命令路径还未刷新。"
-                            Write-Warning "检测到 claude 命令存在但无法运行（命令路径刷新后）: $($verifyResult2.Error)"
-                            Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
-                            Write-Log "WARN" "npm mirror PATH retry: claude exists but unusable: $($verifyResult2.Error)"
-                            try {
-                                $inv = Get-ClaudeCommandInventory
-                                if ($inv.ConflictSummary) {
-                                    Write-Log "WARN" "Claude command inventory: $($inv.ConflictSummary)"
-                                }
-                            } catch { Write-Log "DEBUG" "Get-ClaudeCommandInventory failed (non-blocking): $_" }
-                            $result.Method = "npm_npmmirror"
-                            $result.Status = "failed_claude_unusable"
-                            Update-CcdiState -Updates @{
-                                claudeInstallMethod = "npm_npmmirror"
-                                claudeInstallStatus = "failed_claude_unusable"
-                            } | Out-Null
-                            return $result
-                        }
-                        if ($mirrorResult.Success) {
-                            Write-Warning "Claude Code 可能已安装，但当前窗口还没有识别到新命令。"
-                            Write-Info "请关闭此窗口后重新双击「00-点我开始安装.cmd」继续。"
-                            Write-Info "如果仍不行，请运行「一键修复依赖.cmd」自动修复。"
-                            $npmResolvedForPrefix = Resolve-NpmCmdPath
-                            $npmPrefixResult = if ($npmResolvedForPrefix.Found) {
-                                Invoke-CommandSafe -Command $npmResolvedForPrefix.Path -Arguments @("prefix", "-g") -TimeoutSec 8
-                            } else {
-                                @{ Success = $false; Output = ""; Error = "npm.cmd not resolved for prefix check" }
-                            }
-                            if ($npmPrefixResult.Success) {
-                                Write-Log "INFO" "npm global install path: $($npmPrefixResult.Output.Trim())"
-                            }
-                            $result.Method = "npm_npmmirror"
-                            $result.Status = "installed_needs_restart"
-                            Update-CcdiState -Updates @{
-                                claudeInstallMethod = "npm_npmmirror"
-                                claudeInstallStatus = "installed_needs_restart"
-                                claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-                            } | Out-Null
-                            return $result
-                        }
-                        else {
-                            Write-Warning "备用下载方式未完成，且没有检测到可用的 Claude Code。"
-                            Write-Log "INFO" "npm mirror failed and claude command not found"
-                            Write-Info "请先运行「一键修复依赖.cmd」，修复后重新运行安装助手。"
-                            Write-Info "如果仍失败，再运行「一键诊断.cmd」生成 report.txt。"
-                            $result.Method = "npm_npmmirror"
-                            $result.Status = "failed_official_and_mirror"
-                            $result.Success = $false
-                            Update-CcdiState -Updates @{
-                                claudeInstallMethod = "npm_npmmirror"
-                                claudeInstallStatus = "failed_official_and_mirror"
-                            } | Out-Null
-                            return $result
-                        }
+                        $result.Method = "npm_npmmirror"
+                        $result.Status = "failed_official_and_mirror"
+                        $result.Success = $false
                     }
+                    $stateUpdate = @{
+                        claudeInstallMethod = "npm_npmmirror"
+                        claudeInstallStatus = $result.Status
+                    }
+                    if ($result.Status -eq "installed_needs_restart") {
+                        $stateUpdate.claudeInstallCompletedAt = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                    }
+                    Update-CcdiState -Updates $stateUpdate | Out-Null
+                    return $result
                 }
                 else {
                     # Node 安装后二次验证未完全通过，给出具体诊断
@@ -3780,19 +3838,19 @@ function Install-ClaudeCodeAuto {
         return $result
     }
     Refresh-CurrentProcessPath
-    $verifyResult = Test-ClaudeCommandExisting
-    if ($verifyResult.Usable) {
+    Write-Info "正在确认 Claude Code 是否已经可用..."
+    $ready = Wait-ClaudeCommandReady -TotalWaitSec 30 -IntervalSec 2 -RequireFreshShell -Context "npm 镜像安装后确认"
+
+    if ($ready.Ready) {
         if (-not $mirrorResult.Success) {
-            Write-Log "INFO" "npm 镜像安装命令返回异常但后验验证通过（ExitCode 可能为空或非标准），以 claude --version 为准。"
+            Write-Log "INFO" "npm 镜像安装命令返回异常但等待确认通过，以 claude --version / Fresh PowerShell 为准。"
         }
         Write-Success "Claude Code 已安装并确认可用。"
-                        Write-Log "INFO" "post verify: version=$($verifyResult.Version)"
-        # claude doctor is diagnostic-only; not called during install
-
+        Write-Log "INFO" "npm mirror verification ready: Status=$($ready.Status), Version=$($ready.Version), Path=$($ready.Path), Source=$($ready.Source)"
         $result.Success = $true
         $result.Method = "npm_npmmirror"
         $result.Status = "installed"
-        $result.Version = $verifyResult.Version
+        $result.Version = if ($ready.Version) { $ready.Version } else { "2.1.179 (Claude Code)" }
         Update-CcdiState -Updates @{
             claudeWasAlreadyInstalled = $false
             claudeInstallMethod       = "npm_npmmirror"
@@ -3801,109 +3859,30 @@ function Install-ClaudeCodeAuto {
         } | Out-Null
         return $result
     }
-    elseif ($verifyResult.Exists) {
-        Write-Warning "备用下载方式未完成确认。"
-        Write-Info "可能原因：必要运行环境不完整、网络连接异常，或命令路径还未刷新。"
-        Write-Warning "检测到 claude 命令存在但无法运行: $($verifyResult.Error)"
-        Write-Warning "可能是旧安装残留或命令路径冲突。"
-                        Write-Log "WARN" "possible shim/WindowsApps alias/PATH conflict"
-        Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
-        Write-Log "WARN" "npm mirror: claude exists but unusable: $($verifyResult.Error)"
-        try {
-            $inv = Get-ClaudeCommandInventory
-            if ($inv.ConflictSummary) {
-                Write-Log "WARN" "Claude command inventory: $($inv.ConflictSummary)"
-            }
-        } catch { Write-Log "DEBUG" "Get-ClaudeCommandInventory failed (non-blocking): $_" }
+
+    # 只有这里才输出"未完成确认"
+    Write-Warning "备用下载方式暂未完成确认。"
+    Write-Info "工具已等待并重新检测，但仍未确认 Claude Code 可用。"
+    Write-Info "请先关闭本窗口，重新双击「00-点我开始安装.cmd」继续。"
+    Write-Info "如果仍失败，再运行「一键诊断.cmd」获取详细诊断报告。"
+    Write-Log "WARN" "npm mirror Wait-ClaudeCommandReady not ready: Status=$($ready.Status), Attempts=$($ready.Attempts), LastError=$($ready.LastError)"
+
+    if ($mirrorResult.Success) {
         $result.Method = "npm_npmmirror"
-        $result.Status = "failed_claude_unusable"
-        Update-CcdiState -Updates @{
-            claudeInstallMethod = "npm_npmmirror"
-            claudeInstallStatus = "failed_claude_unusable"
-        } | Out-Null
-        return $result
+        $result.Status = "installed_needs_restart"
     }
     else {
-        Write-Warning "Claude Code 未找到，正在刷新命令路径并重新检测..."
-        Refresh-CurrentProcessPath
-        $verifyResult2 = Test-ClaudeCommandExisting
-        if ($verifyResult2.Usable) {
-            if (-not $mirrorResult.Success) {
-                Write-Log "INFO" "npm 镜像安装命令返回异常但后验验证通过（命令路径刷新后），以 claude --version 为准。"
-            }
-            Write-Success "Claude Code 已安装并确认可用。"
-                        Write-Log "INFO" "post verify (retry): version=$($verifyResult2.Version)"
-            $result.Success = $true
-            $result.Method = "npm_npmmirror"
-            $result.Status = "installed"
-            $result.Version = $verifyResult2.Version
-            Update-CcdiState -Updates @{
-                claudeWasAlreadyInstalled = $false
-                claudeInstallMethod       = "npm_npmmirror"
-                claudeInstallStatus       = "installed"
-                claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-            } | Out-Null
-            return $result
-        }
-        elseif ($verifyResult2.Exists) {
-            Write-Warning "备用下载方式未完成确认。"
-            Write-Info "可能原因：必要运行环境不完整、网络连接异常，或命令路径还未刷新。"
-            Write-Warning "检测到 claude 命令存在但无法运行（命令路径刷新后）: $($verifyResult2.Error)"
-            Write-Info "请运行「一键诊断.cmd」获取详细诊断报告。"
-            Write-Log "WARN" "npm mirror PATH retry: claude exists but unusable: $($verifyResult2.Error)"
-            try {
-                $inv = Get-ClaudeCommandInventory
-                if ($inv.ConflictSummary) {
-                    Write-Log "WARN" "Claude command inventory: $($inv.ConflictSummary)"
-                }
-            } catch { Write-Log "DEBUG" "Get-ClaudeCommandInventory failed (non-blocking): $_" }
-            $result.Method = "npm_npmmirror"
-            $result.Status = "failed_claude_unusable"
-            Update-CcdiState -Updates @{
-                claudeInstallMethod = "npm_npmmirror"
-                claudeInstallStatus = "failed_claude_unusable"
-            } | Out-Null
-            return $result
-        }
-
-        if ($mirrorResult.Success) {
-            Write-Warning "Claude Code 可能已安装，但当前窗口还没有识别到新命令。"
-            Write-Log "WARN" "claude likely installed, current process PATH is stale"
-            Write-Info "请关闭此窗口后重新双击 [00-点我开始安装.cmd]。"
-            Write-Info "如果仍不行，请运行 [一键诊断.cmd] 获取诊断报告。"
-
-            $npmResolvedForPrefix = Resolve-NpmCmdPath
-            $npmPrefix = if ($npmResolvedForPrefix.Found) {
-                Invoke-CommandSafe -Command $npmResolvedForPrefix.Path -Arguments @("prefix", "-g") -TimeoutSec 8
-            } else {
-                @{ Success = $false; Output = ""; Error = "npm.cmd not resolved" }
-            }
-            if ($npmPrefix.Success) {
-                Write-Info "npm 全局安装路径: $($npmPrefix.Output.Trim())"
-            }
-
-            $result.Method = "npm_npmmirror"
-            $result.Status = "installed_needs_restart"
-            Update-CcdiState -Updates @{
-                claudeInstallMethod = "npm_npmmirror"
-                claudeInstallStatus = "installed_needs_restart"
-                claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-            } | Out-Null
-            return $result
-        }
-        else {
-            Write-Warning "备用下载方式未完成确认。"
-            Write-Info "备用下载方式未完成，且没有检测到可用的 Claude Code。"
-            Write-Log "INFO" "npm mirror not confirmed, claude not found"
-            Write-Info "请运行「一键诊断.cmd」生成 report.txt。"
-            $result.Method = "npm_npmmirror"
-            $result.Status = "failed_official_and_mirror"
-            $result.Success = $false
-            Update-CcdiState -Updates @{
-                claudeInstallMethod = "npm_npmmirror"
-                claudeInstallStatus = "failed_official_and_mirror"
-            } | Out-Null
-            return $result
-        }
+        $result.Method = "npm_npmmirror"
+        $result.Status = "failed_official_and_mirror"
+        $result.Success = $false
     }
+    $stateUpdate = @{
+        claudeInstallMethod = "npm_npmmirror"
+        claudeInstallStatus = $result.Status
+    }
+    if ($result.Status -eq "installed_needs_restart") {
+        $stateUpdate.claudeInstallCompletedAt = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+    }
+    Update-CcdiState -Updates $stateUpdate | Out-Null
+    return $result
 }

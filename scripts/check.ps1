@@ -2305,8 +2305,10 @@ $installAutoText = if ($claudeInstallText -match '(?s)function Install-ClaudeCod
 if ($installAutoText -notmatch '\$verifyResult\.Usable') {
     throw "Install-ClaudeCodeAuto must use `$verifyResult.Usable for install verification"
 }
-if ($installAutoText -notmatch '\$verifyResult2\.Usable') {
-    throw "Install-ClaudeCodeAuto must use `$verifyResult2.Usable for PATH retry verification"
+# v1.3.3: $verifyResult2.Usable 已被 Wait-ClaudeCommandReady 替代（npm 安装路径）
+# 允许 Wait-ClaudeCommandReady 或旧 $verifyResult2.Usable
+if ($installAutoText -notmatch '\$verifyResult2\.Usable' -and $installAutoText -notmatch 'Wait-ClaudeCommandReady') {
+    throw "Install-ClaudeCodeAuto must use Wait-ClaudeCommandReady or `$verifyResult2.Usable for npm PATH retry verification"
 }
 if ($installAutoText -notmatch '\$verifyWingetClaude\.Usable') {
     throw "Install-ClaudeCodeAuto must use `$verifyWingetClaude.Usable for winget verification"
@@ -3697,24 +3699,26 @@ if ($claudeInstallText -match 'if\s*\(\s*-not\s+\$mirrorResult\.Success\s*\)\s*\
     throw "Pre-verified failed_official_and_mirror return must NOT exist (must do post-verification first)"
 }
 # D2. npm mirror failure messages must exist in post-verify failure paths
-if ($claudeInstallText -notmatch '备用下载方式未完成确认') {
-    throw "Post-verify failure paths must retain '备用下载方式未完成确认' message"
+# v1.3.3: 改为 '备用下载方式暂未完成确认'（增加"暂"字，因为 Wait-ClaudeCommandReady 已经重试过）
+if ($claudeInstallText -notmatch '备用下载方式.*未完成确认') {
+    throw "Post-verify failure paths must retain '备用下载方式...未完成确认' message"
 }
-if ($claudeInstallText -notmatch '可能原因：必要运行环境不完整') {
-    throw "Post-verify failure paths must include possible causes explanation (更新为普通用户语言)"
+# v1.3.3: 可能原因文案已简化为"工具已等待并重新检测"（Wait-ClaudeCommandReady 后不再重复分析原因）
+if ($claudeInstallText -notmatch '工具已等待并重新检测') {
+    throw "Post-verify failure paths must include '工具已等待并重新检测' message"
 }
 
 # E. installed_needs_restart must be guarded by mirrorResult.Success
 # When npm install fails AND claude is not found, must return failed_official_and_mirror
 # NOT installed_needs_restart (which falsely suggests "just reopen terminal").
 # E1. The installed_needs_restart branch must check mirrorResult.Success
-if ($claudeInstallText -notmatch 'if\s*\(\s*\$mirrorResult\.Success\s*\)\s*\{
-\s*Write-Warning\s+"Claude Code 可能已安装') {
+if ($claudeInstallText -notmatch 'if\s*\(\s*\$mirrorResult\.Success\s*\)\s*\{') {
     throw "installed_needs_restart must be guarded by if (`$mirrorResult.Success)"
 }
 # E2. When mirrorResult.Success is false + claude not found, must return failed_official_and_mirror
-if ($claudeInstallText -notmatch '备用下载方式未完成，且没有检测到可用的 Claude Code') {
-    throw "mirrorResult.Success=false must trigger real failure message (updated to user-friendly text)"
+# v1.3.3: 使用 '备用下载方式暂未完成确认' 代替旧文案
+if ($claudeInstallText -notmatch '备用下载方式暂未完成确认') {
+    throw "mirrorResult.Success=false must trigger '备用下载方式暂未完成确认' message"
 }
 # E3. Must NOT unconditionally set installed_needs_restart at end of npm post-verify failure
 # (The installed_needs_restart must appear ONLY inside `if ($mirrorResult.Success)` block)
@@ -4374,5 +4378,79 @@ if ($commonText -match 'MaxLogLines\s*=\s*200' -and $commonText -notmatch 'MaxLo
 Write-Host "[check]   9. MaxLogLines/MaxTerminalLines optimized OK"
 
 Write-Host "[check] v1.3.3 Node progress + noise filtering anti-regression OK"
+
+Write-Host ""
+Write-Host "[check] v1.3.3 native path doctor UX anti-regression"
+
+$claudeInstallText2 = Get-Content (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
+$startHereText2 = Get-Content (Join-Path $RootDir "Start-Here.ps1") -Raw -Encoding UTF8
+
+# 1. Wait-ClaudeCommandReady 必须存在
+if ($claudeInstallText2 -notmatch 'function Wait-ClaudeCommandReady') {
+    throw "claude-install.ps1 must define Wait-ClaudeCommandReady"
+}
+Write-Host "[check]   1. Wait-ClaudeCommandReady exists OK"
+
+# 2. Wait-ClaudeCommandReady 必须包含 TotalWaitSec, IntervalSec, Test-ClaudeCommandExisting, Get-ClaudeCommandInventory, Test-ClaudeCommandInFreshShell
+$wccrFunc = if ($claudeInstallText2 -match '(?s)function Wait-ClaudeCommandReady\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+if ($wccrFunc -notmatch '\$TotalWaitSec') { throw "Wait-ClaudeCommandReady must use TotalWaitSec" }
+if ($wccrFunc -notmatch '\$IntervalSec') { throw "Wait-ClaudeCommandReady must use IntervalSec" }
+if ($wccrFunc -notmatch 'Test-ClaudeCommandExisting') { throw "Wait-ClaudeCommandReady must call Test-ClaudeCommandExisting" }
+if ($wccrFunc -notmatch 'Get-ClaudeCommandInventory') { throw "Wait-ClaudeCommandReady must call Get-ClaudeCommandInventory" }
+if ($wccrFunc -notmatch 'Test-ClaudeCommandInFreshShell') { throw "Wait-ClaudeCommandReady must call Test-ClaudeCommandInFreshShell" }
+Write-Host "[check]   2. Wait-ClaudeCommandReady contains required functions OK"
+
+# 3. npm 镜像安装后必须调用 Wait-ClaudeCommandReady
+$npmVerify1 = if ($claudeInstallText2 -match '(?s)(备用下载方式可用，开始安装 Claude Code。.*?)(?=return \$result)') { $matches[0] } else { "" }
+if ($claudeInstallText2 -notmatch 'Wait-ClaudeCommandReady\s+-TotalWaitSec\s+30\s+-IntervalSec\s+2\s+-RequireFreshShell') {
+    throw "npm mirror install must call Wait-ClaudeCommandReady -TotalWaitSec 30 -IntervalSec 2 -RequireFreshShell"
+}
+Write-Host "[check]   3. npm mirror verification calls Wait-ClaudeCommandReady OK"
+
+# 4. npm 安装路径不得在 Wait-ClaudeCommandReady 前输出"请运行一键诊断.cmd"
+# 检查"备用下载方式暂未完成确认"仅在 Wait-ClaudeCommandReady 调用之后出现
+$afterWaitPattern = '(?s)Wait-ClaudeCommandReady.*?备用下载方式暂未完成确认'
+if ($claudeInstallText2 -notmatch $afterWaitPattern) {
+    throw "npm mirror: '备用下载方式暂未完成确认' must only appear after Wait-ClaudeCommandReady"
+}
+Write-Host "[check]   4. Unconfirmed message occurs after Wait-ClaudeCommandReady OK"
+
+# 5. Start-Here.ps1 final fallback 成功时不得直接使用 $finalCheck.Source 作为 Method
+if ($startHereText2 -match '\$script:ClaudeInstallMethod\s*=\s*if\s*\(\$finalCheck\.Source\)\s*\{\s*\$finalCheck\.Source\s*\}\s*else\s*\{\s*"final_fallback"') {
+    throw "Start-Here.ps1 final fallback must NOT directly assign `$finalCheck.Source to `$script:ClaudeInstallMethod"
+}
+Write-Host "[check]   5. final fallback preserves installResult.Method OK"
+
+# 6. 必须存在 knownInstallMethods 维护 installResult.Method
+if ($startHereText2 -notmatch 'knownInstallMethods.*npm_npmmirror') {
+    throw "Start-Here.ps1 final fallback must reference knownInstallMethods including npm_npmmirror"
+}
+Write-Host "[check]   6. knownInstallMethods includes npm_npmmirror OK"
+
+# 7. Install-NodeJsViaWinget 必须包含 SlowNoticeAfterSec 120
+$nodeWingetFunc2 = if ($claudeInstallText2 -match '(?s)function Install-NodeJsViaWinget\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+if ($nodeWingetFunc2 -notmatch 'SlowNoticeAfterSec\s+120') {
+    throw "Install-NodeJsViaWinget must include SlowNoticeAfterSec 120"
+}
+if ($nodeWingetFunc2 -notmatch 'Node\.js 安装耗时较长') {
+    throw "Install-NodeJsViaWinget must include slow notice message"
+}
+Write-Host "[check]   7. Node.js SlowNoticeAfterSec 120 OK"
+
+# 8. Install-ClaudeCodeNpmMirror 不得使用 StartMessage "正在通过备用下载方式安装 Claude Code。"
+$npmMirrorFunc = if ($claudeInstallText2 -match '(?s)function Install-ClaudeCodeNpmMirror\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+if ($npmMirrorFunc -match 'StartMessage\s+"正在通过备用下载方式安装 Claude Code。"') {
+    throw "Install-ClaudeCodeNpmMirror must NOT use StartMessage '正在通过备用下载方式安装 Claude Code。'"
+}
+Write-Host "[check]   8. No duplicate StartMessage in Install-ClaudeCodeNpmMirror OK"
+
+# 9. 不得存在连续重复的 npm mirror unusable WARN
+$duplicateWarnPattern = 'Write-Log\s+"WARN"\s+"npm mirror: claude exists but unusable:.*\n\s*Write-Log\s+"WARN"\s+"npm mirror: claude exists but unusable'
+if ($claudeInstallText2 -match $duplicateWarnPattern) {
+    throw "claude-install.ps1 must not have consecutive duplicate npm mirror unusable WARN logs"
+}
+Write-Host "[check]   9. No duplicate npm mirror WARN logs OK"
+
+Write-Host "[check] v1.3.3 native path doctor UX anti-regression OK"
 
 Write-Host "[check] OK"
