@@ -1172,14 +1172,19 @@ function Step-GenerateReport {
     $nativeBinPath = Get-NativeClaudeBinPath
     $nativeClaudeExe = Get-NativeClaudeExePath
     $claudeCmdCheck = Test-ClaudeCommandExisting
-    $claudeInstallLocation = if (Test-Path $nativeClaudeExe) {
+    $claudeInstallLocation = if ($script:ClaudeInstallMethod -eq "npm_npmmirror" -and $claudeCmdCheck.Path) {
+        Sanitize-PathForReport -Path $claudeCmdCheck.Path
+    }
+    elseif ($script:ClaudeInstallMethod -in @("official_native", "existing_native") -and (Test-Path $nativeClaudeExe)) {
+        Sanitize-PathForReport -Path $nativeClaudeExe
+    }
+    elseif (Test-Path $nativeClaudeExe) {
         Sanitize-PathForReport -Path $nativeClaudeExe
     }
     elseif ($claudeCmdCheck.Path -and $claudeCmdCheck.Usable) {
         Sanitize-PathForReport -Path $claudeCmdCheck.Path
     }
     elseif ($claudeCmdCheck.Path) {
-        # 命令存在但不可用，仍显示路径帮助诊断
         Sanitize-PathForReport -Path $claudeCmdCheck.Path
     }
     elseif ($claudeVer) {

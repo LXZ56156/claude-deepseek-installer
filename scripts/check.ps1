@@ -4497,7 +4497,7 @@ Write-Host "[check]   3. No fixed '非 Native Install 路径' OK"
 
 # 4. 用户可见文案不得包含请选择\x22是\x22（ASCII直引号）
 if ($claudeInstallText3 -match '请选择\x22是\x22') {
-    throw “User-facing text must NOT use ASCII straight double quotes around shi (use curly quotes)”
+    throw "User-facing text must NOT use ASCII straight double quotes around shi (use curly quotes)"
 }
 Write-Host "[check]   4. No straight double quotes in user-facing text OK"
 
@@ -4528,6 +4528,21 @@ if ($genReportBody -notmatch '\$isOfficialNativeSuccess') {
     throw "Step-GenerateReport must define `$isOfficialNativeSuccess for Node/npm '无需' logic"
 }
 Write-Host "[check]   8. isOfficialNativeSuccess exists OK"
+
+# 9. 安装位置优先根据 Method（npm_npmmirror 不因残留 native exe 误导）
+if ($genReportBody -notmatch 'npm_npmmirror.*claudeCmdCheck\.Path') {
+    throw "Install location must prioritize claudeCmdCheck.Path when Method is npm_npmmirror"
+}
+Write-Host "[check]   9. Install location respects npm_npmmirror priority OK"
+
+# 10. check.ps1 自身不得包含弯引号字符串界定符
+$leftCurl = [char]0x201C
+$rightCurl = [char]0x201D
+$checkSelfText = Get-Content -Path $PSCommandPath -Raw -Encoding UTF8
+if ($checkSelfText.Contains($leftCurl) -or $checkSelfText.Contains($rightCurl)) {
+    throw "check.ps1 itself must NOT use curly quotes as string delimiters"
+}
+Write-Host "[check]   10. No curly quotes in check.ps1 code OK"
 
 Write-Host "[check] v1.3.3 report accuracy anti-regression OK"
 
