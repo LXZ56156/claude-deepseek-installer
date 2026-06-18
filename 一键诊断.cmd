@@ -2,30 +2,34 @@
 setlocal
 pushd "%~dp0" >nul 2>&1
 if errorlevel 1 (
-    echo Failed to enter script directory:
-    echo %~dp0
-    echo Please extract the full ZIP package to a local disk folder, for example Desktop, then run again.
+    echo [ERROR] Cannot enter script directory.
+    echo You may be running inside a ZIP preview window.
+    echo Please extract the full ZIP to a normal folder first,
+    echo then open the extracted folder and double-click this file.
+    echo.
+    echo Do NOT run from inside the ZIP preview.
+    echo.
     pause
     exit /b 1
 )
 if not exist "%~dp0doctor.ps1" (
-    echo Missing doctor.ps1.
-    echo Please extract the full ZIP package first, then run this file again.
-    popd >nul 2>&1
+    echo [ERROR] Missing doctor.ps1.
+    echo Please extract the complete ZIP package first.
     pause
+    popd >nul 2>&1
     exit /b 1
 )
 if not exist "%~dp0lib\bootstrap.ps1" (
-    echo Missing lib\bootstrap.ps1.
-    echo Please extract the full ZIP package first, then run this file again.
-    popd >nul 2>&1
+    echo [ERROR] Missing lib\bootstrap.ps1.
+    echo Please use "Extract All" to extract the complete ZIP.
     pause
+    popd >nul 2>&1
     exit /b 1
 )
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0doctor.ps1" -ShareSafe
 set "PS_EXIT=%ERRORLEVEL%"
 echo.
-echo Press any key to exit...
+echo Press any key to close this window...
 pause >nul
 popd >nul 2>&1
 endlocal & exit /b %PS_EXIT%

@@ -64,7 +64,7 @@ https://platform.deepseek.com/api_keys
 安装结果以完成页显示为准：
 - 安装流程已完成：可直接选择 [1] 启动 Claude Code 测试
 - 安装和配置已完成，建议启动测试确认：选择 [1] 启动测试，如果失败再选 [4] 诊断
-- 安装部分完成，API 测试未通过：运行一键诊断，只发送 report.txt
+- 安装部分完成，API 测试未通过：运行一键诊断，优先发送 support-feedback.txt
 
 ### 第 7 步：开始使用
 

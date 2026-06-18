@@ -1614,7 +1614,7 @@ try {
     Write-Host '[错误] Claude Code 启动过程中发生异常。' -ForegroundColor Red
     Write-Host `$_.Exception.Message -ForegroundColor Red
     Write-Host ''
-    Write-Host '请回到安装助手选择 [4] 一键诊断，只发送 report.txt。' -ForegroundColor Yellow
+    Write-Host '请回到安装助手选择 [4] 一键诊断，优先发送 support-feedback.txt。' -ForegroundColor Yellow
     Write-Host ''
     Read-Host '按回车键关闭窗口'
     exit 20

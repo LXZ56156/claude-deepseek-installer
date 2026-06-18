@@ -2,37 +2,34 @@
 setlocal
 pushd "%~dp0" >nul 2>&1
 if errorlevel 1 (
-    echo Failed to enter script directory:
-    echo %~dp0
-    echo Please extract the full ZIP package to a local disk folder, for example Desktop, then run again.
+    echo [ERROR] Cannot enter script directory.
+    echo You may be running inside a ZIP preview window.
+    echo Please extract the full ZIP to a normal folder first,
+    echo then open the extracted folder and double-click this file.
+    echo.
+    echo Do NOT run from inside the ZIP preview.
+    echo.
     pause
     exit /b 1
 )
 if not exist "%~dp0repair-deps.ps1" (
-    echo Missing repair-deps.ps1.
-    echo Please extract the full ZIP package first, then run this file again.
-    popd >nul 2>&1
+    echo [ERROR] Missing repair-deps.ps1.
+    echo Please extract the complete ZIP package first.
     pause
+    popd >nul 2>&1
     exit /b 1
 )
 if not exist "%~dp0lib\bootstrap.ps1" (
-    echo Missing lib\bootstrap.ps1.
-    echo Please extract the full ZIP package first, then run this file again.
-    popd >nul 2>&1
+    echo [ERROR] Missing lib\bootstrap.ps1.
+    echo Please use "Extract All" to extract the complete ZIP.
     pause
+    popd >nul 2>&1
     exit /b 1
 )
-echo ==============================================================
-echo   Repair Dependencies (Node.js / npm / Claude Code)
-echo ==============================================================
-echo.
-echo Detecting and repairing missing system dependencies...
-echo Chinese prompts will be shown in the PowerShell window.
-echo.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0repair-deps.ps1"
 set "PS_EXIT=%ERRORLEVEL%"
 echo.
-echo Press any key to exit...
+echo Press any key to close this window...
 pause >nul
 popd >nul 2>&1
 endlocal & exit /b %PS_EXIT%

@@ -2149,7 +2149,7 @@ x-api-key: $TestApiKey
     } "Start-Here.ps1 必须定义 Write-NextStepCard"
     Assert "32a: Write-NextStepCard 包含安全文案" {
         ($startHereText -match '不要发送 settings\.json' -and
-         $startHereText -match '只发送 report\.txt' -and
+         $startHereText -match '优先发送 support-feedback\.txt' -and
          $startHereText -match '完整 API Key')
     } "Write-NextStepCard 必须包含完整安全提醒"
 
@@ -2589,6 +2589,34 @@ x-api-key: $TestApiKey
     Assert "38f: Node.js 字段存在" {
         $commonText38 -match 'Node\.js：.*\$NodeJsStatus'
     } "support-feedback 最简结论必须渲染 Node.js 状态"
+
+    # --- v1.3.3 P1: 售后口径统一额外检查 ---
+    Assert "38g: doctor.ps1 不得包含旧口径 '只发送 report.txt'" {
+        $doctorText38 -notmatch '只发送 report\.txt'
+    } "doctor.ps1 必须使用新口径 '优先发送 support-feedback.txt'"
+
+    Assert "38h: doctor.ps1 不得在 Check-VSCode 重复添加 code PATH 建议" {
+        $checkVSCode38 = if ($doctorText38 -match '(?s)function Check-VSCode\s*\{.*?(?=^function \w+\s*\{|\Z)') { $matches[0] } else { "" }
+        $checkVSCode38 -notmatch 'Install code command in PATH'
+    } "Check-VSCode 不得重复添加 code PATH 建议"
+
+    Assert "38i: doctor.ps1 npm 风险在 Native Install 时降级为 INFO" {
+        $npmRiskArea = if ($doctorText38 -match '(?s)if\s*\(\$npmRisk\.Warnings\.Count -gt 0\)\s*\{.{0,500}') { $matches[0] } else { "" }
+        $npmRiskArea -match 'isNativeInstallLikely' -and $npmRiskArea -match 'claudeCliOk' -and
+        $npmRiskArea -match 'INFO'
+    } "Native Install 时 npm 风险不得为 WARN"
+
+    # --- v1.3.3 P1: 售后排查话术文档口径 ---
+    $supportScriptText = Get-Content (Join-Path $ScriptRoot "docs\售后排查话术.md") -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+    if ($supportScriptText) {
+        Assert "38j: docs/售后排查话术.md 不含旧 '把 report.txt 发给我'" {
+            $supportScriptText -notmatch '把 report\.txt 发给我|把生成的 report\.txt 发给我'
+        } "售后排查话术不得再引导只发送 report.txt"
+
+        Assert "38k: docs/售后排查话术.md 包含 '优先发送 support-feedback.txt'" {
+            $supportScriptText -match '优先发送 support-feedback\.txt'
+        } "售后排查话术必须包含新口径"
+    }
 
     Write-Host ""
 

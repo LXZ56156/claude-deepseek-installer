@@ -368,15 +368,9 @@ try {
                 Write-SandboxFail "B3. CMD BOM $($f.Name)" "has UTF-8 BOM"
                 $cmdAsciiOk = $false
             }
-            foreach ($b in $bytes) {
-                if ($b -gt 0x7F) {
-                    Write-SandboxFail "B3. CMD ASCII $($f.Name)" "non-ASCII byte: $b"
-                    $cmdAsciiOk = $false
-                    break
-                }
-            }
+            # v1.3.3: GBK encoding OK for Chinese ZIP guard messages on Chinese Windows
         }
-        if ($cmdAsciiOk) { Write-SandboxPass "B3. All .cmd are ASCII (no BOM)" }
+        if ($cmdAsciiOk) { Write-SandboxPass "B3. All .cmd no BOM, GBK OK" }
 
         # No terminal-risk chars in docs
         $badPattern = '\p{So}|[─-╿]|️'

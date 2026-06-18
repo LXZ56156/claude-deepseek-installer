@@ -188,7 +188,7 @@
 |------|----------|------|
 | 完成页提示新 PowerShell 验证未通过 | User PATH 尚未刷新或被占用 | 关闭窗口重开 PowerShell，运行 claude --version；仍失败则运行一键修复依赖 |
 | claude 命令不存在 | PATH 未写入或未刷新 | 运行一键修复依赖 |
-| API 测试失败 | Key 错误、余额不足、网络问题或 DeepSeek 服务异常 | 运行一键诊断，只发送 report.txt |
+| API 测试失败 | Key 错误、余额不足、网络问题或 DeepSeek 服务异常 | 运行一键诊断，优先发送 support-feedback.txt |
 | npm 镜像安装未完成验证 | Node/npm 不完整或镜像网络异常 | 运行一键诊断或重新安装 Node.js LTS |
 | 无法安装 | 无法访问 `claude.ai` | 检查网络/VPN/代理设置 |
 | 无法安装 | 无法访问 `downloads.claude.ai` | 检查 DNS/防火墙 |

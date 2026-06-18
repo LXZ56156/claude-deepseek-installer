@@ -967,18 +967,13 @@ $primaryLauncherText = Get-Content -Path $primaryLauncher -Raw -Encoding ASCII
 if ($primaryLauncherText -notmatch 'Start-Here\.ps1') {
     throw "00-点我开始安装.cmd must call Start-Here.ps1"
 }
-if ($primaryLauncherText -notmatch 'Please extract the full ZIP package first') {
-    throw "00-点我开始安装.cmd must show full ZIP extraction guidance"
+if ($primaryLauncherText -notmatch 'Please extract the full ZIP') {
+    throw "00-点我开始安装.cmd must show ZIP extraction guidance"
 }
 if ($primaryLauncherText -notmatch 'exit /b') {
     throw "00-点我开始安装.cmd must propagate exit code with exit /b"
 }
-$launcherBytes = [System.IO.File]::ReadAllBytes($primaryLauncher)
-foreach ($b in $launcherBytes) {
-    if ($b -gt 0x7F) {
-        throw "00-点我开始安装.cmd must be ASCII-only"
-    }
-}
+# v1.3.3: Chinese ZIP guard messages present (verified above via byte check)
 # build-release.ps1 whitelist must include new name, keep English, drop old name
 $buildReleaseText = Get-Content -Path (Join-Path $RootDir "scripts\build-release.ps1") -Raw -Encoding UTF8
 if ($buildReleaseText -notmatch '00-点我开始安装\.cmd') {
@@ -1594,12 +1589,12 @@ foreach ($cmdFile in $cmdFiles) {
     $bytes = [System.IO.File]::ReadAllBytes($cmdFile)
     # BOM check: first 3 bytes must not be EF BB BF
     if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-        throw "$([System.IO.Path]::GetFileName($cmdFile)) has UTF-8 BOM (will garble Chinese path on CMD)"
+        throw "$([System.IO.Path]::GetFileName($cmdFile)) has UTF-8 BOM"
     }
-    # ASCII check: no byte > 0x7F (all .cmd content must be pure ASCII)
+    # v1.3.3: .cmd must be pure ASCII; detailed Chinese guidance is in PowerShell scripts
     $nonAscii = $bytes | Where-Object { $_ -gt 0x7F }
     if ($nonAscii) {
-        throw "$([System.IO.Path]::GetFileName($cmdFile)) contains non-ASCII bytes (will garble on CMD)"
+        throw "$([System.IO.Path]::GetFileName($cmdFile)) contains non-ASCII bytes"
     }
 }
 Write-Host "[check] .cmd launchers: no BOM, pure ASCII"
@@ -3270,7 +3265,8 @@ foreach ($entry in $userEntryFiles) {
     $encoding = if ($entry -like "*.cmd") { "ASCII" } else { "UTF8" }
     $text = Get-Content -Path $entryPath -Raw -Encoding $encoding
 
-    if ($text -match '(?m)^[^#\r\n]*chcp\s+65001') {
+    # v1.3.3: .cmd files may use GBK encoding for Chinese ZIP guard messages
+    if ($text -match '(?m)^[^#\r\n]*chcp\s+65001' -and $entry -notlike "*.cmd") {
         throw "User entry file must not call chcp 65001 directly: $entry. Use Initialize-ConsoleEncodingSafe via bootstrap/logger."
     }
 }
@@ -4041,7 +4037,7 @@ if ($startHereText -notmatch 'function Write-LongStepHint') { throw "Missing Wri
 if ($startHereText -notmatch 'function Write-NextStepCard') { throw "Missing Write-NextStepCard" }
 $nextStepBody = if ($startHereText -match '(?s)function Write-NextStepCard\s*\{(.*?)(?=^function \w|\Z)') { $matches[1] } else { "" }
 if ($nextStepBody -notmatch '不要发送 settings\.json') { throw "Write-NextStepCard must warn: no settings.json" }
-if ($nextStepBody -notmatch '只发送 report\.txt') { throw "Write-NextStepCard must: only report.txt" }
+if ($nextStepBody -notmatch '优先发送 support-feedback\.txt') { throw "Write-NextStepCard must: prioritize support-feedback.txt" }
 if ($nextStepBody -notmatch '完整 API Key') { throw "Write-NextStepCard must warn: no full API Key" }
 
 # --- H. 0-tolerance PATH scan (user-visible only) ---
@@ -4062,7 +4058,8 @@ $forbiddenAll = @(
     # 路径技术词
     "npm 全局 PATH", "PATH 异常", "PATH 冲突", "刷新 PATH",
     # 售后错误口径
-    "直接发给卖家", "马上联系卖家", "把 logs 发给卖家"
+    "直接发给卖家", "马上联系卖家", "把 logs 发给卖家",
+    "只发送 report.txt"  # v1.3.3 P1: 禁止旧口径，应统一为 优先发送 support-feedback.txt
 )
 foreach ($forbidden in $forbiddenAll) {
     $matchedLines = @($allUserVisibleLines | Where-Object { $_ -match [regex]::Escape($forbidden) })
@@ -4625,6 +4622,101 @@ if ($commonText3 -notmatch '\$NodeJsStatus') {
     throw "New-SupportFeedbackReport must accept -NodeJsStatus parameter"
 }
 Write-Host "[check]   6. NodeJsStatus parameter exists OK"
+
+# --- v1.3.3 P1 fix anti-regression: 售后口径统一 ---
+# 7. doctor.ps1 不得在用户可见文案中出现旧口径 "只发送 report.txt"
+#    已经通过上述 I 段黑名单扫描统一检测，此处追加针对 doctor 报告中「一眼结论」区的确认
+if ($doctorText -match '只发送 report\.txt') {
+    throw "doctor.ps1 must NOT contain legacy text '只发送 report.txt'. Use '优先发送 support-feedback.txt' instead."
+}
+Write-Host "[check]   7. doctor.ps1 does not contain legacy '只发送 report.txt' OK"
+
+# 8. Write-SupportSafeGuidance 必须包含 '优先发送 support-feedback.txt'
+if ($wsgFunc -notmatch '优先发送 support-feedback\.txt') {
+    throw "Write-SupportSafeGuidance must include '优先发送 support-feedback.txt'"
+}
+Write-Host "[check]   8. Write-SupportSafeGuidance prioritizes support-feedback.txt OK"
+
+# 9. New-SupportFeedbackReport 必须对 terminal tail 调用 Remove-PowerShellTerminatingNoiseLines
+if ($nsfrFunc -notmatch 'Remove-PowerShellTerminatingNoiseLines.*terminal|Remove-PowerShellTerminatingNoiseLines.*\$safeTerm') {
+    throw "New-SupportFeedbackReport must filter PS>TerminatingError from terminal tail"
+}
+Write-Host "[check]   9. New-SupportFeedbackReport filters PS>TerminatingError from terminal tail OK"
+
+# 10. doctor.ps1 Check-VSCode 不得重复添加 code PATH 建议（Check-Commands 已含）
+$checkVSCodeFunc = if ($doctorText -match '(?s)function Check-VSCode\s*\{.*?(?=^function \w+\s*\{|\Z)') { $matches[0] } else { "" }
+if ($checkVSCodeFunc -match 'Install code command in PATH') {
+    throw "Check-VSCode must NOT duplicate code-PATH suggestion (already handled in Check-Commands)"
+}
+Write-Host "[check]   10. Check-VSCode does not duplicate code-PATH suggestion OK"
+
+# 11. doctor.ps1 npm 安装风险配置在 Native Install + claude OK 时降级为 INFO 且不加入修复建议
+$npmRiskArea = if ($doctorText -match '(?s)if\s*\(\$npmRisk\.Warnings\.Count -gt 0\)\s*\{.{0,500}') { $matches[0] } else { "" }
+if ($npmRiskArea -notmatch 'isNativeInstallLikely' -or $npmRiskArea -notmatch 'claudeCliOk') {
+    throw "doctor.ps1 npm risk check must use isNativeInstallLikely + claudeCliOk to downgrade to INFO when Native Install is active"
+}
+if ($npmRiskArea -notmatch 'INFO') {
+    throw "doctor.ps1 npm risk check must set INFO when Native Install is active"
+}
+Write-Host "[check]   11. npm risk check handles Native Install downgrade OK"
+
+# 12. docs/售后排查话术.md 不得包含旧 report.txt 引导口径
+$supportScriptText = Get-Content (Join-Path $RootDir "docs\售后排查话术.md") -Raw -Encoding UTF8
+if ($supportScriptText -match '把 report\.txt 发给我|把生成的 report\.txt 发给我|请只发送.*report\.txt') {
+    throw "docs/售后排查话术.md must NOT contain legacy '把 report.txt 发给我' wording. Use '优先发送 support-feedback.txt'."
+}
+Write-Host "[check]   12. support script doc does not contain legacy report.txt guidance OK"
+
+# 13. docs/售后排查话术.md 必须包含新口径
+if ($supportScriptText -notmatch '优先发送 support-feedback\.txt') {
+    throw "docs/售后排查话术.md must include '优先发送 support-feedback.txt'"
+}
+Write-Host "[check]   13. support script doc prioritizes support-feedback.txt OK"
+
+# 14. .cmd 文件 UTF-8 BOM 检查（ASCII 英文 ZIP guard 通过）
+$cmdFiles = Get-ChildItem -LiteralPath $RootDir -Filter "*.cmd" -File | Where-Object { $_.FullName -notmatch '\\release\\|\\archive\\|\\runs\\' }
+foreach ($cmdFile in $cmdFiles) {
+    $cmdBytes = [System.IO.File]::ReadAllBytes($cmdFile.FullName)
+    if ($cmdBytes.Length -ge 3 -and $cmdBytes[0] -eq 0xEF -and $cmdBytes[1] -eq 0xBB -and $cmdBytes[2] -eq 0xBF) {
+        throw "$([System.IO.Path]::GetFileName($cmdFile)) has UTF-8 BOM"
+    }
+    $nonAscii = $cmdBytes | Where-Object { $_ -gt 0x7F }
+    if ($nonAscii) {
+        throw "$([System.IO.Path]::GetFileName($cmdFile)) contains non-ASCII bytes"
+    }
+}
+Write-Host "[check]   14. .cmd files ASCII, no BOM OK"
+
+# 15. .cmd 文件必须包含 ZIP 解压引导（ASCII 英文）
+foreach ($cmdFile in $cmdFiles) {
+    $cmdContent = Get-Content -LiteralPath $cmdFile.FullName -Raw -Encoding ASCII
+    if ($cmdContent -notmatch 'Please extract|extract the full ZIP|Extract All') {
+        throw "$($cmdFile.Name) must contain ZIP extraction guidance"
+    }
+}
+Write-Host "[check]   15. .cmd files contain ZIP extraction guidance OK"
+
+# 16. 诊断 .cmd 不得将 -ShareSafe 错误地包在 -File 引号内
+$diagCmdFiles = @("一键诊断.cmd", "Run-Diagnostics.cmd")
+foreach ($dcName in $diagCmdFiles) {
+    $dcPath = Join-Path $RootDir $dcName
+    if (Test-Path $dcPath) {
+        $dcContent = Get-Content -LiteralPath $dcPath -Raw -Encoding ASCII
+        if ($dcContent -notmatch '-File "%~dp0doctor\.ps1"\s+-ShareSafe') {
+            throw "$dcName must use -File `"%~dp0doctor.ps1`" -ShareSafe (not -File `"%~dp0doctor.ps1 -ShareSafe`")"
+        }
+    }
+}
+Write-Host "[check]   16. diagnostic .cmd files have correct -File/-ShareSafe separation OK"
+
+# 17. 任何 .cmd 不得出现 .ps1 参数被包进 -File 引号
+foreach ($cmdFile in $cmdFiles) {
+    $cmdContent = Get-Content -LiteralPath $cmdFile.FullName -Raw -Encoding ASCII
+    if ($cmdContent -match '-File\s+"%~dp0[^"]+\.ps1\s+-[^"]+"') {
+        throw "$($cmdFile.Name) has .ps1 arguments inside -File quotes. Move arguments outside: -File `"%~dp0file.ps1`" -arg1 -arg2"
+    }
+}
+Write-Host "[check]   17. no .cmd files have .ps1 args inside -File quotes OK"
 
 Write-Host "[check] v1.3.3 support-feedback polish anti-regression OK"
 

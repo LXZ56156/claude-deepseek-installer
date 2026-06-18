@@ -393,8 +393,7 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
         $hasBom = ($raw.Length -ge 3 -and $raw[0] -eq 0xEF -and $raw[1] -eq 0xBB -and $raw[2] -eq 0xBF)
         $nonAscii = $raw | Where-Object { $_ -gt 0x7F }
         if ($hasBom) {
-            Write-Host "  错误: $($f.Name) 包含 UTF-8 BOM，CMD 会乱码" -ForegroundColor Red
-            Write-Host "  请确保 .cmd 文件为纯 ASCII 无 BOM。" -ForegroundColor Yellow
+            Write-Host "  错误: $($f.Name) 包含 UTF-8 BOM" -ForegroundColor Red
             Remove-Item $ZipFilePath -Force -ErrorAction SilentlyContinue
             Remove-Item $Sha256FilePath -Force -ErrorAction SilentlyContinue
             Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -402,8 +401,7 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
             exit 1
         }
         if ($nonAscii) {
-            Write-Host "  错误: $($f.Name) 包含 $($nonAscii.Count) 个非 ASCII 字节，CMD 会乱码" -ForegroundColor Red
-            Write-Host "  请将 .cmd 文件改为纯 ASCII。" -ForegroundColor Yellow
+            Write-Host "  错误: $($f.Name) 包含 $($nonAscii.Count) 个非 ASCII 字节" -ForegroundColor Red
             Remove-Item $ZipFilePath -Force -ErrorAction SilentlyContinue
             Remove-Item $Sha256FilePath -Force -ErrorAction SilentlyContinue
             Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
