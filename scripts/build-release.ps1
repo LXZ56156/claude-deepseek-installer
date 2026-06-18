@@ -74,11 +74,21 @@ $RequiredFiles = @(
     "lib/env-check.ps1",
     "lib/config-writer.ps1",
     "lib/logger.ps1",
+    "lib/state.ps1",
     "lib/deepseek-env.defaults.json",
-    "scripts/check.ps1",
-    "scripts/check.sh",
+    "01-先看我-安装说明.txt",
+    "02-安装完成后怎么开始使用.md",
+    "03-常用提示词模板.md",
+    "04-常见问题和售后.md",
+    "提示词模板/00-先用这个-检查环境和项目.txt",
+    "提示词模板/01-接手已有代码项目.txt",
+    "提示词模板/02-补装开发环境和依赖.txt",
+    "提示词模板/03-微信小程序开发.txt",
+    "提示词模板/04-网页前端项目.txt",
+    "提示词模板/05-Python脚本开发.txt",
+    "提示词模板/06-安全修改代码.txt",
+    "提示词模板/07-生成README和使用说明.txt",
     "README.md",
-    "QUICK_START.md",
     "LICENSE"
 )
 
@@ -135,11 +145,14 @@ Write-Host ""
 # 任何未列出的文件都会被排除，防止本地临时文件误入商品包
 #
 # 不进入买家 ZIP 的开发者/验收资产：
-#   build-release.ps1, simulate-user-release.ps1, package-release.ps1（源码维护/开发者验收）
-#   CLAUDE.md, .gitignore, .git/（项目元数据）
-#   logs/, backup/, reports/, release/, report.txt（运行产物）
+#   scripts/ — 构建脚本、检查脚本、模拟验收脚本（开发者维护）
+#   docs/ — 内部文档（闲鱼说明、测试清单、视频脚本、验收清单等）
+#   examples/ — 示例文件（已由 01/02/03/04 买家文档替代）
+#   QUICK_START.md — 已被 01/02/03/04 买家文档替代
+#   CLAUDE.md, AGENTS.md, .gitignore, .git/ — 项目元数据
+#   logs/, backup/, reports/, release/, report.txt — 运行产物
 #
-# docs/ 和 examples/ 使用文件级白名单，防止截图/草稿/内部文档误入
+# 买家 ZIP 使用根目录 01/02/03/04 文档和 提示词模板/ 作为用户教程
 $AllowedEntries = @(
     # === 入口文件（用户双击的 .cmd 文件） ===
     "00-点我开始安装.cmd",
@@ -157,7 +170,7 @@ $AllowedEntries = @(
     "uninstall-config.ps1",
     "repair-deps.ps1",
     "install_wsl.sh",
-    # === lib 目录（核心库，随迭代增减，允许整目录复制） ===
+    # === lib 目录（核心库，文件级白名单） ===
     "lib/bootstrap.ps1",
     "lib/claude-install.ps1",
     "lib/common.ps1",
@@ -166,22 +179,22 @@ $AllowedEntries = @(
     "lib/logger.ps1",
     "lib/state.ps1",
     "lib/deepseek-env.defaults.json",
-    # === docs 文件级白名单（用户可见文档） ===
-    # 内部 docs（闲鱼商品说明/测试清单/视频脚本/验收清单/售后话术等）不进入买家 ZIP
-    "docs/用户使用教程.md",
-    "docs/常见问题FAQ.md",
-    # === examples 文件级白名单 ===
-    "examples/settings.deepseek.example.json",
-    "examples/report.example.txt",
-    # === scripts 文件级白名单（用户可用/售后可用的检查脚本） ===
-    # 注意: build-release.ps1 / simulate-user-release.ps1 / package-release.ps1 不进入买家 ZIP
-    "scripts/check.ps1",
-    "scripts/check.sh",
-    "scripts/ux-check.ps1",
-    "scripts/ux-check.sh",
-    # === 根目录文档 ===
+    # === 买家文档（根目录用户指南） ===
+    "01-先看我-安装说明.txt",
+    "02-安装完成后怎么开始使用.md",
+    "03-常用提示词模板.md",
+    "04-常见问题和售后.md",
+    # === 提示词模板（买家可直接复制使用） ===
+    "提示词模板/00-先用这个-检查环境和项目.txt",
+    "提示词模板/01-接手已有代码项目.txt",
+    "提示词模板/02-补装开发环境和依赖.txt",
+    "提示词模板/03-微信小程序开发.txt",
+    "提示词模板/04-网页前端项目.txt",
+    "提示词模板/05-Python脚本开发.txt",
+    "提示词模板/06-安全修改代码.txt",
+    "提示词模板/07-生成README和使用说明.txt",
+    # === 根目录说明 ===
     "README.md",
-    "QUICK_START.md",
     "LICENSE"
 )
 
