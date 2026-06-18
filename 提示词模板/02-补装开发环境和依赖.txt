@@ -6,7 +6,7 @@
 
 请按下面顺序执行：
 
-1. 检查当前项目需要哪些环境工具：Git、Node.js、npm、Python、pip、VS Code、微信开发者工具等。
+1. 检查当前项目需要哪些基础环境：Git、Node.js、npm、Python、pip 等。如果是小程序项目，再单独检查微信开发者工具。
 2. 区分必须安装和可选安装。
 3. 检查是否已有 package.json、requirements.txt 等依赖声明文件。
 4. 给出一份"最小安装方案"，只包括必需的。

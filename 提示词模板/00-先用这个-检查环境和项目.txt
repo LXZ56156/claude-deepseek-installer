@@ -10,7 +10,7 @@
 2. 列出当前目录的主要文件和文件夹。
 3. 检查是否有 package.json、requirements.txt、pyproject.toml、go.mod、pom.xml、Cargo.toml、composer.json 等依赖文件。
 4. 判断这个项目大概是什么技术栈。
-5. 检查是否缺少 Node.js、npm、Python、pip、Git、Java、Go、微信开发者工具等常见开发环境。
+5. 检查是否缺少 Node.js、npm、Python、pip、Git、Java、Go 等常见开发环境。
 6. 告诉我当前最可能缺少哪些依赖。
 7. 给我一份"最小可运行环境"的安装建议。
 8. 不要一次性安装很多东西。
