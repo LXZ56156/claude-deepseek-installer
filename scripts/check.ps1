@@ -4727,9 +4727,9 @@ Write-Host "[check] v1.3.3 buyer documentation safety"
 # 1. 买家文档文件存在性检查
 $buyerRequiredFiles = @(
     "01-先看我-安装说明.txt",
-    "02-安装完成后怎么开始使用.md",
-    "03-常用提示词模板.md",
-    "04-常见问题和售后.md",
+    "02-安装完成后怎么开始使用.txt",
+    "03-常用提示词模板.txt",
+    "04-常见问题和售后.txt",
     "提示词模板/00-先用这个-检查环境和项目.txt",
     "提示词模板/01-接手已有代码项目.txt",
     "提示词模板/02-补装开发环境和依赖.txt",
@@ -4751,9 +4751,9 @@ Write-Host "[check]   1. 所有买家文档文件存在 OK"
 # 2. 买家文档内容安全检查
 $buyerDocFiles = @(
     "01-先看我-安装说明.txt",
-    "02-安装完成后怎么开始使用.md",
-    "03-常用提示词模板.md",
-    "04-常见问题和售后.md"
+    "02-安装完成后怎么开始使用.txt",
+    "03-常用提示词模板.txt",
+    "04-常见问题和售后.txt"
 )
 
 $promptFilesInDir = Get-ChildItem -LiteralPath (Join-Path $RootDir "提示词模板") -Filter "*.txt" -File -ErrorAction SilentlyContinue |
@@ -4829,9 +4829,9 @@ if (Test-Path $releaseZip) {
         # 1. 必须存在的买家文档
         $mustExistInZip = @(
             "01-先看我-安装说明.txt",
-            "02-安装完成后怎么开始使用.md",
-            "03-常用提示词模板.md",
-            "04-常见问题和售后.md"
+            "02-安装完成后怎么开始使用.txt",
+            "03-常用提示词模板.txt",
+            "04-常见问题和售后.txt"
         )
         foreach ($name in $mustExistInZip) {
             if ($zipEntryNames -notcontains $name) {

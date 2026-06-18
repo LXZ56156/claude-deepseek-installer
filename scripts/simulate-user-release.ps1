@@ -411,9 +411,9 @@ function Assert-ZipContainsRequiredEntries {
         $entries = $zip.Entries | ForEach-Object { $_.FullName }
         $required = @(
             "01-先看我-安装说明.txt",
-            "02-安装完成后怎么开始使用.md",
-            "03-常用提示词模板.md",
-            "04-常见问题和售后.md",
+            "02-安装完成后怎么开始使用.txt",
+            "03-常用提示词模板.txt",
+            "04-常见问题和售后.txt",
             "提示词模板/00-先用这个-检查环境和项目.txt",
             "提示词模板/01-接手已有代码项目.txt",
             "提示词模板/02-补装开发环境和依赖.txt",

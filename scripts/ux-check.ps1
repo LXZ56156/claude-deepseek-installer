@@ -2644,9 +2644,9 @@ x-api-key: $TestApiKey
 
     $buyerDocs39 = @(
         "01-先看我-安装说明.txt",
-        "02-安装完成后怎么开始使用.md",
-        "03-常用提示词模板.md",
-        "04-常见问题和售后.md"
+        "02-安装完成后怎么开始使用.txt",
+        "03-常用提示词模板.txt",
+        "04-常见问题和售后.txt"
     )
     Assert "39d: 4 份买家文档存在于仓库根目录" {
         $allExist39 = $true
@@ -2671,9 +2671,9 @@ x-api-key: $TestApiKey
 
     $buyerDocPaths40 = @(
         (Join-Path $ScriptRoot "01-先看我-安装说明.txt"),
-        (Join-Path $ScriptRoot "02-安装完成后怎么开始使用.md"),
-        (Join-Path $ScriptRoot "03-常用提示词模板.md"),
-        (Join-Path $ScriptRoot "04-常见问题和售后.md")
+        (Join-Path $ScriptRoot "02-安装完成后怎么开始使用.txt"),
+        (Join-Path $ScriptRoot "03-常用提示词模板.txt"),
+        (Join-Path $ScriptRoot "04-常见问题和售后.txt")
     )
     $promptFiles40 = Get-ChildItem -LiteralPath (Join-Path $ScriptRoot "提示词模板") -Filter "*.txt" -ErrorAction SilentlyContinue
     $allBuyerContent40 = ""
@@ -2781,14 +2781,14 @@ x-api-key: $TestApiKey
             Assert "42a: ZIP 包含 01-先看我-安装说明.txt" {
                 ($zipEntries42 -match '01-先看我-安装说明\.txt').Count -gt 0
             } "ZIP 必须包含买家文档 01"
-            Assert "42b: ZIP 包含 02-安装完成后怎么开始使用.md" {
-                ($zipEntries42 -match '02-安装完成后怎么开始使用\.md').Count -gt 0
+            Assert "42b: ZIP 包含 02-安装完成后怎么开始使用.txt" {
+                ($zipEntries42 -match '02-安装完成后怎么开始使用\.txt').Count -gt 0
             } "ZIP 必须包含买家文档 02"
-            Assert "42c: ZIP 包含 03-常用提示词模板.md" {
-                ($zipEntries42 -match '03-常用提示词模板\.md').Count -gt 0
+            Assert "42c: ZIP 包含 03-常用提示词模板.txt" {
+                ($zipEntries42 -match '03-常用提示词模板\.txt').Count -gt 0
             } "ZIP 必须包含买家文档 03"
-            Assert "42d: ZIP 包含 04-常见问题和售后.md" {
-                ($zipEntries42 -match '04-常见问题和售后\.md').Count -gt 0
+            Assert "42d: ZIP 包含 04-常见问题和售后.txt" {
+                ($zipEntries42 -match '04-常见问题和售后\.txt').Count -gt 0
             } "ZIP 必须包含买家文档 04"
 
             $promptInZip42 = $zipEntries42 | Where-Object { $_ -match '提示词模板[/\\].*\.txt$' }
