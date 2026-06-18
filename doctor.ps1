@@ -500,9 +500,15 @@ function Check-Commands {
             Add-CheckResult "npm ignore-scripts" $ignoreScriptsStatus $(if ($npmRisk.IgnoreScripts) { $npmRisk.IgnoreScripts } else { "(默认)" })
 
             if ($npmRisk.Warnings.Count -gt 0) {
-                Add-CheckResult "npm 安装风险配置" "WARN" ($npmRisk.Warnings -join "；")
-                foreach ($w in $npmRisk.Warnings) {
-                    Add-Suggestion $w
+                if ($isNativeInstallLikely -and $claudeCliOk) {
+                    Add-CheckResult "npm 安装风险配置" "INFO" ($npmRisk.Warnings -join "；")
+                    # Native Install 已成功，npm 缺失不影响基础使用，不加入修复建议
+                }
+                else {
+                    Add-CheckResult "npm 安装风险配置" "WARN" ($npmRisk.Warnings -join "；")
+                    foreach ($w in $npmRisk.Warnings) {
+                        Add-Suggestion $w
+                    }
                 }
             }
             else {
@@ -804,7 +810,7 @@ function Check-VSCode {
     }
     else {
         Add-CheckResult "code 命令" "WARN" "不在 PATH 中"
-        Add-Suggestion "在 VS Code 中按 Ctrl+Shift+P → 输入 'shell command' → 选择 'Install code command in PATH'。"
+        # 不重复添加 VS Code 建议；Check-Commands 已检查并给出统一建议
     }
 }
 
@@ -1151,7 +1157,7 @@ function Write-AtAGlance {
     # --- 售后安全提示 ---
     Add-ReportLine ""
     Add-ReportLine "  ---"
-    Add-ReportLine "  售后安全：只发送 report.txt，不要发送 logs、backup、settings.json 或完整 API Key。"
+    Add-ReportLine "  售后安全：优先发送 support-feedback.txt，如没有则发送 report.txt。"
     Add-ReportLine ""
 }
 

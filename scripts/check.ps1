@@ -4041,7 +4041,7 @@ if ($startHereText -notmatch 'function Write-LongStepHint') { throw "Missing Wri
 if ($startHereText -notmatch 'function Write-NextStepCard') { throw "Missing Write-NextStepCard" }
 $nextStepBody = if ($startHereText -match '(?s)function Write-NextStepCard\s*\{(.*?)(?=^function \w|\Z)') { $matches[1] } else { "" }
 if ($nextStepBody -notmatch '不要发送 settings\.json') { throw "Write-NextStepCard must warn: no settings.json" }
-if ($nextStepBody -notmatch '只发送 report\.txt') { throw "Write-NextStepCard must: only report.txt" }
+if ($nextStepBody -notmatch '优先发送 support-feedback\.txt') { throw "Write-NextStepCard must: prioritize support-feedback.txt" }
 if ($nextStepBody -notmatch '完整 API Key') { throw "Write-NextStepCard must warn: no full API Key" }
 
 # --- H. 0-tolerance PATH scan (user-visible only) ---
@@ -4062,7 +4062,8 @@ $forbiddenAll = @(
     # 路径技术词
     "npm 全局 PATH", "PATH 异常", "PATH 冲突", "刷新 PATH",
     # 售后错误口径
-    "直接发给卖家", "马上联系卖家", "把 logs 发给卖家"
+    "直接发给卖家", "马上联系卖家", "把 logs 发给卖家",
+    "只发送 report.txt"  # v1.3.3 P1: 禁止旧口径，应统一为 优先发送 support-feedback.txt
 )
 foreach ($forbidden in $forbiddenAll) {
     $matchedLines = @($allUserVisibleLines | Where-Object { $_ -match [regex]::Escape($forbidden) })
@@ -4625,6 +4626,43 @@ if ($commonText3 -notmatch '\$NodeJsStatus') {
     throw "New-SupportFeedbackReport must accept -NodeJsStatus parameter"
 }
 Write-Host "[check]   6. NodeJsStatus parameter exists OK"
+
+# --- v1.3.3 P1 fix anti-regression: 售后口径统一 ---
+# 7. doctor.ps1 不得在用户可见文案中出现旧口径 "只发送 report.txt"
+#    已经通过上述 I 段黑名单扫描统一检测，此处追加针对 doctor 报告中「一眼结论」区的确认
+if ($doctorText -match '只发送 report\.txt') {
+    throw "doctor.ps1 must NOT contain legacy text '只发送 report.txt'. Use '优先发送 support-feedback.txt' instead."
+}
+Write-Host "[check]   7. doctor.ps1 does not contain legacy '只发送 report.txt' OK"
+
+# 8. Write-SupportSafeGuidance 必须包含 '优先发送 support-feedback.txt'
+if ($wsgFunc -notmatch '优先发送 support-feedback\.txt') {
+    throw "Write-SupportSafeGuidance must include '优先发送 support-feedback.txt'"
+}
+Write-Host "[check]   8. Write-SupportSafeGuidance prioritizes support-feedback.txt OK"
+
+# 9. New-SupportFeedbackReport 必须对 terminal tail 调用 Remove-PowerShellTerminatingNoiseLines
+if ($nsfrFunc -notmatch 'Remove-PowerShellTerminatingNoiseLines.*terminal|Remove-PowerShellTerminatingNoiseLines.*\$safeTerm') {
+    throw "New-SupportFeedbackReport must filter PS>TerminatingError from terminal tail"
+}
+Write-Host "[check]   9. New-SupportFeedbackReport filters PS>TerminatingError from terminal tail OK"
+
+# 10. doctor.ps1 Check-VSCode 不得重复添加 code PATH 建议（Check-Commands 已含）
+$checkVSCodeFunc = if ($doctorText -match '(?s)function Check-VSCode\s*\{.*?(?=^function \w+\s*\{|\Z)') { $matches[0] } else { "" }
+if ($checkVSCodeFunc -match 'Install code command in PATH') {
+    throw "Check-VSCode must NOT duplicate code-PATH suggestion (already handled in Check-Commands)"
+}
+Write-Host "[check]   10. Check-VSCode does not duplicate code-PATH suggestion OK"
+
+# 11. doctor.ps1 npm 安装风险配置在 Native Install + claude OK 时降级为 INFO 且不加入修复建议
+$npmRiskArea = if ($doctorText -match '(?s)if\s*\(\$npmRisk\.Warnings\.Count -gt 0\)\s*\{.{0,500}') { $matches[0] } else { "" }
+if ($npmRiskArea -notmatch 'isNativeInstallLikely' -or $npmRiskArea -notmatch 'claudeCliOk') {
+    throw "doctor.ps1 npm risk check must use isNativeInstallLikely + claudeCliOk to downgrade to INFO when Native Install is active"
+}
+if ($npmRiskArea -notmatch 'INFO') {
+    throw "doctor.ps1 npm risk check must set INFO when Native Install is active"
+}
+Write-Host "[check]   11. npm risk check handles Native Install downgrade OK"
 
 Write-Host "[check] v1.3.3 support-feedback polish anti-regression OK"
 
