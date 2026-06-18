@@ -4696,6 +4696,28 @@ foreach ($cmdFile in $cmdFiles) {
 }
 Write-Host "[check]   15. .cmd files contain ZIP extraction guidance OK"
 
+# 16. 诊断 .cmd 不得将 -ShareSafe 错误地包在 -File 引号内
+$diagCmdFiles = @("一键诊断.cmd", "Run-Diagnostics.cmd")
+foreach ($dcName in $diagCmdFiles) {
+    $dcPath = Join-Path $RootDir $dcName
+    if (Test-Path $dcPath) {
+        $dcContent = Get-Content -LiteralPath $dcPath -Raw -Encoding ASCII
+        if ($dcContent -notmatch '-File "%~dp0doctor\.ps1"\s+-ShareSafe') {
+            throw "$dcName must use -File `"%~dp0doctor.ps1`" -ShareSafe (not -File `"%~dp0doctor.ps1 -ShareSafe`")"
+        }
+    }
+}
+Write-Host "[check]   16. diagnostic .cmd files have correct -File/-ShareSafe separation OK"
+
+# 17. 任何 .cmd 不得出现 .ps1 参数被包进 -File 引号
+foreach ($cmdFile in $cmdFiles) {
+    $cmdContent = Get-Content -LiteralPath $cmdFile.FullName -Raw -Encoding ASCII
+    if ($cmdContent -match '-File\s+"%~dp0[^"]+\.ps1\s+-[^"]+"') {
+        throw "$($cmdFile.Name) has .ps1 arguments inside -File quotes. Move arguments outside: -File `"%~dp0file.ps1`" -arg1 -arg2"
+    }
+}
+Write-Host "[check]   17. no .cmd files have .ps1 args inside -File quotes OK"
+
 Write-Host "[check] v1.3.3 support-feedback polish anti-regression OK"
 
 Write-Host "[check] OK"
