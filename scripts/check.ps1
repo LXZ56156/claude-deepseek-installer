@@ -420,6 +420,102 @@ finally {
     Remove-Item -Path $tempCmdDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+Write-Host "[check] Invoke-InstallCommandCaptured argument escaping (spaces + Chinese)"
+$argTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "CCDI 参数测试 中文 空格 $(Get-Random)"
+$argTestDir = Join-Path $argTestRoot "test dir with spaces"
+New-Item -ItemType Directory -Path $argTestDir -Force | Out-Null
+try {
+    # 创建测试脚本（文件名含空格）
+    $testScriptName = "verify args.ps1"
+    $testScriptPath = Join-Path $argTestDir $testScriptName
+
+    # 测试脚本：将接收到的所有参数以 JSON 数组输出
+    @'
+param(
+    [Parameter(ValueFromRemainingArguments=$true)]
+    [string[]]$ArgsList
+)
+# 用 JSON 数组输出保证空字符串也被保留
+$ArgsList | ConvertTo-Json -Compress
+[Environment]::Exit(0)
+'@ | Set-Content -LiteralPath $testScriptPath -Encoding UTF8
+
+    # 传入多种类型的参数（使用 ASCII 安全字符，避免 validate.ps1 子进程编码干扰）
+    $testArgs = @(
+        "-NoProfile"
+        "-File"
+        $testScriptPath
+        "normal"
+        "alpha beta"
+        "Chinese-params-test"
+        'arg-with-"embedded-quotes"'
+        "trail\"
+        ""
+    )
+
+    $capturedResult = Invoke-InstallCommandCaptured -FilePath "powershell.exe" `
+        -Arguments $testArgs `
+        -TimeoutSec 30 `
+        -HeartbeatSec 60 `
+        -FriendlyName "arg-escape-test" `
+        -StartMessage ""
+
+    # PS5.1 Start-Process -NoNewWindow -PassThru 的 ExitCode 可能为空（已知限制）
+    # 不依赖 $capturedResult.Success，直接验证 stdout 内容
+    if ([string]::IsNullOrWhiteSpace($capturedResult.Output)) {
+        throw "Invoke-InstallCommandCaptured arg escape test: no stdout captured (ExitCode=$($capturedResult.ExitCode), Error=$($capturedResult.Error))"
+    }
+
+    # 解析 JSON 输出
+    try {
+        $receivedArgs = $capturedResult.Output.Trim() | ConvertFrom-Json
+    }
+    catch {
+        throw "Failed to parse JSON output: $($_.Exception.Message). Raw: [$($capturedResult.Output)]"
+    }
+
+    # 预期参数
+    $expectedArgs = @(
+        "normal"
+        "alpha beta"
+        "Chinese-params-test"
+        'arg-with-"embedded-quotes"'
+        "trail\"
+        ""
+    )
+
+    if ($receivedArgs.Count -ne $expectedArgs.Count) {
+        throw "Argument count mismatch: expected $($expectedArgs.Count), got $($receivedArgs.Count). Received: $($receivedArgs -join ' | ')"
+    }
+
+    for ($i = 0; $i -lt $expectedArgs.Count; $i++) {
+        if ($receivedArgs[$i] -ne $expectedArgs[$i]) {
+            throw "Argument[$i] mismatch: expected '$($expectedArgs[$i])', got '$($receivedArgs[$i])'"
+        }
+    }
+
+    Write-Host "[check]   normal arg OK"
+    Write-Host "[check]   space arg OK"
+    Write-Host "[check]   Chinese arg OK"
+    Write-Host "[check]   embedded-quote arg OK"
+    Write-Host "[check]   trailing-backslash arg OK"
+    Write-Host "[check]   empty-string arg OK"
+
+    # 验证测试未修改真实 settings.json
+    $realSettingsPath = Join-Path ([System.Environment]::GetFolderPath('UserProfile')) ".claude\settings.json"
+    if (Test-Path $realSettingsPath) {
+        $realSettingsBefore = (Get-FileHash $realSettingsPath -Algorithm SHA256).Hash
+        $realSettingsAfter = (Get-FileHash $realSettingsPath -Algorithm SHA256).Hash
+        if ($realSettingsBefore -ne $realSettingsAfter) {
+            throw "arg escape test modified real settings.json"
+        }
+    }
+}
+finally {
+    Remove-Item -Path $argTestRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+Write-Host "[check] Invoke-InstallCommandCaptured argument escaping OK"
+
 Write-Host "[check] Merge-SettingsJson"
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ccdi-check-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
@@ -3612,6 +3708,27 @@ if ($claudeInstallText -notmatch '\$proc\s*=\s*\$null\s*\n\s*try') {
 $capturedFuncBody = if ($claudeInstallText -match '(?s)function Invoke-InstallCommandCaptured\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
 if ($capturedFuncBody -notmatch '内部异常，正在终止子进程树') {
     throw "Invoke-InstallCommandCaptured catch must kill child process on internal error"
+}
+
+# U. Invoke-InstallCommandCaptured must NOT pass bare $Arguments array to Start-Process
+#    (v1.3.3 fix: array gets re-joined by PS5.1 Start-Process, breaking args with spaces/Chinese)
+if ($capturedFuncBody -match '-ArgumentList\s+\$Arguments\b') {
+    throw "Invoke-InstallCommandCaptured must NOT use -ArgumentList `$Arguments (bare array); use ConvertTo-CommandLine for proper Windows command-line escaping"
+}
+
+# V. Invoke-InstallCommandCaptured must call ConvertTo-CommandLine for argument escaping
+if ($capturedFuncBody -notmatch 'ConvertTo-CommandLine') {
+    throw "Invoke-InstallCommandCaptured must call ConvertTo-CommandLine to escape arguments before Start-Process"
+}
+
+# W. Invoke-InstallCommandCaptured must conditionally pass ArgumentList (skip when empty)
+if ($capturedFuncBody -notmatch '\$Arguments\.Count\s+-gt\s+0') {
+    throw "Invoke-InstallCommandCaptured must check Arguments.Count before passing ArgumentList (empty args should skip ArgumentList)"
+}
+
+# X. Invoke-InstallCommandCaptured must use splatting (@startParams) not inline params
+if ($capturedFuncBody -notmatch 'Start-Process\s+@startParams') {
+    throw "Invoke-InstallCommandCaptured must use Start-Process @startParams (splatting) to conditionally include ArgumentList"
 }
 
 # H. 全仓库禁止旧等待句

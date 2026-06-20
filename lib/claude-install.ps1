@@ -1206,12 +1206,19 @@ function Invoke-InstallCommandCaptured {
     $proc = $null
 
     try {
-        $proc = Start-Process -FilePath $FilePath `
-            -ArgumentList $Arguments `
-            -NoNewWindow `
-            -PassThru `
-            -RedirectStandardOutput $stdout `
-            -RedirectStandardError $stderr
+        $startParams = @{
+            FilePath               = $FilePath
+            NoNewWindow             = $true
+            PassThru                = $true
+            RedirectStandardOutput  = $stdout
+            RedirectStandardError   = $stderr
+        }
+
+        if ($Arguments -and $Arguments.Count -gt 0) {
+            $startParams.ArgumentList = ConvertTo-CommandLine -Arguments $Arguments
+        }
+
+        $proc = Start-Process @startParams
 
         Write-Log "INFO" "Invoke-InstallCommandCaptured: started PID=$($proc.Id), FriendlyName=$FriendlyName"
 

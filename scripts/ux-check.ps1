@@ -2843,6 +2843,46 @@ x-api-key: $TestApiKey
     Write-Host ""
 
     # ============================================================
+    # 43. v1.3.3 参数转义防回归：Invoke-InstallCommandCaptured 源码级检查
+    # ============================================================
+    Write-CheckHeader "43. v1.3.3 参数转义：Invoke-InstallCommandCaptured 防回归"
+
+    $claudeInstallText43 = Get-Content (Join-Path $ScriptRoot "lib\claude-install.ps1") -Raw -Encoding UTF8
+    $capturedFunc43 = if ($claudeInstallText43 -match '(?s)function Invoke-InstallCommandCaptured\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+
+    # 43a: 不得使用裸 -ArgumentList $Arguments 数组
+    Assert "43a: Invoke-InstallCommandCaptured 不使用裸 -ArgumentList `$Arguments" {
+        $capturedFunc43 -notmatch '-ArgumentList\s+\$Arguments\b'
+    } "仍使用 -ArgumentList `$Arguments 数组（路径含空格/中文会被拆分）"
+
+    # 43b: 必须使用 ConvertTo-CommandLine
+    Assert "43b: Invoke-InstallCommandCaptured 调用 ConvertTo-CommandLine" {
+        $capturedFunc43 -match 'ConvertTo-CommandLine'
+    } "未调用 ConvertTo-CommandLine 转义参数"
+
+    # 43c: 空参数时不得强制传 ArgumentList
+    Assert "43c: Invoke-InstallCommandCaptured 检查 Arguments.Count" {
+        $capturedFunc43 -match '\$Arguments\.Count\s+-gt\s+0'
+    } "未检查 Arguments.Count（空参数时可能传空字符串）"
+
+    # 43d: 使用 splatting 方式
+    Assert "43d: Invoke-InstallCommandCaptured 使用 Start-Process @startParams" {
+        $capturedFunc43 -match 'Start-Process\s+@startParams'
+    } "未使用 Start-Process @startParams 条件 splatting"
+
+    # 43e: ConvertTo-CommandLine 存在于 common.ps1（确保不必自己实现）
+    $commonText43 = Get-Content (Join-Path $ScriptRoot "lib\common.ps1") -Raw -Encoding UTF8
+    Assert "43e: ConvertTo-CommandLine 在 lib/common.ps1 中定义" {
+        $commonText43 -match 'function ConvertTo-CommandLine'
+    } "ConvertTo-CommandLine 未在 common.ps1 中定义"
+
+    Assert "43f: ConvertTo-CommandLineArgument 处理尾部反斜杠" {
+        $commonText43 -match '\$backslashes\s*\*\s*2'
+    } "ConvertTo-CommandLineArgument 未处理尾部反斜杠（\$backslashes * 2）"
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""
