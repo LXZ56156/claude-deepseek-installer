@@ -9,21 +9,20 @@
 
 ---
 
-## 普通买家先看这里
+## 普通买家先看这里（v1.3.3 一键版）
 
-如果你只是想安装和使用，请优先看：
-
-1. `01-先看我-安装说明.txt`
-2. `02-安装完成后怎么开始使用.txt`
-3. `03-常用提示词模板.txt`
-4. `04-常见问题和售后.txt`
+如果你只是想安装和使用，请优先看 ZIP 中的：
+- `01-先看我-安装说明.txt` — 完整安装说明
+- `02-安装完成后怎么开始使用.txt` — 安装后如何开始
+- `03-常用提示词模板.txt` — 8 个可复制的提示词
+- `04-常见问题和售后.txt` — 常见问题与售后流程
 
 **最短流程：**
 
 1. 完整解压 ZIP。
-2. 双击 `00-点我开始安装.cmd`。
-3. 按提示输入自己的 DeepSeek API Key。
-4. 安装完成后，新开 PowerShell 输入 `claude`。
+2. 双击 `00-点我开始安装.cmd`（中文乱码用 `Start-Install.cmd`）。
+3. 按提示输入自己的 DeepSeek API Key（输入时不显示是正常的安全保护）。
+4. 安装结束后，在完成页选择 **[1] 启动 Claude Code 测试（推荐）**。工具会自动新开一个 PowerShell 终端，进入测试项目并直接运行 claude。如果自动启动失败，可以在文件夹地址栏输入 `powershell` 并按回车，然后输入 `claude`。
 5. 遇到问题双击 `一键诊断.cmd`，优先发送 `support-feedback.txt`。
 
 > **注意：**
@@ -33,67 +32,38 @@
 
 ---
 
-## 三步开始（v1.3.3 一键版）
-
-### 1. 解压 ZIP
-
-下载 ZIP 后，右键选择「全部解压缩」。
-
-你可以解压到：
-- 桌面
-- 下载目录
-- D:\ClaudeDeepSeek
-- 你自己容易找到的文件夹
-
-> **重要**：
-> - 请先**完整解压**后再运行，**不要在压缩包预览窗口中直接双击**！
-> - 你可以解压到桌面、下载目录、D:\ClaudeDeepSeek 或其他你容易找到的文件夹
-> - 如果系统自带解压后中文文件名显示乱码，请用 **7-Zip** 或 **WinRAR** 解压
-
-### 2. 双击「00-点我开始安装.cmd」
-
-双击项目目录中的 **`00-点我开始安装.cmd`**，按提示操作。
-
-> 如果中文文件名显示异常，请双击 **`Start-Install.cmd`**（英文备用入口）。
-
-### 3. 粘贴 DeepSeek API Key
-
-脚本会自动打开 DeepSeek API Key 页面。登录、复制 Key，回到窗口粘贴（不显示是正常的）。
-
-之后脚本会自动完成：检测 → 安装 → 配置 → 测试 → 生成报告。
-
-安装结束后，在完成页选择：
-
-**[1] 启动 Claude Code 测试（推荐）**
-
-工具会自动新开一个 PowerShell 终端，进入测试项目，并直接运行 claude。
-
-如果 Claude Code 弹出英文信任提示，确认当前目录是测试项目后按回车即可。
-
-进入 Claude Code 后，可以输入：
+## 买家 ZIP 包含以下文件
 
 ```
-请用一句话说明当前项目是做什么的。
+  00-点我开始安装.cmd              # 一键安装入口（双击）
+  Start-Install.cmd                 # 英文备用安装入口
+  一键诊断.cmd                       # 一键诊断入口（双击）
+  Run-Diagnostics.cmd               # 英文备用诊断入口
+  一键修复依赖.cmd                   # 依赖修复入口（双击）
+  恢复或卸载配置.cmd                 # 配置管理入口（双击）
+  Restore-Config.cmd                # 英文备用配置入口
+  01-先看我-安装说明.txt             # 安装说明
+  02-安装完成后怎么开始使用.txt       # 使用指南
+  03-常用提示词模板.txt              # 提示词索引
+  04-常见问题和售后.txt              # 常见问题
+  提示词模板/                        # 8 个可直接复制使用的提示词
+  README.md                         # 本文件
+  LICENSE                           # MIT 许可证
+  Start-Here.ps1                    # 主入口脚本
+  install.ps1                       # 安装脚本
+  configure-deepseek.ps1            # API 配置脚本
+  doctor.ps1                        # 诊断脚本
+  uninstall-config.ps1              # 配置恢复/卸载脚本
+  repair-deps.ps1                   # 依赖修复脚本
+  install_wsl.sh                    # WSL 安装脚本
+  lib/                              # 公共库（8 个文件）
 ```
 
-如果 [1] 自动启动失败：
-1. 选择 [2] 打开测试项目文件夹
-2. 在文件夹地址栏输入 `powershell` 并按回车
-3. 输入 `claude`
-4. 仍失败则选择 [4] 一键诊断
-
----
-
-> **遇到问题？** 按以下顺序排查：
-> 1. 双击「一键修复依赖.cmd」→ 修复缺失的 Node.js/npm/Claude/PATH
-> 2. 双击「一键诊断.cmd」→ 优先发送生成的 support-feedback.txt
->
-> **售后安全提示：**
-> - 优先发送 support-feedback.txt（汇总反馈文件）。
-> - 如没有 support-feedback.txt，再发送 report.txt。
-> - 不要发送 backup/、logs/、reports/full-report-*、settings.json。
-> - 不要发送完整 API Key。
-> - 如果截图，请先确认截图里没有完整 API Key。
+> **以下目录仅存在于源码仓库，不在买家 ZIP 中：**
+> - `scripts/` — 开发和自检脚本
+> - `docs/` — 开发者文档
+> - `examples/` — 示例文件
+> - `logs/`、`backup/`、`reports/` — 运行时产物（安装后才会生成）
 
 ---
 
@@ -101,8 +71,7 @@
 
 **Claude Code + DeepSeek API 本地配置服务**
 
-帮你把 Claude Code 和你自己的 DeepSeek API Key 配到本机。
-能安装、能配置、能查错、能恢复。
+帮你把 Claude Code 和你自己的 DeepSeek API Key 配到本机。能安装、能配置、能查错、能恢复。
 
 本项目是纯脚本工具，供**闲鱼等技术服务场景**使用。买家购买的是**安装配置人工服务**，脚本作为交付品辅助自动化。
 
@@ -131,7 +100,7 @@
 | PowerShell | 5.1+ | 预装在 Windows 10/11 |
 | WSL (高级) | Ubuntu 20.04+ | 仅高级用户需要 |
 
-不满足最低要求时，脚本会明确提示并停止安装，不会继续操作。
+不满足最低要求时，脚本会明确提示并停止安装。
 
 ---
 
@@ -162,30 +131,121 @@
 
 ---
 
+## 安全说明
+
+1. **API Key 保存在本机** — 写入 `%USERPROFILE%\.claude\settings.json`。
+2. **安装工具不泄露 Key** — 不会把完整 Key 写入日志、诊断报告或发送给卖家。
+3. **API 请求携带 Key** — 当用户选择 API 测试或实际使用 Claude Code 时，请求会携带 Key 发送到用户配置的 DeepSeek 官方 API 地址（默认 `https://api.deepseek.com`）。
+4. **不发送到卖家服务器** — Key 不会发送到卖家服务器、项目作者服务器或非用户配置的代理地址。
+5. **自定义 Base URL 风险由用户确认** — 如果用户自行修改 Base URL，Key 会发送到该自定义地址，相关风险由用户自行确认。
+6. **输入不显示** — 输入 API Key 时字符不会显示在屏幕上。
+7. **自动备份** — 修改配置前自动备份到 `backup/` 目录。
+8. **代码可审计** — 所有代码开源，可自行审查每一行。
+
+---
+
+## 管理员权限
+
+- 默认以普通用户身份运行即可。
+- 不需要一开始就使用管理员权限。
+- 某些系统安装器或 winget 可能弹出 Windows UAC 窗口，只有确认窗口来自可信的 Windows/官方安装流程时才允许。
+- 双击没反应不能直接归因于权限问题。先确认已解压、检查任务栏和英文备用入口。
+- 仍失败再运行一键诊断.cmd。
+- 不把"管理员运行"作为首选通用修复方法。
+
+---
+
+## 售后流程
+
+### 第 0 步：先试「一键修复依赖」
+
+双击 **`一键修复依赖.cmd`** — 检测并修复缺失的 Node.js、npm、Claude Code。
+- 不会修改已配置的 DeepSeek API Key
+- 不会删除已有 Claude 配置
+
+### 第 1 步：双击「一键诊断.cmd」
+
+这会生成诊断文件：
+- `support-feedback.txt` — **优先发送**（汇总反馈文件，已脱敏）
+- `report.txt` — **备用**（诊断报告，已脱敏）
+- `reports/report-YYYYMMDD-HHMMSS.txt` — 分享版历史记录
+- `reports/full-report-YYYYMMDD-HHMMSS.txt` — **完整版**（仅本地保存，不要发送）
+
+### 第 2 步：发送 support-feedback.txt
+
+优先将项目根目录的 `support-feedback.txt` 发送给卖家/技术支持。
+如果没有该文件，再发送 `report.txt`。
+
+**售后安全提示：**
+- 优先发送 support-feedback.txt。
+- 如没有 support-feedback.txt，再发送 report.txt。
+- 不要发送 backup/、logs/、reports/full-report-*、settings.json。
+- 不要发送完整 API Key。
+- 如果截图，请先确认截图里没有完整 API Key。
+- 不要只发截图，截图只能作为文字的补充。
+
+---
+
+## 常见问题
+
+### 安装相关
+
+**Q: 双击开始安装没有反应？**
+A: 先确认已经完整解压 ZIP。检查任务栏是否有被遮挡的窗口。尝试英文入口 `Start-Install.cmd`。仍无反应则运行一键诊断.cmd。不要一上来就用管理员权限。
+
+**Q: 安装需要多长时间？**
+A: 取决于网络和电脑环境。只要窗口持续出现进度提示，就继续等待。不要重复双击安装入口。不要在安装时直接关闭窗口。长时间无新输出时，记录窗口内容后运行一键诊断。
+
+**Q: 输入 API Key 为什么不显示？**
+A: 这是安全保护机制，输入和粘贴都不会显示字符。直接粘贴后按回车即可。
+
+### API Key 相关
+
+**Q: API 测试失败是不是安装失败？**
+A: 不一定。API 测试可能因为 Key 不对、余额不足、网络问题等失败。Claude Code 本身可能已安装成功。先检查 Key 和余额，运行诊断确认。
+
+**Q: 401 错误？**  — API Key 不正确。请到 [platform.deepseek.com](https://platform.deepseek.com) 重新获取。
+**Q: 402 错误？**  — DeepSeek 账户余额不足，请充值。
+**Q: 403 错误？**  — 访问被拒绝，Key 可能被限制。
+**Q: 404 错误？**  — 接口不存在，检查模型名称和 API 地址配置。
+**Q: 429 错误？**  — 请求频率过高，等几秒再试。
+**Q: 5xx 错误？**  — DeepSeek 官方服务异常，稍后重试。不是您的配置问题。
+
+### 使用相关
+
+**Q: claude 命令提示不存在？**
+A: 关闭 PowerShell 窗口后重新打开，让 PATH 环境变量刷新。
+
+**Q: Windows 和 WSL 有什么区别？**
+A: Windows 和 WSL 是**两套独立环境**。Claude Code 的配置不共享。
+- Windows PowerShell/CMD 用 `00-点我开始安装.cmd`
+- WSL Ubuntu 用 `install_wsl.sh`
+- 两边的 `settings.json` 不是同一个文件
+
+**Q: 需要管理员权限吗？**
+A: 不需要。本工具以普通用户权限运行即可。
+
+**Q: 没有 VS Code 能不能用？**
+A: 可以。Claude Code CLI 在 PowerShell/CMD 中直接使用，VS Code 是可选增强项。
+
+**Q: 如何卸载？**
+A: 本工具默认只管理配置，不自动卸载 Claude Code。npm 安装的可运行 `npm uninstall -g @anthropic-ai/claude-code`。Native Install 方式请参考 [Claude Code 官方文档](https://docs.anthropic.com/en/docs/claude-code)。
+
+---
+
 ## 网络与安装策略 (v1.3.3)
+
+> 以下为技术细节，普通用户不需要关注。安装脚本会自动选择最佳方式。
 
 本工具采用**后验验证为准**的 Claude Code 安装策略：
 
 ```
 检测 claude 是否已安装
-  -> 已安装:
-       检查 User PATH 和新 PowerShell 可用性
-       -> 可用: 跳过安装，继续配置 DeepSeek
-       -> PATH 缺失: 自动修复 User PATH
-       -> 新 PowerShell 未验证通过: 完成页建议选择 [1] 启动测试确认；如启动失败，再运行一键诊断或一键修复依赖
+  -> 已安装: 检查 PATH 可用性 -> 跳过安装，继续配置
   -> 未安装:
-       检测官方安装通道
-       -> 官方可用:
-            执行 Native Install
-            -> 安装包执行结束后，进行后验验证
-            -> 后验验证通过: 完成
-            -> 后验验证未通过: 切换 winget / npm 镜像备用通道
-       -> 官方不可用:
-            切换 winget / npm 镜像备用通道
-       -> 备用通道:
-            优先 winget
-            winget 不可用或验证失败，再尝试 npm 镜像
-            npm 镜像需要 Node.js >= 18 + npm
+       优先官方 Native Install
+       -> 失败或验证未通过: 切换 winget
+       -> winget 不可用: 切换 npm 镜像（需要 Node.js >= 18 + npm）
 ```
 
 ### 策略要点
@@ -198,68 +258,12 @@
 | 备用安装通道 | 官方方式未完成验证时，自动尝试 winget / npm 镜像 |
 | 不覆盖已安装 | 已安装 Claude Code 时默认不重装、不自动更新 |
 | 官方包来源 | npm 镜像安装使用 Anthropic 官方发布的 @anthropic-ai/claude-code 包 |
-| 不使用非官方包 | 不使用绿色版、魔改版、第三方二进制或 Docker 镜像 |
 
 ### 镜像说明
 
 - **npm 镜像只解决下载问题**：提高在国内网络环境下 Claude Code 的下载成功率。
-- **不保证后续服务可用**：镜像安装不影响 Claude 登录、鉴权、模型调用。这些功能需要您的网络能正常访问相应服务。
+- **不保证后续服务可用**：镜像安装不影响 Claude 登录、鉴权、模型调用。
 - **安装方式差异**：npm 镜像安装与官方 Native Install 的安装链路、更新方式不完全一致。
-
-### 常见安装失败原因
-
-| 症状 | 可能原因 | 建议 |
-|------|----------|------|
-| 完成页提示新 PowerShell 验证未通过 | User PATH 尚未刷新或被占用 | 关闭窗口重开 PowerShell，运行 claude --version；仍失败则运行一键修复依赖 |
-| claude 命令不存在 | PATH 未写入或未刷新 | 运行一键修复依赖 |
-| API 测试失败 | Key 错误、余额不足、网络问题或 DeepSeek 服务异常 | 运行一键诊断，优先发送 support-feedback.txt |
-| npm 镜像安装未完成验证 | Node/npm 不完整或镜像网络异常 | 运行一键诊断或重新安装 Node.js LTS |
-| 无法安装 | 无法访问 `claude.ai` | 检查网络/VPN/代理设置 |
-| 无法安装 | 无法访问 `downloads.claude.ai` | 检查 DNS/防火墙 |
-| 切换镜像后仍失败 | 未安装 Node.js 18+ / npm | 从 https://nodejs.org 下载 LTS 版 |
-| 切换镜像后仍失败 | `registry.npmmirror.com` 不可达 | 检查网络，稍后重试 |
-| 安装后 claude 命令不存在 | npm optional dependencies 被禁用 | 检查 npm 配置 |
-| 安装后 claude 命令不存在 | PATH 未刷新 | 关闭并重新打开终端 |
-
----
-
-## 文件结构
-
-```
-claude-deepseek-installer/
-|-- 00-点我开始安装.cmd                  # 一键安装入口（双击）
-|-- Start-Install.cmd             # 英文备用安装入口（双击）
-|-- 一键诊断.cmd                  # 一键诊断入口（双击）
-|-- Run-Diagnostics.cmd           # 英文备用诊断入口（双击）
-|-- 恢复或卸载配置.cmd            # 配置管理入口（双击）
-|-- Restore-Config.cmd            # 英文备用配置入口（双击）
-|-- 一键修复依赖.cmd              # 依赖修复入口（双击）
-|-- repair-deps.ps1               # 依赖检测修复脚本
-|-- Start-Here.ps1                # v1.3 主入口脚本（菜单 + 7 步安装）
-|-- README.md                     # 项目说明（本文件）
-|-- QUICK_START.md                # 快速开始指南
-|-- install.ps1                   # 安装脚本（向后兼容 / 高级用法）
-|-- configure-deepseek.ps1        # DeepSeek API 独立配置脚本
-|-- doctor.ps1                    # 环境诊断脚本
-|-- uninstall-config.ps1          # 配置恢复/卸载脚本
-|-- install_wsl.sh                # WSL Ubuntu 安装脚本
-|-- lib/                          # 公共库
-|   |-- bootstrap.ps1             # 入口统一初始化
-|   |-- logger.ps1                # 日志和输出
-|   |-- common.ps1                # 公共工具函数
-|   |-- state.ps1                 # 安装状态管理
-|   |-- env-check.ps1             # 环境检测
-|   |-- config-writer.ps1         # 配置读写
-|   |-- claude-install.ps1        # Claude Code 安装（Native Install → winget → npm 镜像，后验验证为准）
-|   `-- deepseek-env.defaults.json # DeepSeek 默认配置模板
-|-- scripts/                      # 开发和自检脚本
-|-- docs/                         # 用户文档
-|-- examples/                     # 示例文件
-|-- logs/                         # 运行日志（不提交 Git）
-|-- backup/                       # 配置备份（不提交 Git）
-|-- reports/                      # 安装报告和历史诊断报告（不提交 Git）
-`-- release/                      # Release 产物（不提交 Git）
-```
 
 ---
 
@@ -283,9 +287,9 @@ powershell -ExecutionPolicy Bypass -File .\configure-deepseek.ps1 -NonInteractiv
 Remove-Item Env:\CCDI_API_KEY
 ```
 
-### WSL 安装与配置（推荐手动运行）
+### WSL 安装与配置
 
-在 WSL Ubuntu 终端中手动运行（推荐方式）：
+在 WSL Ubuntu 终端中手动运行：
 
 ```bash
 # 在 WSL Ubuntu 终端中
@@ -297,13 +301,10 @@ chmod +x install_wsl.sh
 
 # 或使用命令行模式
 ./install_wsl.sh --mode configure          # 仅配置 DeepSeek
-./install_wsl.sh --mode doctor             # 仅诊断（不修改系统）
-./install_wsl.sh --mode test-key           # 仅测试 Key 是否可用
+./install_wsl.sh --mode doctor             # 仅诊断
+./install_wsl.sh --mode test-key           # 仅测试 Key
 ./install_wsl.sh --mode uninstall          # 移除 DeepSeek 配置
 ./install_wsl.sh --mode restore            # 从备份恢复配置
-
-# 非交互模式（自动化部署）
-CCDI_API_KEY=sk-xxxx ./install_wsl.sh --mode configure --non-interactive --skip-api-test
 ```
 
 Windows 端自动调用 WSL 为实验性高级选项，不推荐新手使用。
@@ -311,120 +312,14 @@ Windows 端自动调用 WSL 为实验性高级选项，不推荐新手使用。
 ### 诊断
 
 ```powershell
-# Windows PowerShell
-powershell -ExecutionPolicy Bypass -File .\doctor.ps1
-
-# 生成分享版报告（隐藏用户路径，可发给技术支持）
+# 生成分享版报告（隐藏用户路径）
 powershell -ExecutionPolicy Bypass -File .\doctor.ps1 -ShareSafe
 ```
 
 ```bash
 # WSL 终端
-./install_wsl.sh --mode doctor
-
-# 生成分享版报告
 ./install_wsl.sh --mode doctor --share-safe --yes
 ```
-
----
-
-## 安全说明
-
-**您的 API Key 安全是我们的首要考虑：**
-
-1. **API Key 只保存在本机** — 写入 `%USERPROFILE%\.claude\settings.json`
-2. **日志不记录 Key** — 所有日志文件中 API Key 自动脱敏
-3. **输入不显示** — 输入 API Key 时字符不会显示在屏幕上
-4. **自动备份** — 修改配置前自动备份到 `backup/` 目录
-5. **不发给第三方** — 脚本不会把 Key 发送给服务提供者或其他第三方
-6. **官方 API 测试** — 如选择连接测试，Key 会发送到 DeepSeek 官方接口验证
-7. **代码可审计** — 所有代码开源，可自行审查每一行
-
----
-
-## 售后流程
-
-### 第 0 步：先试「一键修复依赖」
-
-双击 **`一键修复依赖.cmd`** — 检测并修复缺失的 Node.js、npm、Claude Code。
-- 不会修改已配置的 DeepSeek API Key
-- 不会删除已有 Claude 配置
-- 如果提示 NEEDS_RESTART，关闭窗口后重新双击「00-点我开始安装.cmd」
-
-### 第 1 步：双击「一键诊断.cmd」
-
-这会生成诊断文件：
-- `support-feedback.txt` — **优先发送**（汇总反馈文件，已脱敏）
-- `report.txt` — **备用**（诊断报告，已脱敏）
-- `reports/report-YYYYMMDD-HHMMSS.txt` — 分享版历史记录
-- `reports/full-report-YYYYMMDD-HHMMSS.txt` — **完整版**（仅本地保存，不要发送）
-
-### 第 2 步：发送 support-feedback.txt
-
-优先将项目根目录的 `support-feedback.txt` 发送给卖家/技术支持。
-如果没有该文件，再发送 `report.txt`。
-
-**售后安全提示：**
-- 优先发送 support-feedback.txt。
-- 如没有 support-feedback.txt，再发送 report.txt。
-- 不要发送 backup/、logs/、reports/full-report-*、settings.json。
-- 不要发送完整 API Key。
-- 如果截图，请先确认截图里没有完整 API Key。
-
-反馈文件中的 API Key 已自动脱敏处理。
-
----
-
-## 常见问题
-
-### Q: 双击开始安装没有反应？
-A: 先确认已经完整解压 ZIP，再尝试英文入口 `Start-Install.cmd`。如果窗口有报错，请截图发给技术支持；确认是权限问题时再尝试管理员运行。
-
-### Q: 输入 API Key 为什么不显示？
-A: 这是安全保护机制，输入和粘贴都不会显示字符。直接粘贴后按回车即可。
-
-### Q: API 测试失败是不是安装失败？
-A: 不一定。API 测试可能因为 Key 不对、余额不足、网络问题等失败。Claude Code 本身可能已安装成功，配置也已写入。先检查 Key 和余额，运行诊断确认。
-
-### Q: 没有 VS Code 能不能用？
-A: 可以。Claude Code CLI 是核心交付，可以在 PowerShell/CMD 中直接使用。VS Code 是可选增强项。
-
-### Q: Windows 和 WSL 有什么区别？
-A: Windows 和 WSL 是**两套独立环境**。Claude Code 的配置不共享。
-- 如果你在 Windows PowerShell/CMD 中使用 `claude`，请用 `00-点我开始安装.cmd`。
-- 如果你在 WSL Ubuntu 终端中使用 `claude`，请用 `install_wsl.sh`。
-- 两边的 `settings.json` 不是同一个文件。
-- 不要在 WSL 中运行 Windows 脚本，也不要在 Windows 中运行 WSL 脚本。
-
-### Q: 我可以不给卖家 API Key 吗？
-A: 可以。您自己输入 API Key，脚本只写入本机配置。请不要把 Key 发给任何人。
-
-### Q: 如何生成诊断报告？
-A: 双击「一键诊断.cmd」即可。
-
-### Q: 如何恢复旧配置？
-A: 双击「恢复或卸载配置.cmd」→ 选择恢复备份。
-
-### Q: 需要管理员权限吗？
-A: **不需要。** 本工具以普通用户权限运行即可。
-
-### Q: claude 命令提示不存在？
-A: 关闭 PowerShell 窗口后重新打开，让 PATH 环境变量刷新。
-
-### Q: 401 错误？
-A: API Key 不正确。请到 [platform.deepseek.com](https://platform.deepseek.com) 重新获取。
-
-### Q: 不满足最低系统要求怎么办？
-A: 脚本会明确提示哪项不满足。通常是 Windows 版本过低（需要 Win10 1809+）、内存不足（需 4GB+）或系统不是 64 位。按提示升级系统或更换电脑。
-
-### Q: 如何卸载 Claude Code？
-A: 本工具默认只管理配置，不自动卸载 Claude Code。如果 Claude Code 原本已存在，不建议卸载。如果是 npm 安装的，可运行 `npm uninstall -g @anthropic-ai/claude-code`。Native Install 方式请参考官方文档。
-
-### Q: 402 错误？
-A: DeepSeek 账户余额不足，请充值。
-
-### Q: 5xx 错误？
-A: DeepSeek 官方服务异常，稍后重试。不是您的配置问题。
 
 ---
 

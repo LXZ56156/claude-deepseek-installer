@@ -5187,6 +5187,103 @@ foreach ($file in $allBuyerFiles) {
 }
 Write-Host "[check]   4. 买家文档无旧 .md 引用 OK"
 
+# 2d. 买家 TXT 不含 Markdown 语法（# 标题、``` 代码围栏、Markdown 表格分隔行）
+foreach ($file in $buyerDocFiles) {
+    $content = Get-Content (Join-Path $RootDir $file) -Raw -Encoding UTF8
+    if ($content -match '(?m)^# ') {
+        throw "买家文档 $file 包含 Markdown 标题行（# ），应改为纯文本格式"
+    }
+    if ($content -match '```') {
+        throw "买家文档 $file 包含三反引号代码围栏（```），应改为纯文本缩进"
+    }
+    if ($content -match '\|.*\|.*\|' -and $content -match '\|[-\s|]+\|') {
+        throw "买家文档 $file 包含 Markdown 表格分隔行，应改为逐条列表"
+    }
+}
+Write-Host "[check]   4a. 买家文档无 Markdown 语法 OK"
+
+# 2e. 买家 TXT 不引用不存在的 QUICK_START.md / docs/ / examples/ / scripts/
+foreach ($file in $buyerDocFiles) {
+    $content = Get-Content (Join-Path $RootDir $file) -Raw -Encoding UTF8
+    if ($content -match 'QUICK_START\.md') {
+        throw "买家文档 $file 引用了 QUICK_START.md（不在买家 ZIP 中）"
+    }
+    if ($content -match '\bdocs/') {
+        throw "买家文档 $file 引用了 docs/（不在买家 ZIP 中）"
+    }
+    if ($content -match '\bexamples/') {
+        throw "买家文档 $file 引用了 examples/（不在买家 ZIP 中）"
+    }
+    if ($content -match '\bscripts/') {
+        throw "买家文档 $file 引用了 scripts/（不在买家 ZIP 中）"
+    }
+}
+Write-Host "[check]   4b. 买家文档不引用非 ZIP 路径 OK"
+
+# 2f. README 不得同时声称 Key 不发送给第三方又发送到 DeepSeek API（矛盾口径）
+$readmeText = Get-Content (Join-Path $RootDir "README.md") -Raw -Encoding UTF8
+$claimsNotSent = $readmeText -match '不.*发送.*(第三方|服务提供|其他)'
+$claimsSentToDS = $readmeText -match '发送到.*DeepSeek.*(官方|API|接口)'
+# 这两者同时出现且没有任何限定条件说明时构成矛盾
+# 新口径：统一使用精确表述，不出现绝对化的"不发送给任何第三方"
+if ($readmeText -match '不.*发送.*任何.*第三方') {
+    throw "README.md 不得使用绝对表述'不发送给任何第三方'"
+}
+if ($readmeText -match 'Key 不会发送给服务提供者或其他第三方') {
+    throw "README.md API Key 安全说明口径矛盾：同时声称不发送第三方又发送 DeepSeek"
+}
+# 检查新口径是否存在
+if ($readmeText -notmatch 'Key 不会发送到卖家服务器') {
+    throw "README.md 安全说明必须明确：不发送到卖家服务器"
+}
+if ($readmeText -notmatch '自定义 Base URL') {
+    throw "README.md 安全说明必须包含自定义 Base URL 风险提示"
+}
+Write-Host "[check]   4c. 安全说明口径一致 OK"
+
+# 2g. 不得出现固定安装耗时承诺
+$allBuyerContent = ($buyerDocFiles | ForEach-Object { Get-Content (Join-Path $RootDir $_) -Raw -Encoding UTF8 }) -join "`n"
+$allBuyerContent += "`n" + $readmeText
+if ($allBuyerContent -match '(需要|只需|仅需|约|大概|大约)\s*\d+\s*分钟') {
+    throw "买家文档不得包含固定安装耗时承诺（如'需要 X 分钟'）"
+}
+Write-Host "[check]   4d. 无固定安装耗时承诺 OK"
+
+# 2h. 不得出现"超过 10 分钟直接关闭窗口"
+if ($allBuyerContent -match '超过\s*\d+\s*分钟.*关闭窗口') {
+    throw "买家文档不得建议'超过 X 分钟关闭窗口'"
+}
+Write-Host "[check]   4e. 无关闭窗口建议 OK"
+
+# 2i. 不得把管理员运行写成第一解决方案
+if ($allBuyerContent -match '以管理员身份运行试试' -or
+    $allBuyerContent -match '右键.*以管理员身份运行' -and $allBuyerContent -notmatch '不要一上来就以管理员') {
+    throw "买家文档不得把管理员运行作为首选或直接建议"
+}
+# 确认正确的管理员权限口径存在
+if ($allBuyerContent -notmatch '默认以普通用户') {
+    throw "买家文档必须明确'默认以普通用户身份运行'"
+}
+Write-Host "[check]   4f. 管理员权限口径正确 OK"
+
+# 2j. README 买家文件引用检查：引用的文件必须在 ZIP 白名单中
+$readmeBuyerFiles = @(
+    "00-点我开始安装.cmd", "Start-Install.cmd", "一键诊断.cmd", "Run-Diagnostics.cmd",
+    "一键修复依赖.cmd", "恢复或卸载配置.cmd", "Restore-Config.cmd",
+    "01-先看我-安装说明.txt", "02-安装完成后怎么开始使用.txt",
+    "03-常用提示词模板.txt", "04-常见问题和售后.txt",
+    "LICENSE", "install_wsl.sh"
+)
+foreach ($f in $readmeBuyerFiles) {
+    if ($readmeText -notmatch [regex]::Escape($f)) {
+        throw "README.md 买家区域缺失关键文件引用: $f"
+    }
+}
+if ($readmeText -notmatch '提示词模板') {
+    throw "README.md 买家区域必须引用提示词模板"
+}
+Write-Host "[check]   4g. README 买家文件引用完整 OK"
+
 Write-Host "[check] v1.3.3 buyer documentation safety OK"
 
 # ============================================================
@@ -5222,6 +5319,25 @@ if (Test-Path $releaseZip) {
             throw "Release ZIP 提示词模板文件数应为 8，实际: $promptZipCount"
         }
         Write-Host "[check]   2. 提示词模板 8 个文件在 ZIP 中存在 OK"
+
+        # 2a. 03-常用提示词模板.txt 引用的文件名必须与实际目录一致
+        $templateIndex = Get-Content (Join-Path $RootDir "03-常用提示词模板.txt") -Raw -Encoding UTF8
+        $expectedTemplates = @(
+            "00-先用这个-检查环境和项目.txt",
+            "01-接手已有代码项目.txt",
+            "02-补装开发环境和依赖.txt",
+            "03-微信小程序开发.txt",
+            "04-网页前端项目.txt",
+            "05-Python脚本开发.txt",
+            "06-安全修改代码.txt",
+            "07-生成README和使用说明.txt"
+        )
+        foreach ($t in $expectedTemplates) {
+            if ($templateIndex -notmatch [regex]::Escape($t)) {
+                throw "03-常用提示词模板.txt 缺失模板文件名引用: $t"
+            }
+        }
+        Write-Host "[check]   2a. 模板索引与实际文件一致 OK"
 
         # 3. 不得存在的禁用条目
         $forbiddenZipPatterns = @(

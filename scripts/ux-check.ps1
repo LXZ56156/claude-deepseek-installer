@@ -2972,6 +2972,95 @@ x-api-key: $TestApiKey
     Write-Host ""
 
     # ============================================================
+    # 45. 买家文档防回归检查
+    # ============================================================
+    Write-CheckHeader "45. 买家文档防回归检查"
+    $buyerFiles = @(
+        "01-先看我-安装说明.txt",
+        "02-安装完成后怎么开始使用.txt",
+        "03-常用提示词模板.txt",
+        "04-常见问题和售后.txt"
+    )
+    $allBuyerContent = ($buyerFiles | ForEach-Object { Get-Content (Join-Path $ScriptRoot $_) -Raw -Encoding UTF8 }) -join "`n"
+    $readmeText45 = Get-Content (Join-Path $ScriptRoot "README.md") -Raw -Encoding UTF8
+    $allContent = $allBuyerContent + "`n" + $readmeText45
+
+    Assert "45a: 买家 TXT 不含 Markdown 标题行（# ）" {
+        $allBuyerContent -notmatch '(?m)^# '
+    } "买家 TXT 文件中不应出现 Markdown 标题（# ）"
+
+    Assert "45b: 买家 TXT 不含三反引号代码围栏" {
+        $allBuyerContent -notmatch '```'
+    } "买家 TXT 文件中不应出现代码围栏"
+
+    Assert "45c: 买家 TXT 不含 Markdown 表格分隔行" {
+        $allBuyerContent -notmatch '\|[- ]{3,}\|' -or $allBuyerContent -notmatch '\|.*\|'
+    } "买家 TXT 文件中不应出现 Markdown 表格"
+
+    Assert "45d: 买家 TXT 不引用 QUICK_START.md / docs/ / examples/ / scripts/" {
+        $allBuyerContent -notmatch 'QUICK_START\.md' -and
+        $allBuyerContent -notmatch '\bdocs/' -and
+        $allBuyerContent -notmatch '\bexamples/' -and
+        $allBuyerContent -notmatch '\bscripts/'
+    } "买家文档不应引用不在 ZIP 中的文件/目录"
+
+    Assert "45e: 安全说明不使用绝对化的'不发送给任何第三方'" {
+        $allContent -notmatch '不.*发送.*任何.*第三方'
+    } "安全说明不得使用绝对化表述"
+
+    Assert "45f: 安全说明明确'不发送到卖家服务器'" {
+        $allContent -match '不发送到卖家服务器|不.*发送.*卖家.*服务器'
+    } "安全说明必须明确 Key 不发送到卖家服务器"
+
+    Assert "45g: 无固定安装耗时承诺" {
+        $allContent -notmatch '(需要|只需|仅需|约|大概|大约)\s*\d+\s*分钟' -and
+        $allContent -notmatch '\d+\s*分钟.*完成'
+    } "文档不得包含固定安装耗时承诺"
+
+    Assert "45h: 无'超过 X 分钟关闭窗口'建议" {
+        $allContent -notmatch '超过\s*\d+\s*分钟.*关闭窗口'
+    } "文档不得建议超过固定时间后关闭窗口"
+
+    Assert "45i: 管理员权限不作为首选方案" {
+        $allContent -notmatch '以管理员身份运行试试' -and
+        $allContent -match '默认以普通用户'
+    } "文档必须明确默认普通用户运行，不得建议右键管理员运行"
+
+    Assert "45j: 03 模板索引与实际文件名一致" {
+        $templateIndex = Get-Content (Join-Path $ScriptRoot "03-常用提示词模板.txt") -Raw -Encoding UTF8
+        $expected = @(
+            "00-先用这个-检查环境和项目.txt",
+            "01-接手已有代码项目.txt",
+            "02-补装开发环境和依赖.txt",
+            "03-微信小程序开发.txt",
+            "04-网页前端项目.txt",
+            "05-Python脚本开发.txt",
+            "06-安全修改代码.txt",
+            "07-生成README和使用说明.txt"
+        )
+        ($expected | Where-Object { $templateIndex -notmatch [regex]::Escape($_) }).Count -eq 0
+    } "03-常用提示词模板.txt 必须引用全部 8 个模板文件名"
+
+    Assert "45k: 01-04 均包含不提供声明（账号/Key/代理）" {
+        $noAccount = ($allBuyerContent -match '不提供 Claude 账号' -or $allBuyerContent -match '不提供.*账号').ToString()
+        $noKey = ($allBuyerContent -match '不提供 DeepSeek API Key' -or $allBuyerContent -match '不提供.*API Key').ToString()
+        $noProxy = ($allBuyerContent -match '不提供代理 API' -or $allBuyerContent -match '不提供.*代理').ToString()
+        $noAccount -eq 'True' -and $noKey -eq 'True' -and $noProxy -eq 'True'
+    } "买家文档必须覆盖：不提供 Claude 账号、不提供 DeepSeek Key、不提供代理 API"
+
+    Assert "45l: 04 包含售后安全提示" {
+        $content04 = Get-Content (Join-Path $ScriptRoot "04-常见问题和售后.txt") -Raw -Encoding UTF8
+        $content04 -match 'support-feedback\.txt' -and
+        $content04 -match 'report\.txt' -and
+        $content04 -match '不要.*(发送|发)(?!.*support-feedback)(?!.*report).*(Key|API Key|完整)' -or
+        $content04 -match '不要.*完整.*Key' -and
+        $content04 -match 'settings\.json' -and
+        $content04 -match '不要.*只.*截图'
+    } "04 售后文档必须包含 support-feedback/report 优先级、不要发 Key/settings.json、不要只发截图"
+
+    Write-Host ""
+
+    # ============================================================
     # 最终汇总
     # ============================================================
     Write-Host ""
