@@ -80,19 +80,19 @@
 ### 场景 H：用户名含空格
 - **前置条件**：Windows 用户名包含空格（如 `C:\Users\Test User\`）
 - **验证层级**：`scripts/check.ps1` 运行级参数验证
-- **已验证**：`Invoke-InstallCommandCaptured` 通过 `ConvertTo-CommandLine` + cmd.exe wrapper 正确转义路径参数。含空格的测试目录中脚本正常执行。
+- **已验证**：`Invoke-InstallCommandCaptured` 保持 `FilePath` 与参数分离，通过 `ConvertTo-CommandLine` 正确转义路径参数。含空格的测试目录中脚本正常执行。
 - **未验证**：未运行真实 Native/winget/npm 安装。
 
 ### 场景 I：TEMP 路径含空格
 - **前置条件**：`%TEMP%` 路径包含空格或中文
 - **验证层级**：`scripts/check.ps1` 运行级参数验证
-- **已验证**：测试目录 `CCDI 参数测试 中文 空格\test dir with spaces\` 中脚本执行成功，ExitCode=0。
+- **已验证**：测试目录名包含中文、空格、`&`、`!` 和字面量 `%PATH%`，其中脚本执行成功，ExitCode=0。
 - **未验证**：未运行真实安装。
 
 ### 场景 J：中文路径
 - **前置条件**：项目路径或 TEMP 路径包含中文字符
 - **验证层级**：`scripts/check.ps1` 运行级逐项精确比较
-- **已验证**：含中文参数"中文 参数"在子进程中保持原文，逐字节匹配通过。
+- **已验证**：含中文参数"中文 参数"在 UTF-8 JSON 输出中保持原文，逐字符匹配通过且无乱码。
 - **未验证**：未运行真实安装。
 
 ### 场景 K：Native Install / npm / winget 调用点参数转义
@@ -101,7 +101,13 @@
 - **已验证**：
   - 不使用裸 `-ArgumentList $Arguments` 数组
   - 调用 `ConvertTo-CommandLine` 进行参数转义
-  - 使用 cmd.exe wrapper + `!ERRORLEVEL!` 可靠捕获 exit code
+  - 使用 `Start-Process @startParams`，`FilePath` 不参与命令字符串拼接
+  - 仅当 `Arguments.Count > 0` 时传入 `ArgumentList`
+  - 不存在 cmd.exe wrapper、`!ERRORLEVEL!`、`$innerCommand`、`/v:on` 或 exitCodeFile
+  - `WaitForExit()` + `Refresh()` 后读取 ExitCode，无法读取时返回 `-1`
+  - CMD 元字符、百分号、感叹号、中文、引号、尾反斜杠和空字符串逐项保持参数边界
+  - `hostname.exe` 使用真正的 `Arguments=@()`；`exit 7` 正确返回失败
+  - finally 清理 stdout/stderr，超时保留 `taskkill /T /F`
   - `ConvertTo-CommandLineArgument` 处理尾部反斜杠
 - **未验证**：未运行真实 Native/winget/npm 安装。
 

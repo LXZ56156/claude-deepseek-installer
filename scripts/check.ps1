@@ -431,38 +431,48 @@ finally {
     Remove-Item -Path $tempCmdDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "[check] Invoke-InstallCommandCaptured argument escaping (6 param types + empty-args test)"
+Write-Host "[check] Invoke-InstallCommandCaptured argument boundaries, encoding, and exit codes"
 
-# === 测试 A：含中文和空格的路径 + 6 种参数类型 ===
-$argTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "CCDI 参数测试 中文 空格 $(Get-Random)"
+# === 测试 A：含中文、空格和 CMD 元字符的路径与参数 ===
+$argTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('CCDI 中文 空格 & ! 字面量 %PATH% ' + (Get-Random))
 $argTestDir = Join-Path $argTestRoot "test dir with spaces"
 New-Item -ItemType Directory -Path $argTestDir -Force | Out-Null
 
 try {
     $testScriptPath = Join-Path $argTestDir "verify args.ps1"
+    $unexpectedCommandMarker = Join-Path $argTestRoot "unexpected-command-executed.txt"
 
-    # 子进程脚本：JSON 数组输出接收到的参数
+    # 子进程脚本：统一以 UTF-8 JSON 输出接收到的参数。
     @'
 param(
     [Parameter(ValueFromRemainingArguments=$true)]
     [string[]]$ArgsList
 )
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $ArgsList | ConvertTo-Json -Compress
 [Environment]::Exit(0)
 '@ | Set-Content -LiteralPath $testScriptPath -Encoding UTF8
 
-    # 六种参数类型（中文路径已由测试目录名覆盖）
-    $testArgs = @(
-        "-NoProfile"
-        "-File"
-        $testScriptPath
-        "normal"
+    $payloadArgs = @(
+        "amp&ersand"
+        "pipe|value"
+        "less<value"
+        "greater>value"
+        "caret^value"
+        'literal%PATH%'
+        "bang!value!"
+        "parentheses(value)"
+        "中文 参数"
         "alpha beta"
-        "Chinese params with spaces"
         'arg-with-"embedded-quotes"'
         "trail\"
         ""
     )
+    $testArgs = @(
+        "-NoProfile"
+        "-File"
+        $testScriptPath
+    ) + $payloadArgs
 
     $capturedResult = Invoke-InstallCommandCaptured -FilePath "powershell.exe" `
         -Arguments $testArgs `
@@ -507,14 +517,7 @@ $ArgsList | ConvertTo-Json -Compress
         throw "Failed to parse JSON output: $($_.Exception.Message). Raw: [$($capturedResult.Output)]"
     }
 
-    $expectedArgs = @(
-        "normal"
-        "alpha beta"
-        "Chinese params with spaces"
-        'arg-with-"embedded-quotes"'
-        "trail\"
-        ""
-    )
+    $expectedArgs = $payloadArgs
 
     if ($receivedArgs.Count -ne $expectedArgs.Count) {
         throw "Argument count mismatch: expected $($expectedArgs.Count), got $($receivedArgs.Count)"
@@ -524,26 +527,19 @@ $ArgsList | ConvertTo-Json -Compress
         if ($receivedArgs[$i] -ne $expectedArgs[$i]) {
             throw "Argument[$i] mismatch: expected '$($expectedArgs[$i])', got '$($receivedArgs[$i])'"
         }
+        Write-Host "[check]   A$($i + 1) exact argument OK: $($expectedArgs[$i])"
     }
 
-    Write-Host "[check]   A1 normal arg OK"
-    Write-Host "[check]   A2 space arg OK"
-    Write-Host "[check]   A3 Chinese arg OK"
-    Write-Host "[check]   A4 embedded-quote arg OK"
-    Write-Host "[check]   A5 trailing-backslash arg OK"
-    Write-Host "[check]   A6 empty-string arg OK"
-    Write-Host "[check]   A7 Success/ExitCode/TimedOut OK"
-    Write-Host "[check]   A8 temp file cleanup OK"
+    if (Test-Path $unexpectedCommandMarker) {
+        throw "CMD metacharacters executed an unexpected command: $unexpectedCommandMarker"
+    }
+    Write-Host "[check]   A14 Success/ExitCode/TimedOut and UTF-8 JSON OK"
+    Write-Host "[check]   A15 no unexpected command execution; temp files cleaned"
 
     # === 测试 B：空参数列表 ===
-    $emptyArgsScriptPath = Join-Path $argTestDir "empty-args-test.ps1"
-    @'
-Write-Output "no-args-ok"
-[Environment]::Exit(0)
-'@ | Set-Content -LiteralPath $emptyArgsScriptPath -Encoding UTF8
-
-    $emptyResult = Invoke-InstallCommandCaptured -FilePath "powershell.exe" `
-        -Arguments @("-NoProfile", "-File", $emptyArgsScriptPath) `
+    $hostnameExe = Join-Path $env:SystemRoot "System32\hostname.exe"
+    $emptyResult = Invoke-InstallCommandCaptured -FilePath $hostnameExe `
+        -Arguments @() `
         -TimeoutSec 30 `
         -HeartbeatSec 60 `
         -FriendlyName "empty-args-test" `
@@ -558,8 +554,8 @@ Write-Output "no-args-ok"
     if ($emptyResult.TimedOut) {
         throw "Empty args test: TimedOut should be false"
     }
-    if ($emptyResult.Output.Trim() -ne "no-args-ok") {
-        throw "Empty args test: unexpected output: $($emptyResult.Output)"
+    if ([string]::IsNullOrWhiteSpace($emptyResult.Output)) {
+        throw "Empty args test: hostname.exe output should not be empty"
     }
     if ($emptyResult.StdOutPath -and (Test-Path $emptyResult.StdOutPath)) {
         throw "Empty args test: StdOut temp file not cleaned"
@@ -569,7 +565,23 @@ Write-Output "no-args-ok"
     }
 
     Write-Host "[check]   B1 empty-args Success/ExitCode/TimedOut OK"
-    Write-Host "[check]   B2 empty-args temp file cleanup OK"
+    Write-Host "[check]   B2 non-empty output and temp file cleanup OK"
+
+    # === 测试 C：非零退出码 ===
+    $exitSevenScriptPath = Join-Path $argTestDir "exit-seven.ps1"
+    "exit 7" | Set-Content -LiteralPath $exitSevenScriptPath -Encoding UTF8
+    $exitSevenResult = Invoke-InstallCommandCaptured -FilePath "powershell.exe" `
+        -Arguments @("-NoProfile", "-File", $exitSevenScriptPath) `
+        -TimeoutSec 30 -HeartbeatSec 60 -FriendlyName "exit-seven-test" -StartMessage ""
+    if ($exitSevenResult.Success -or $exitSevenResult.ExitCode -ne 7 -or $exitSevenResult.TimedOut) {
+        throw "Exit 7 test failed: Success=$($exitSevenResult.Success), ExitCode=$($exitSevenResult.ExitCode), TimedOut=$($exitSevenResult.TimedOut)"
+    }
+    if (($exitSevenResult.StdOutPath -and (Test-Path $exitSevenResult.StdOutPath)) -or
+        ($exitSevenResult.StdErrPath -and (Test-Path $exitSevenResult.StdErrPath))) {
+        throw "Exit 7 test: stdout/stderr temp files not cleaned"
+    }
+    Write-Host "[check]   C1 exit 7 Success=false/ExitCode=7/TimedOut=false OK"
+    Write-Host "[check]   C2 exit 7 temp file cleanup OK"
 }
 finally {
     Remove-Item -Path $argTestRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -3769,14 +3781,12 @@ if ($claudeInstallText -notmatch '\$proc\s*=\s*\$null\s*\n\s*try') {
     throw "Invoke-InstallCommandCaptured must init `$proc = `$null before try"
 }
 # T. catch block must kill process tree on internal error
-$capturedFuncBody = if ($claudeInstallText -match '(?s)function Invoke-InstallCommandCaptured\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+$capturedFuncBody = if ($claudeInstallText -match '(?ms)function Invoke-InstallCommandCaptured\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
 if ($capturedFuncBody -notmatch '内部异常，正在终止子进程树') {
     throw "Invoke-InstallCommandCaptured catch must kill child process on internal error"
 }
 
 # U. Invoke-InstallCommandCaptured must NOT pass bare $Arguments array to Start-Process
-#    (v1.3.3 fix: array gets re-joined by PS5.1 Start-Process, breaking args with spaces/Chinese;
-#     now uses cmd.exe wrapper + ConvertTo-CommandLine for reliable exit code capture)
 if ($capturedFuncBody -match '-ArgumentList\s+\$Arguments\b') {
     throw "Invoke-InstallCommandCaptured must NOT use -ArgumentList `$Arguments (bare array); use ConvertTo-CommandLine for proper Windows command-line escaping"
 }
@@ -3786,14 +3796,25 @@ if ($capturedFuncBody -notmatch 'ConvertTo-CommandLine') {
     throw "Invoke-InstallCommandCaptured must call ConvertTo-CommandLine to escape arguments before Start-Process"
 }
 
-# W. Invoke-InstallCommandCaptured must use cmd.exe /c wrapper for reliable ExitCode (PS5.1)
-if ($capturedFuncBody -notmatch '(?s)cmd\.exe.*!ERRORLEVEL!') {
-    throw "Invoke-InstallCommandCaptured must use cmd.exe wrapper with !ERRORLEVEL! for reliable exit code capture on PS5.1"
+# W. Invoke-InstallCommandCaptured must use Start-Process splatting and omit ArgumentList for @()
+if ($capturedFuncBody -notmatch 'Start-Process\s+@startParams') {
+    throw "Invoke-InstallCommandCaptured must use Start-Process splatting"
+}
+if ($capturedFuncBody -notmatch '(?s)if\s*\(\$Arguments\s+-and\s+\$Arguments\.Count\s+-gt\s+0\).*?\$startParams\.ArgumentList') {
+    throw "Invoke-InstallCommandCaptured must only add ArgumentList when Arguments.Count > 0"
 }
 
-# X. Invoke-InstallCommandCaptured must read exit code from temp file
-if ($capturedFuncBody -notmatch 'ccdi_captured_exit_.*\.tmp') {
-    throw "Invoke-InstallCommandCaptured must capture exit code from ccdi_captured_exit_*.tmp file"
+# X. Arbitrary arguments must never be interpreted by a cmd.exe wrapper
+foreach ($forbiddenPattern in @('!ERRORLEVEL!', '\$innerCommand\b', '/v:on', 'exitCodeFile')) {
+    if ($capturedFuncBody -match $forbiddenPattern) {
+        throw "Invoke-InstallCommandCaptured contains forbidden CMD wrapper pattern: $forbiddenPattern"
+    }
+}
+if ($capturedFuncBody -notmatch '(?s)finally\s*\{.*?\$stdout.*?\$stderr.*?Remove-Item') {
+    throw "Invoke-InstallCommandCaptured finally must clean stdout/stderr"
+}
+if ($capturedFuncBody -notmatch '(?s)taskkill\.exe\s+/PID.*?/T\s+/F') {
+    throw "Invoke-InstallCommandCaptured timeout must preserve taskkill /T /F"
 }
 
 # H. 全仓库禁止旧等待句

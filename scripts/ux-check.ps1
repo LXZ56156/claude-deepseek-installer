@@ -2848,7 +2848,7 @@ x-api-key: $TestApiKey
     Write-CheckHeader "43. v1.3.3 参数转义：Invoke-InstallCommandCaptured 防回归"
 
     $claudeInstallText43 = Get-Content (Join-Path $ScriptRoot "lib\claude-install.ps1") -Raw -Encoding UTF8
-    $capturedFunc43 = if ($claudeInstallText43 -match '(?s)function Invoke-InstallCommandCaptured\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+    $capturedFunc43 = if ($claudeInstallText43 -match '(?ms)function Invoke-InstallCommandCaptured\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
 
     # 43a: 不得使用裸 -ArgumentList $Arguments 数组
     Assert "43a: Invoke-InstallCommandCaptured 不使用裸 -ArgumentList `$Arguments" {
@@ -2860,15 +2860,15 @@ x-api-key: $TestApiKey
         $capturedFunc43 -match 'ConvertTo-CommandLine'
     } "未调用 ConvertTo-CommandLine 转义参数"
 
-    # 43c: 使用 cmd.exe wrapper 确保 ExitCode 可靠
-    Assert "43c: Invoke-InstallCommandCaptured 使用 cmd.exe wrapper + !ERRORLEVEL!" {
-        $capturedFunc43 -match '(?s)cmd\.exe.*!ERRORLEVEL!'
-    } "未使用 cmd.exe wrapper 捕获 exit code（PS5.1 下 Start-Process ExitCode 可能为空）"
+    # 43c: FilePath 与参数分离，使用 splatting
+    Assert "43c: Invoke-InstallCommandCaptured 使用 Start-Process splatting" {
+        $capturedFunc43 -match 'Start-Process\s+@startParams'
+    } "未使用 Start-Process @startParams"
 
-    # 43d: exit code 从临时文件读取
-    Assert "43d: Invoke-InstallCommandCaptured 从临时文件读取 exit code" {
-        $capturedFunc43 -match 'ccdi_captured_exit_.*\.tmp'
-    } "未从临时文件读取 exit code"
+    # 43d: 空参数列表不得传 ArgumentList
+    Assert "43d: Invoke-InstallCommandCaptured 仅在参数非空时设置 ArgumentList" {
+        $capturedFunc43 -match '(?s)if\s*\(\$Arguments\s+-and\s+\$Arguments\.Count\s+-gt\s+0\).*?\$startParams\.ArgumentList'
+    } "Arguments=@() 时仍可能传入 ArgumentList"
 
     # 43e: ConvertTo-CommandLine 存在于 common.ps1（确保不必自己实现）
     $commonText43 = Get-Content (Join-Path $ScriptRoot "lib\common.ps1") -Raw -Encoding UTF8
@@ -2879,6 +2879,18 @@ x-api-key: $TestApiKey
     Assert "43f: ConvertTo-CommandLineArgument 处理尾部反斜杠" {
         $commonText43 -match '\$backslashes\s*\*\s*2'
     } "ConvertTo-CommandLineArgument 未处理尾部反斜杠（\$backslashes * 2）"
+
+    Assert "43g: Invoke-InstallCommandCaptured 不含 CMD wrapper" {
+        ($capturedFunc43 -notmatch '!ERRORLEVEL!|\$innerCommand\b|/v:on|exitCodeFile')
+    } "仍包含 cmd.exe wrapper、!ERRORLEVEL!、innerCommand、/v:on 或 exitCodeFile"
+
+    Assert "43h: Invoke-InstallCommandCaptured finally 清理 stdout/stderr" {
+        $capturedFunc43 -match '(?s)finally\s*\{.*?\$stdout.*?\$stderr.*?Remove-Item'
+    } "finally 未清理 stdout/stderr"
+
+    Assert "43i: Invoke-InstallCommandCaptured 超时保留 taskkill /T /F" {
+        $capturedFunc43 -match '(?s)taskkill\.exe\s+/PID.*?/T\s+/F'
+    } "超时未调用 taskkill /T /F"
 
     Write-Host ""
 

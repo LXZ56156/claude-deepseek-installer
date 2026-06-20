@@ -1206,23 +1206,22 @@ function Invoke-InstallCommandCaptured {
     $proc = $null
 
     try {
-        $exitCodeFile = Join-Path $env:TEMP "ccdi_captured_exit_${PID}_$(Get-Random).tmp"
-
         # v1.3.3 fix: Start-Process 的 ArgumentList 数组在 PS5.1 下会错误拆分
-        # 含空格/中文的参数。使用 ConvertTo-CommandLine 转义为命令行字符串。
-        $commandLine = ConvertTo-CommandLine -Arguments (@($FilePath) + $Arguments)
+        # 含空格/中文/元字符的参数。FilePath 与参数保持独立，避免 CMD 再解释参数。
+        $startParams = @{
+            FilePath               = $FilePath
+            NoNewWindow            = $true
+            PassThru               = $true
+            RedirectStandardOutput = $stdout
+            RedirectStandardError  = $stderr
+        }
+        if ($Arguments -and $Arguments.Count -gt 0) {
+            $startParams.ArgumentList = ConvertTo-CommandLine -Arguments $Arguments
+        }
 
-        # v1.3.3 fix: PS5.1 下 Start-Process -PassThru 的 ExitCode 可能为空。
-        # 通过 cmd.exe /c 包装并在子进程内 echo %ERRORLEVEL% 到临时文件，
-        # 确保所有 PS 版本都能可靠读取 exit code。
-        $cmdExe = if ($env:ComSpec) { $env:ComSpec } else { "cmd.exe" }
-        $innerCommand = "$commandLine > $(ConvertTo-CommandLineArgument -Argument $stdout) 2> $(ConvertTo-CommandLineArgument -Argument $stderr)"
-        $argumentLine = "/d /v:on /s /c `"$innerCommand & echo !ERRORLEVEL! > $(ConvertTo-CommandLineArgument -Argument $exitCodeFile)`""
-
-        $proc = Start-Process -FilePath $cmdExe `
-            -ArgumentList $argumentLine `
-            -NoNewWindow `
-            -PassThru
+        $proc = Start-Process @startParams
+        # Windows PowerShell 5.1 必须在进程退出前访问 Handle，才能可靠读取 ExitCode。
+        $null = $proc.Handle
 
         Write-Log "INFO" "Invoke-InstallCommandCaptured: started PID=$($proc.Id), FriendlyName=$FriendlyName"
 
@@ -1310,16 +1309,19 @@ function Invoke-InstallCommandCaptured {
             }
         }
 
-        # 从 cmd.exe wrapper 写入的临时文件读取 exit code（PS5.1 可靠）
-        if (Test-Path $exitCodeFile) {
-            $exitText = (Get-Content $exitCodeFile -Raw -ErrorAction SilentlyContinue).Trim()
-            if ($exitText -match '^-?\d+$') {
-                $result.ExitCode = [int]$exitText
+        $proc.WaitForExit()
+        $proc.Refresh()
+        try {
+            $capturedExitCode = $proc.ExitCode
+            if ($null -eq $capturedExitCode) {
+                throw "process exit code is unavailable"
             }
+            $result.ExitCode = [int]$capturedExitCode
         }
-        # fallback: 如果临时文件不可用，尝试 Start-Process ExitCode
-        if ($result.ExitCode -eq -1) {
-            $result.ExitCode = $proc.ExitCode
+        catch {
+            # 某些 .cmd 入口在 Windows PowerShell 5.1 下无法提供退出码。
+            # 保持明确的未知值，调用方继续依靠现有安装后验证判断结果。
+            $result.ExitCode = -1
         }
         $result.Success = ($result.ExitCode -eq 0)
         $result.DurationMs = [Math]::Round($sw.Elapsed.TotalMilliseconds, 0)
@@ -1371,7 +1373,7 @@ function Invoke-InstallCommandCaptured {
     }
     finally {
         # 清理临时文件
-        foreach ($tmp in @($stdout, $stderr, $exitCodeFile)) {
+        foreach ($tmp in @($stdout, $stderr)) {
             if ($tmp -and (Test-Path $tmp)) {
                 Remove-Item $tmp -Force -ErrorAction SilentlyContinue
             }
