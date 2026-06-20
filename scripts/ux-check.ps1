@@ -2867,7 +2867,8 @@ x-api-key: $TestApiKey
 
     # 43d: 空参数列表不得传 ArgumentList
     Assert "43d: Invoke-InstallCommandCaptured 仅在参数非空时设置 ArgumentList" {
-        $capturedFunc43 -match '(?s)if\s*\(\$Arguments\s+-and\s+\$Arguments\.Count\s+-gt\s+0\).*?\$startParams\.ArgumentList'
+        ($capturedFunc43 -notmatch 'if\s*\(\s*\$Arguments\s+-and\s+\$Arguments\.Count') -and
+        ($capturedFunc43 -match '(?s)if\s*\(\$null\s+-ne\s+\$Arguments\s+-and\s+\$Arguments\.Count\s+-gt\s+0\).*?\$startParams\.ArgumentList')
     } "Arguments=@() 时仍可能传入 ArgumentList"
 
     # 43e: ConvertTo-CommandLine 存在于 common.ps1（确保不必自己实现）

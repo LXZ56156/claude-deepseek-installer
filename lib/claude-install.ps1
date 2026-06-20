@@ -1215,7 +1215,7 @@ function Invoke-InstallCommandCaptured {
             RedirectStandardOutput = $stdout
             RedirectStandardError  = $stderr
         }
-        if ($Arguments -and $Arguments.Count -gt 0) {
+        if ($null -ne $Arguments -and $Arguments.Count -gt 0) {
             $startParams.ArgumentList = ConvertTo-CommandLine -Arguments $Arguments
         }
 

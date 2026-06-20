@@ -1909,7 +1909,7 @@ function ConvertTo-CommandLine {
     #>
     param([string[]]$Arguments = @())
 
-    if (-not $Arguments -or $Arguments.Count -eq 0) {
+    if ($null -eq $Arguments -or $Arguments.Count -eq 0) {
         return ""
     }
 

@@ -437,6 +437,7 @@ Write-Host "[check] Invoke-InstallCommandCaptured argument boundaries, encoding,
 $argTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('CCDI 中文 空格 & ! 字面量 %PATH% ' + (Get-Random))
 $argTestDir = Join-Path $argTestRoot "test dir with spaces"
 New-Item -ItemType Directory -Path $argTestDir -Force | Out-Null
+$singleEmptyProbeRoot = $null
 
 try {
     $testScriptPath = Join-Path $argTestDir "verify args.ps1"
@@ -567,7 +568,53 @@ $ArgsList | ConvertTo-Json -Compress
     Write-Host "[check]   B1 empty-args Success/ExitCode/TimedOut OK"
     Write-Host "[check]   B2 non-empty output and temp file cleanup OK"
 
-    # === 测试 C：非零退出码 ===
+    # === 测试 C：单个空字符串参数 ===
+    $singleEmptyProbeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ccdi-single-empty-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $singleEmptyProbeRoot -Force | Out-Null
+    $singleEmptyExe = Join-Path $singleEmptyProbeRoot "single-empty-argument.exe"
+    $singleEmptySource = @'
+using System;
+
+public static class SingleEmptyArgumentProbe
+{
+    public static int Main(string[] args)
+    {
+        Console.WriteLine("args.Length={0}", args.Length);
+        int firstLength = args.Length > 0 ? args[0].Length : -1;
+        Console.WriteLine("args[0].Length={0}", firstLength);
+        if (args.Length != 1) return 11;
+        if (args[0].Length != 0) return 12;
+        return 0;
+    }
+}
+'@
+    $sourceBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($singleEmptySource))
+    $escapedOutputAssembly = $singleEmptyExe.Replace("'", "''")
+    $compileCommand = "`$ProgressPreference = 'SilentlyContinue'; `$source = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$sourceBase64')); Add-Type -TypeDefinition `$source -Language CSharp -OutputAssembly '$escapedOutputAssembly' -OutputType ConsoleApplication -ErrorAction Stop"
+    $encodedCompileCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($compileCommand))
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedCompileCommand
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $singleEmptyExe)) {
+        throw "Single empty argument probe compilation failed: ExitCode=$LASTEXITCODE"
+    }
+
+    $singleEmptyResult = Invoke-InstallCommandCaptured -FilePath $singleEmptyExe `
+        -Arguments @("") `
+        -TimeoutSec 30 -HeartbeatSec 60 -FriendlyName "single-empty-argument-test" -StartMessage ""
+    if (-not $singleEmptyResult.Success -or $singleEmptyResult.ExitCode -ne 0 -or $singleEmptyResult.TimedOut) {
+        throw "Single empty argument test failed: Success=$($singleEmptyResult.Success), ExitCode=$($singleEmptyResult.ExitCode), TimedOut=$($singleEmptyResult.TimedOut), Error=$($singleEmptyResult.Error)"
+    }
+    if ($singleEmptyResult.Output -notmatch '(?m)^args\.Length=1\s*$' -or
+        $singleEmptyResult.Output -notmatch '(?m)^args\[0\]\.Length=0\s*$') {
+        throw "Single empty argument test output mismatch: $($singleEmptyResult.Output)"
+    }
+    if (($singleEmptyResult.StdOutPath -and (Test-Path $singleEmptyResult.StdOutPath)) -or
+        ($singleEmptyResult.StdErrPath -and (Test-Path $singleEmptyResult.StdErrPath))) {
+        throw "Single empty argument test: stdout/stderr temp files not cleaned"
+    }
+    Write-Host "[check]   C1 Arguments=@(`"`"), args.Length=1, args[0].Length=0 OK"
+    Write-Host "[check]   C2 Success/ExitCode/TimedOut and temp file cleanup OK"
+
+    # === 测试 D：非零退出码 ===
     $exitSevenScriptPath = Join-Path $argTestDir "exit-seven.ps1"
     "exit 7" | Set-Content -LiteralPath $exitSevenScriptPath -Encoding UTF8
     $exitSevenResult = Invoke-InstallCommandCaptured -FilePath "powershell.exe" `
@@ -580,11 +627,14 @@ $ArgsList | ConvertTo-Json -Compress
         ($exitSevenResult.StdErrPath -and (Test-Path $exitSevenResult.StdErrPath))) {
         throw "Exit 7 test: stdout/stderr temp files not cleaned"
     }
-    Write-Host "[check]   C1 exit 7 Success=false/ExitCode=7/TimedOut=false OK"
-    Write-Host "[check]   C2 exit 7 temp file cleanup OK"
+    Write-Host "[check]   D1 exit 7 Success=false/ExitCode=7/TimedOut=false OK"
+    Write-Host "[check]   D2 exit 7 temp file cleanup OK"
 }
 finally {
     Remove-Item -Path $argTestRoot -Recurse -Force -ErrorAction SilentlyContinue
+    if ($singleEmptyProbeRoot) {
+        Remove-Item -Path $singleEmptyProbeRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 # 验证测试目录被清理
 if (Test-Path $argTestRoot) {
@@ -3800,7 +3850,10 @@ if ($capturedFuncBody -notmatch 'ConvertTo-CommandLine') {
 if ($capturedFuncBody -notmatch 'Start-Process\s+@startParams') {
     throw "Invoke-InstallCommandCaptured must use Start-Process splatting"
 }
-if ($capturedFuncBody -notmatch '(?s)if\s*\(\$Arguments\s+-and\s+\$Arguments\.Count\s+-gt\s+0\).*?\$startParams\.ArgumentList') {
+if ($capturedFuncBody -match 'if\s*\(\s*\$Arguments\s+-and\s+\$Arguments\.Count') {
+    throw "Invoke-InstallCommandCaptured must NOT use argument-array truthiness before Arguments.Count"
+}
+if ($capturedFuncBody -notmatch '(?s)if\s*\(\$null\s+-ne\s+\$Arguments\s+-and\s+\$Arguments\.Count\s+-gt\s+0\).*?\$startParams\.ArgumentList') {
     throw "Invoke-InstallCommandCaptured must only add ArgumentList when Arguments.Count > 0"
 }
 
