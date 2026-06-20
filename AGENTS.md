@@ -7,9 +7,9 @@
 ## Active Work
 
 - **Branch**: `fix/v1.3.3-native-path-doctor-ux`
-- **Status**: P0 进度格式化修复完成，全部验收通过
+- **Status**: validate.ps1 preflight cleanup 修复完成，全部验收通过
 - **Next**: 真机验收 → 合并到 main → 打 v1.3.3 release ZIP
-- **Latest commit**: 23053e7 fix(ux): prevent progress formatting from aborting installers
+- **Latest commit**: 29a6c9a fix: finalize validation preflight cleanup
 
 ---
 
@@ -19,6 +19,7 @@
 
 | 日期 | 内容 | Commit |
 |------|------|--------|
+| 2026-06-21 | validate.ps1 preflight cleanup — git 检查/快照移入 try、cleanup try/catch、TestForcePreflightFailure、防回归检查 | 29a6c9a |
 | 2026-06-18 | P0 进度格式化修复 — [Math]::Floor+Double+D2→Format-CcdiElapsedTime[int]/异常降级不中断安装/异常清理子进程 | 23053e7 |
 | 2026-06-18 | 超时文案对齐 fallback — TimeoutFollowupMessage 参数化/Native/Winget 不直接让用户诊断/npm 温和 follow-up | 000ec3f |
 | 2026-06-18 | 安装进度统一对齐 — 所有安装路径紧凑进度+SlowNotice+300s 超时/winget CC 改用 Captured/删除旧等待句 | 8a3135d |
