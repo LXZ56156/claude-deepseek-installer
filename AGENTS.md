@@ -9,7 +9,7 @@
 - **Branch**: `fix/v1.3.3-native-path-doctor-ux`
 - **Status**: Batches 1-3 passed. Buyer documentation review in progress.
 - **Next**: 买家文档 → 提示词模板 → 最终全量验收。Do not merge/tag/release until all review batches pass.
-- **Latest commit: cf3d17e test: fix structured documentation reference parsing
+- **Latest commit**: cf3d17e test: fix structured documentation reference parsing
 
 ---
 
