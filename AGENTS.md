@@ -19,6 +19,7 @@
 
 | 日期 | 内容 | Commit |
 |------|------|--------|
+| 2026-06-21 | Fix doc reference parser — replace greedy regex with structured inline-code + markdown-link extractors | (pending) |
 | 2026-06-21 | Buyer docs review — 01-04 TXT de-markdown, README buyer structure, security/admin/time language fix | f069b44 |
 | 2026-06-21 | validate.ps1 preflight cleanup — git 检查/快照移入 try、cleanup try/catch、TestForcePreflightFailure、防回归检查 | 29a6c9a |
 | 2026-06-18 | P0 进度格式化修复 — [Math]::Floor+Double+D2→Format-CcdiElapsedTime[int]/异常降级不中断安装/异常清理子进程 | 23053e7 |

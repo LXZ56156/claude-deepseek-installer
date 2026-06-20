@@ -77,6 +77,71 @@ function Assert-Throws {
     }
 }
 
+# ============================================================
+# 文档引用解析器 — 结构化提取，避免自然语言误匹配
+# ============================================================
+function Get-InlineCodeFileReferences {
+    <#
+    .SYNOPSIS
+        提取 Markdown 反引号行内代码中的文件路径引用。
+        仅捕获 `` `filename.ext` `` 格式的结构化引用，
+        不匹配普通中文文本中的自然语言句子。
+    #>
+    param([string]$Content)
+
+    $results = [System.Collections.ArrayList]::new()
+    # 匹配反引号行内代码：`...`
+    # 排除跨行和空内容
+    $pattern = '`([^`\n]+)`'
+    $ms = [regex]::Matches($Content, $pattern)
+
+    foreach ($m in $ms) {
+        $code = $m.Groups[1].Value.Trim()
+        # 必须整体看起来像相对文件路径：
+        # - 以路径字符或字母开头
+        # - 以已知扩展名结尾
+        # - 不含空格（排除命令）
+        # - 不是 URL
+        # 必须是相对文件路径：以路径字符或字母开头，以已知扩展名结尾
+        # LICENSE 是特殊的无扩展名文件
+        if (($code -match '^[\w\-\.\\/]+\.(?:cmd|ps1|sh|md|json|txt)$' -or $code -eq 'LICENSE') -and
+            $code -notmatch '^https?://' -and
+            $code -notmatch '\s') {
+            [void]$results.Add($code)
+        }
+    }
+    return $results | Select-Object -Unique
+}
+
+function Get-MarkdownRelativeLinkReferences {
+    <#
+    .SYNOPSIS
+        提取 Markdown 链接中的相对文件路径引用。
+        仅捕获 [text](relative/path.ext) 格式，
+        不匹配 http/https URL、锚点链接。
+    #>
+    param([string]$Content)
+
+    $results = [System.Collections.ArrayList]::new()
+    # 匹配 Markdown 链接：[text](url)
+    $pattern = '\[([^\]]*)\]\(([^)\s]+)\)'
+    $ms = [regex]::Matches($Content, $pattern)
+
+    foreach ($m in $ms) {
+        $url = $m.Groups[2].Value.Trim()
+        # 仅捕获相对文件链接：不以 http/https 开头，不含 query 字符串
+        # 仅捕获相对文件链接：不是 URL，以已知扩展名结尾（或为 LICENSE）
+        if ($url -notmatch '^https?://' -and
+            $url -notmatch '^#' -and
+            $url -notmatch '^mailto:' -and
+            ($url -match '\.(?:cmd|ps1|sh|md|json|txt)$' -or $url -eq 'LICENSE') -and
+            $url -notmatch '\?') {
+            [void]$results.Add($url)
+        }
+    }
+    return $results | Select-Object -Unique
+}
+
 # 初始化沙盒
 function Initialize-Sandbox {
     if (Test-Path $SandboxDir) {
@@ -144,9 +209,72 @@ try {
     }
 
     # ============================================================
-    # 2. README/QUICK_START 中提到的文件真实存在
+    # 2a. 文档引用解析器回归测试
     # ============================================================
-    Write-CheckHeader "2. 文档中引用的文件存在性检查"
+    Write-CheckHeader "2a. 文档引用解析器回归测试"
+
+    # -- 应捕获测试 --
+    Assert "2a-1: 行内代码 一键诊断.cmd" {
+        $r = @(Get-InlineCodeFileReferences -Content '双击 `一键诊断.cmd` 运行。')
+        $r.Count -eq 1 -and $r[0] -eq '一键诊断.cmd'
+    } "应捕获 `` `一键诊断.cmd` ``"
+
+    Assert "2a-2: 行内代码 scripts/check.ps1" {
+        $r = @(Get-InlineCodeFileReferences -Content '运行 `scripts/check.ps1` 自检。')
+        $r.Count -eq 1 -and $r[0] -eq 'scripts/check.ps1'
+    } "应捕获 `` `scripts/check.ps1` ``"
+
+    Assert "2a-3: 行内代码 提示词模板路径" {
+        $r = @(Get-InlineCodeFileReferences -Content '见 `提示词模板/00-先用这个-检查环境和项目.txt`。')
+        $r.Count -eq 1 -and $r[0] -eq '提示词模板/00-先用这个-检查环境和项目.txt'
+    } "应捕获 `` `提示词模板/00-先用这个-检查环境和项目.txt` ``"
+
+    Assert "2a-4: Markdown 链接 README.md" {
+        $r = @(Get-MarkdownRelativeLinkReferences -Content '详见 [说明](README.md) 文件。')
+        $r.Count -eq 1 -and $r[0] -eq 'README.md'
+    } "应捕获 [说明](README.md)"
+
+    Assert "2a-5: Markdown 链接 LICENSE" {
+        $r = @(Get-MarkdownRelativeLinkReferences -Content 'MIT License — 详见 [LICENSE](LICENSE) 文件。')
+        $r.Count -eq 1 -and $r[0] -eq 'LICENSE'
+    } "应捕获 [LICENSE](LICENSE)"
+
+    # -- 不应捕获测试 --
+    Assert "2a-6: 自然语言中文句不含反引号" {
+        $r = @(Get-InlineCodeFileReferences -Content '仍无反应则运行一键诊断.cmd 生成报告。')
+        $r.Count -eq 0
+    } "不应捕获自然语言中文句中的文件名"
+
+    Assert "2a-7: 中文引号中的自然语言" {
+        $r = @(Get-InlineCodeFileReferences -Content '"如果失败请运行一键诊断.cmd 试试。"')
+        $r.Count -eq 0
+    } "不应捕获中文引号中的文件名"
+
+    Assert "2a-8: PowerShell 命令整句" {
+        $r = @(Get-InlineCodeFileReferences -Content 'powershell -File .\doctor.ps1 -ShareSafe')
+        $r.Count -eq 0
+    } "不应捕获完整命令中的文件路径"
+
+    Assert "2a-9: URL 中的文件扩展名" {
+        $r = @(Get-MarkdownRelativeLinkReferences -Content '下载 [脚本](https://example.com/file.ps1) 运行。')
+        $r.Count -eq 0
+    } "不应捕获 https URL 中的文件"
+
+    Assert "2a-10: settings.json 在反引号中也不应检查" {
+        $r = @(Get-InlineCodeFileReferences -Content '配置在 `settings.json` 中。')
+        # settings.json 是用户配置，不是仓库文件
+        $r.Count -eq 0 -or ($r.Count -eq 1 -and $r[0] -eq 'settings.json')
+    } "settings.json 为用户配置文件，可被捕获但不应作为仓库引用失败"
+
+    Assert "2a-11: 自然语言以文件名为结尾" {
+        $r = @(Get-InlineCodeFileReferences -Content '一段以 README.md 结尾的普通说明文字')
+        $r.Count -eq 0
+    } "不应捕获无结构化标记的普通文本"
+
+    # ============================================================
+    # 2b. README/QUICK_START 结构化文件引用存在性检查
+    # ============================================================
+    Write-CheckHeader "2b. 文档结构化文件引用存在性检查"
 
     $docFiles = @(
         "README.md",
@@ -156,26 +284,29 @@ try {
         $docPath = Join-Path $ScriptRoot $docFile
         if (Test-Path $docPath) {
             $content = Get-Content $docPath -Raw -Encoding UTF8
-            # 查找引用的文件路径模式
-            $refs = [regex]::Matches($content, '(?:`|["''])([^`"''\s]+\.(?:cmd|ps1|sh|md|json))(?:\b|["'']|\s)')
-            foreach ($ref in $refs) {
-                $refFile = $ref.Groups[1].Value.Trim()
-                if ($refFile -match '^%') { continue }  # Skip env var references like %USERPROFILE%
-                if ($refFile -eq "install.sh") { continue }  # External Claude installer URL path fragment.
-                if ($refFile -eq "settings.json") { continue }  # User config file, not a repo file.
-                if ($refFile -match '\.(cmd|ps1|sh|md|json)$') {
-                    # 如果有路径分隔符，检查文件
-                    if ($refFile -match '[\\/]') {
-                        $refPath = Join-Path $ScriptRoot $refFile
-                    }
-                    else {
-                        $refPath = Join-Path $ScriptRoot $refFile
-                    }
-                    # 只检查看起来像文件引用的
-                    if ($refFile -notmatch '^(http|https|www\.)') {
-                        Assert "文档引用: $refFile" { Test-Path $refPath } "引用文件不存在: $refFile"
-                    }
+            # 使用结构化提取器：反引号行内代码 + Markdown 链接
+            $inlineRefs = @(Get-InlineCodeFileReferences -Content $content)
+            $linkRefs = @(Get-MarkdownRelativeLinkReferences -Content $content)
+            $allRefs = @($inlineRefs) + @($linkRefs) | Select-Object -Unique
+
+            # 运行时产物：文档中会描述但不属于仓库文件
+            $runtimeArtifacts = @(
+                "support-feedback.txt",
+                "report.txt",
+                "reports/report-YYYYMMDD-HHMMSS.txt",
+                "reports/full-report-YYYYMMDD-HHMMSS.txt"
+            )
+            foreach ($refFile in $allRefs) {
+                if ($refFile -match '^%') { continue }
+                if ($refFile -eq "settings.json") { continue }
+                if ($refFile -in $runtimeArtifacts) { continue }
+                if ($refFile -match '[\\/]') {
+                    $refPath = Join-Path $ScriptRoot $refFile
                 }
+                else {
+                    $refPath = Join-Path $ScriptRoot $refFile
+                }
+                Assert "文档引用: $refFile" { Test-Path $refPath } "引用文件不存在: $refFile"
             }
         }
     }
