@@ -464,7 +464,11 @@ function Start-RepairDeps {
 
 function Generate-Report {
     $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    $reportsDir = Join-Path $ScriptDir "reports"
+    $reportRoot = $ScriptDir
+    if ($env:CCDI_TEST_MODE -eq "1" -and -not [string]::IsNullOrWhiteSpace($env:CCDI_TEST_ARTIFACT_ROOT)) {
+        $reportRoot = $env:CCDI_TEST_ARTIFACT_ROOT
+    }
+    $reportsDir = Join-Path $reportRoot "reports"
     if (-not (Test-Path $reportsDir)) {
         New-Item -ItemType Directory -Path $reportsDir -Force | Out-Null
     }

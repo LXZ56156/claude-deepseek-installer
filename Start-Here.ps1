@@ -55,6 +55,10 @@ $script:EnvSnapshot = $null
 $script:UnsupportedSystem = $false
 $script:TestSafeMode = $TestSafe -or $DryRun -or ($env:CCDI_TEST_MODE -eq "1")
 $script:EffectiveSkipApiTest = $SkipApiTest -or $script:TestSafeMode
+$script:ArtifactOutputRoot = $ScriptDir
+if ($env:CCDI_TEST_MODE -eq "1" -and -not [string]::IsNullOrWhiteSpace($env:CCDI_TEST_ARTIFACT_ROOT)) {
+    $script:ArtifactOutputRoot = $env:CCDI_TEST_ARTIFACT_ROOT
+}
 
 # ============================================================
 # 辅助函数
@@ -1128,7 +1132,7 @@ function Step-GenerateReport {
     Write-Info "正在生成安装报告（通常 1-3 秒）..."
 
     # 确保 reports 目录存在
-    $reportsDir = Join-Path $ScriptDir "reports"
+    $reportsDir = Join-Path $script:ArtifactOutputRoot "reports"
     if (-not (Test-Path $reportsDir)) {
         New-Item -ItemType Directory -Path $reportsDir -Force | Out-Null
     }
@@ -1450,9 +1454,9 @@ API Key 始终只保存在您的本机，不会上传或分享。
             $safeReportForFb = Convert-ToSafeReportText -Text $reportContent
             $fbNodeJsStatus = if ($nodeInfo.Installed) { $nodeInfo.Version } elseif ($isOfficialNativeSuccess) { "未安装（当前安装方式无需）" } else { "" }
             $supportFeedbackResult = New-SupportFeedbackReport `
-                -OutputPath (Join-Path $ScriptDir "support-feedback.txt") `
+                -OutputPath (Join-Path $script:ArtifactOutputRoot "support-feedback.txt") `
                 -ReportText $safeReportForFb `
-                -ScriptDir $ScriptDir `
+                -ScriptDir $script:ArtifactOutputRoot `
                 -IncludeLogTail:$true `
                 -IncludeTerminalTail:$true `
                 -MaxLogLines 120 `

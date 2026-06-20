@@ -37,6 +37,7 @@ $ExcludeDirs = @(
     "logs",
     "backup",
     "reports",
+    "runs",
     "release",
     "node_modules"
 )
@@ -53,16 +54,41 @@ function Test-IsExcludedPath {
     return $false
 }
 
-Write-Host "[check] PowerShell syntax"
-$psFiles = Get-ChildItem -Path $RootDir -Filter "*.ps1" -Recurse |
-    Where-Object { -not (Test-IsExcludedPath $_.FullName) }
+Write-Host "[check] PowerShell syntax and stale artifact exclusion"
+$artifactProbeId = [Guid]::NewGuid().ToString("N")
+$artifactProbeDirs = @("reports", "runs")
+$artifactProbeState = @{}
+try {
+    foreach ($dirName in $artifactProbeDirs) {
+        $dirPath = Join-Path $RootDir $dirName
+        $artifactProbeState[$dirName] = Test-Path $dirPath
+        New-Item -ItemType Directory -Path $dirPath -Force | Out-Null
+        $probePath = Join-Path $dirPath "check-exclusion-$artifactProbeId.ps1"
+        'this is deliberately invalid PowerShell {' | Set-Content -LiteralPath $probePath -Encoding UTF8
+    }
 
-foreach ($file in $psFiles) {
-    $tokens = $null
-    $errors = $null
-    [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
-    if ($errors.Count -gt 0) {
-        throw "PowerShell parse failed: $($file.FullName) - $($errors[0].Message)"
+    $psFiles = Get-ChildItem -Path $RootDir -Filter "*.ps1" -Recurse |
+        Where-Object { -not (Test-IsExcludedPath $_.FullName) }
+
+    foreach ($file in $psFiles) {
+        $tokens = $null
+        $errors = $null
+        [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+        if ($errors.Count -gt 0) {
+            throw "PowerShell parse failed: $($file.FullName) - $($errors[0].Message)"
+        }
+    }
+}
+finally {
+    foreach ($dirName in $artifactProbeDirs) {
+        $dirPath = Join-Path $RootDir $dirName
+        Remove-Item -LiteralPath (Join-Path $dirPath "check-exclusion-$artifactProbeId.ps1") -Force -ErrorAction SilentlyContinue
+        if (-not $artifactProbeState[$dirName] -and (Test-Path $dirPath)) {
+            $remaining = @(Get-ChildItem -LiteralPath $dirPath -Force -ErrorAction SilentlyContinue)
+            if ($remaining.Count -eq 0) {
+                Remove-Item -LiteralPath $dirPath -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 }
 
@@ -1175,7 +1201,38 @@ if ($validateText -notmatch 'WorkingDirectory\s*=\s*\$RootDir' -and
     throw "validate.ps1 Invoke-PowerShellScript must explicitly set ProcessStartInfo.WorkingDirectory"
 }
 
-# 18f. 00-点我开始安装.cmd rename anti-regression (v1.3.2 final)
+# 18f. validation artifact isolation
+if ($validateText -notmatch 'ccdi-validate-.*Guid.*NewGuid') { throw "validate.ps1 must create a unique TEMP RunRoot" }
+if ($validateText -notmatch 'CCDI_TEST_ARTIFACT_ROOT\s*=\s*\$script:RunRoot') { throw "validate.ps1 must export CCDI_TEST_ARTIFACT_ROOT" }
+if ($validateText -notmatch 'Join-Path\s+\$script:RunRoot\s+"children"') { throw "validate child stdout/stderr must use RunRoot children" }
+if ($validateText -match 'Join-Path\s+\$RootDir\s+"reports"') { throw "validate child stdout/stderr must not use repository reports" }
+if ($validateText -notmatch 'Join-Path\s+\$script:RunRoot\s+"backup"') { throw "settings backup must use RunRoot backup" }
+if ($validateText -match 'Join-Path\s+\$RootDir\s+"backup"') { throw "settings backup must not use repository backup" }
+if ($validateText -notmatch 'Join-Path\s+\$script:RunRoot\s+"sandbox') { throw "Core sandbox must use RunRoot sandbox" }
+if ($validateText -notmatch 'Validation artifacts cleaned\.') { throw "validate success must report artifact cleanup" }
+if ($validateText -notmatch 'Validation artifacts preserved at:') { throw "validate failure must report preserved RunRoot" }
+if ($validateText -notmatch 'Remove-Item\s+-LiteralPath\s+\$script:RunRoot\s+-Recurse') { throw "validate success must remove RunRoot" }
+
+$doctorArtifactText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+if ($doctorArtifactText -notmatch 'CCDI_TEST_MODE\s+-eq\s+"1".*CCDI_TEST_ARTIFACT_ROOT') { throw "doctor test artifacts must require test mode and ArtifactRoot" }
+if ($doctorArtifactText -notmatch 'DoctorOutputRoot\s*=\s*\$ScriptDir') { throw "doctor normal mode must default artifacts to ScriptDir" }
+if ($doctorArtifactText -notmatch 'Join-Path\s+\$env:CCDI_TEST_ARTIFACT_ROOT\s+"doctor"') { throw "doctor test artifacts must use ArtifactRoot doctor" }
+
+$loggerArtifactText = Get-Content -Path (Join-Path $RootDir "lib\logger.ps1") -Raw -Encoding UTF8
+if ($loggerArtifactText -notmatch 'CCDI_TEST_MODE\s+-eq\s+"1".*CCDI_TEST_ARTIFACT_ROOT') { throw "logger artifact redirect must require test mode and ArtifactRoot" }
+if ($loggerArtifactText -notmatch 'Join-Path\s+\$env:CCDI_TEST_ARTIFACT_ROOT\s+"logs"') { throw "logger test logs must use ArtifactRoot logs" }
+$startHereArtifactText = Get-Content -Path (Join-Path $RootDir "Start-Here.ps1") -Raw -Encoding UTF8
+if ($startHereArtifactText -notmatch 'ArtifactOutputRoot\s*=\s*\$ScriptDir' -or $startHereArtifactText -notmatch 'CCDI_TEST_ARTIFACT_ROOT') { throw "Start-Here test reports must use ArtifactRoot" }
+$repairArtifactText = Get-Content -Path (Join-Path $RootDir "repair-deps.ps1") -Raw -Encoding UTF8
+if ($repairArtifactText -notmatch 'reportRoot\s*=\s*\$ScriptDir' -or $repairArtifactText -notmatch 'CCDI_TEST_ARTIFACT_ROOT') { throw "repair-deps test reports must use ArtifactRoot" }
+$commonArtifactText = Get-Content -Path (Join-Path $RootDir "lib\common.ps1") -Raw -Encoding UTF8
+$backupDirFunction = if ($commonArtifactText -match '(?ms)function Get-BackupDir\s*\{.*?(?=^function \w|\Z)') { $matches[0] } else { "" }
+if ($backupDirFunction -notmatch 'CCDI_TEST_ARTIFACT_ROOT' -or $backupDirFunction -notmatch 'Join-Path\s+\$env:CCDI_TEST_ARTIFACT_ROOT\s+"backup"') { throw "Test backups must use ArtifactRoot backup" }
+foreach ($requiredExclude in @(".git", ".sandbox", "logs", "reports", "runs", "backup", "release", "node_modules")) {
+    if ($ExcludeDirs -notcontains $requiredExclude) { throw "Source scan exclusion missing: $requiredExclude" }
+}
+
+# 18g. 00-点我开始安装.cmd rename anti-regression (v1.3.2 final)
 $primaryLauncher = Join-Path $RootDir "00-点我开始安装.cmd"
 if (-not (Test-Path $primaryLauncher)) {
     throw "Primary user launcher 00-点我开始安装.cmd must exist after rename"
@@ -3872,11 +3929,7 @@ if ($capturedFuncBody -notmatch '(?s)taskkill\.exe\s+/PID.*?/T\s+/F') {
 
 # H. 全仓库禁止旧等待句
 $allSourceFiles = @(Get-ChildItem -Path $RootDir -Recurse -Include "*.ps1", "*.psm1", "*.cmd", "*.sh", "*.md", "*.txt" -Exclude "*.log", "*.tmp" | Where-Object {
-    $_.FullName -notmatch '[\\/]\.sandbox[\\/]' -and
-    $_.FullName -notmatch '[\\/]\.git[\\/]' -and
-    $_.FullName -notmatch '[\\/]release[\\/]' -and
-    $_.FullName -notmatch '[\\/]logs[\\/]' -and
-    $_.FullName -notmatch '[\\/]backup[\\/]'
+    -not (Test-IsExcludedPath $_.FullName)
 })
 $oldHeartbeatFound = $false
 foreach ($f in $allSourceFiles) {
@@ -3897,8 +3950,7 @@ if ($oldHeartbeatFound) {
 
 # I. 禁止前台透传 stdout/stderr
 $allPsFiles = @(Get-ChildItem -Path $RootDir -Recurse -Include "*.ps1", "*.psm1" -Exclude "*.log", "*.tmp" | Where-Object {
-    $_.FullName -notmatch '[\\/]\.sandbox[\\/]' -and
-    $_.FullName -notmatch '[\\/]\.git[\\/]' -and
+    -not (Test-IsExcludedPath $_.FullName) -and
     $_.FullName -notmatch '[\\/]scripts[\\/]'
 })
 foreach ($psf in $allPsFiles) {

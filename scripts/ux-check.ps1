@@ -186,7 +186,7 @@ try {
     Write-CheckHeader "3. PowerShell 语法解析检查"
 
     $psFiles = Get-ChildItem -Path $ScriptRoot -Filter "*.ps1" -Recurse |
-        Where-Object { $_.FullName -notmatch "\\(\.sandbox|\.git|logs|backup|release|reports|node_modules)\\" }
+        Where-Object { $_.FullName -notmatch "\\(\.sandbox|\.git|logs|backup|release|reports|runs|node_modules)\\" }
 
     foreach ($file in $psFiles) {
         $tokens = $null
@@ -268,7 +268,7 @@ try {
     )
 
     $textFiles = Get-ChildItem -Path $ScriptRoot -Recurse -Include "*.ps1", "*.psm1", "*.sh", "*.json", "*.md", "*.txt", "*.cmd" |
-        Where-Object { $_.FullName -notmatch "\\(\.sandbox|\.git|logs|backup|release|reports|node_modules)\\" }
+        Where-Object { $_.FullName -notmatch "\\(\.sandbox|\.git|logs|backup|release|reports|runs|node_modules)\\" }
 
     $realKeyFound = $false
     foreach ($file in $textFiles) {
@@ -2892,6 +2892,54 @@ x-api-key: $TestApiKey
     Assert "43i: Invoke-InstallCommandCaptured 超时保留 taskkill /T /F" {
         $capturedFunc43 -match '(?s)taskkill\.exe\s+/PID.*?/T\s+/F'
     } "超时未调用 taskkill /T /F"
+
+    Write-Host ""
+
+    # ============================================================
+    # 44. validate 测试产物隔离
+    # ============================================================
+    Write-CheckHeader "44. validate 测试产物隔离防回归"
+    $validateText44 = Get-Content (Join-Path $ScriptRoot "scripts\validate.ps1") -Raw -Encoding UTF8
+    $doctorText44 = Get-Content (Join-Path $ScriptRoot "doctor.ps1") -Raw -Encoding UTF8
+    $loggerText44 = Get-Content (Join-Path $ScriptRoot "lib\logger.ps1") -Raw -Encoding UTF8
+    $checkText44 = Get-Content (Join-Path $ScriptRoot "scripts\check.ps1") -Raw -Encoding UTF8
+    $startHereText44 = Get-Content (Join-Path $ScriptRoot "Start-Here.ps1") -Raw -Encoding UTF8
+    $repairText44 = Get-Content (Join-Path $ScriptRoot "repair-deps.ps1") -Raw -Encoding UTF8
+    $commonText44 = Get-Content (Join-Path $ScriptRoot "lib\common.ps1") -Raw -Encoding UTF8
+
+    Assert "44a: validate 创建唯一 TEMP RunRoot 并设置 ArtifactRoot" {
+        $validateText44 -match 'ccdi-validate-.*Guid.*NewGuid' -and
+        $validateText44 -match 'CCDI_TEST_ARTIFACT_ROOT\s*=\s*\$script:RunRoot'
+    } "validate 未创建唯一 RunRoot 或未设置 CCDI_TEST_ARTIFACT_ROOT"
+    Assert "44b: child 输出和 settings 备份位于 RunRoot" {
+        $validateText44 -match 'Join-Path\s+\$script:RunRoot\s+"children"' -and
+        $validateText44 -match 'Join-Path\s+\$script:RunRoot\s+"backup"' -and
+        $validateText44 -notmatch 'Join-Path\s+\$RootDir\s+"reports"|Join-Path\s+\$RootDir\s+"backup"'
+    } "validate 仍可能向仓库 reports/backup 写入"
+    Assert "44c: 成功清理、失败保留 RunRoot" {
+        $validateText44 -match 'Validation artifacts cleaned\.' -and
+        $validateText44 -match 'Validation artifacts preserved at:'
+    } "validate 缺少成功清理或失败保留提示"
+    Assert "44d: doctor 测试产物使用 ArtifactRoot doctor" {
+        $doctorText44 -match 'DoctorOutputRoot\s*=\s*\$ScriptDir' -and
+        $doctorText44 -match 'Join-Path\s+\$env:CCDI_TEST_ARTIFACT_ROOT\s+"doctor"'
+    } "doctor 默认路径或测试重定向不正确"
+    Assert "44e: logger 测试日志使用 ArtifactRoot logs" {
+        $loggerText44 -match 'Join-Path\s+\$env:CCDI_TEST_ARTIFACT_ROOT\s+"logs"'
+    } "logger 未隔离测试日志"
+    Assert "44f: reports 和 runs 均由统一扫描排除" {
+        $checkText44 -match 'function Test-IsExcludedPath' -and
+        $checkText44 -match '"reports"' -and $checkText44 -match '"runs"'
+    } "check 未统一排除 reports/runs"
+    Assert "44g: Start-Here 和 repair-deps 测试报告使用 ArtifactRoot" {
+        $startHereText44 -match 'ArtifactOutputRoot\s*=\s*\$ScriptDir' -and
+        $startHereText44 -match 'CCDI_TEST_ARTIFACT_ROOT' -and
+        $repairText44 -match 'reportRoot\s*=\s*\$ScriptDir' -and
+        $repairText44 -match 'CCDI_TEST_ARTIFACT_ROOT'
+    } "Core TestSafe 子流程仍可能向仓库 reports/support-feedback 写入"
+    Assert "44h: 公共备份目录在测试时使用 ArtifactRoot backup" {
+        $commonText44 -match 'Join-Path\s+\$env:CCDI_TEST_ARTIFACT_ROOT\s+"backup"'
+    } "配置测试仍可能向仓库 backup 写入"
 
     Write-Host ""
 

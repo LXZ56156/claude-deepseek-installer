@@ -56,7 +56,10 @@ function Initialize-Logger {
         [string]$ScriptName
     )
 
-    if (-not $LogDirPath) {
+    if ($env:CCDI_TEST_MODE -eq "1" -and -not [string]::IsNullOrWhiteSpace($env:CCDI_TEST_ARTIFACT_ROOT)) {
+        $LogDirPath = Join-Path $env:CCDI_TEST_ARTIFACT_ROOT "logs"
+    }
+    elseif (-not $LogDirPath) {
         $LogDirPath = Join-Path $PSScriptRoot "..\logs"
     }
 

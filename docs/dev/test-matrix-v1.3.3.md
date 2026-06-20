@@ -120,6 +120,17 @@
   - DEC-009: npm 安装 mock 失败正确返回 failed_official_and_mirror → 10/10
 - **未验证**：未运行真实安装。
 
+### 场景 M：validate 测试产物隔离
+- **前置条件**：`CCDI_TEST_MODE=1`，validate 创建唯一 `CCDI_TEST_ARTIFACT_ROOT`
+- **验证层级**：`scripts/check.ps1` + `scripts/ux-check.ps1` + `scripts/validate.ps1 -Mode Full`
+- **已验证**：
+  - child stdout/stderr、settings 备份、Core sandbox、doctor 报告和日志均写入 TEMP RunRoot
+  - doctor 实际生成 `report.txt`、`support-feedback.txt`、`reports/report-*.txt`
+  - 成功时删除 RunRoot，失败时保留并输出完整路径
+  - 仓库既有 report/support-feedback/logs/reports/runs/backup 文件清单及 SHA256 不变
+  - reports/runs 中的旧无效脚本不参与源码解析扫描
+- **未验证**：未执行真实安装。
+
 ## 自动化验收命令
 
 ```powershell

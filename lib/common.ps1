@@ -73,6 +73,10 @@ function Get-BackupDir {
     .SYNOPSIS
         获取备份目录路径
     #>
+    if ($env:CCDI_TEST_MODE -eq "1" -and -not [string]::IsNullOrWhiteSpace($env:CCDI_TEST_ARTIFACT_ROOT)) {
+        return Join-Path $env:CCDI_TEST_ARTIFACT_ROOT "backup"
+    }
+
     if (Get-Variable -Name CcdiProjectRoot -Scope Script -ErrorAction SilentlyContinue) {
         return Join-Path $script:CcdiProjectRoot "backup"
     }

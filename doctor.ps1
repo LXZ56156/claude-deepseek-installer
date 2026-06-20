@@ -42,6 +42,15 @@ if ($script:DoctorTestSafeMode) {
     $env:CCDI_TEST_MODE = "1"
 }
 
+# 验收模式下统一写入 TEMP ArtifactRoot；普通用户仍写入产品目录。
+$script:DoctorOutputRoot = $ScriptDir
+if ($env:CCDI_TEST_MODE -eq "1" -and -not [string]::IsNullOrWhiteSpace($env:CCDI_TEST_ARTIFACT_ROOT)) {
+    $script:DoctorOutputRoot = Join-Path $env:CCDI_TEST_ARTIFACT_ROOT "doctor"
+    if (-not (Test-Path $script:DoctorOutputRoot)) {
+        New-Item -ItemType Directory -Path $script:DoctorOutputRoot -Force | Out-Null
+    }
+}
+
 # 报告状态集中放在脚本级对象中，避免函数作用域下 += 丢失内容。
 $script:DoctorState = @{
     ReportLines  = New-Object System.Collections.ArrayList
@@ -1709,7 +1718,7 @@ function Main {
     else {
         # 使用双报告机制
         $isShareSafeMode = ($ShareSafe -or $Anonymize)
-        $reportsDir = Join-Path $ScriptDir "reports"
+        $reportsDir = Join-Path $script:DoctorOutputRoot "reports"
         if (-not (Test-Path $reportsDir)) {
             New-Item -ItemType Directory -Path $reportsDir -Force | Out-Null
         }
@@ -1718,7 +1727,7 @@ function Main {
         $reportTimestamp = $timestamp
 
         # 1. 分享版报告（已通过 Convert-ToSafeReportText 完全脱敏清洗）
-        $shareRootPath = Join-Path $ScriptDir "report.txt"
+        $shareRootPath = Join-Path $script:DoctorOutputRoot "report.txt"
         [System.IO.File]::WriteAllText($shareRootPath, $safeReport, $utf8NoBom)
 
         # 2. 分享版历史
@@ -1796,9 +1805,9 @@ function Main {
         # --- 生成 support-feedback.txt ---
         try {
             $supportFeedbackResult = New-SupportFeedbackReport `
-                -OutputPath (Join-Path $ScriptDir "support-feedback.txt") `
+                -OutputPath (Join-Path $script:DoctorOutputRoot "support-feedback.txt") `
                 -ReportText $safeReport `
-                -ScriptDir $ScriptDir `
+                -ScriptDir $script:DoctorOutputRoot `
                 -IncludeLogTail:$true `
                 -IncludeTerminalTail:$true `
                 -MaxLogLines 120 `

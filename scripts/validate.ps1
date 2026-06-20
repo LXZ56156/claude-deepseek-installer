@@ -28,7 +28,9 @@ param(
 
     [switch]$SkipPwsh,
 
-    [switch]$RequireClean
+    [switch]$RequireClean,
+
+    [switch]$TestForceFailure
 )
 
 Set-StrictMode -Version Latest
@@ -45,7 +47,16 @@ $script:StepCount = 0
 $script:Failures = New-Object System.Collections.ArrayList
 
 # 全局 TestSafe 模式：validate.ps1 只做验收，绝不真实安装/联网/WSL
+$script:OldTestMode = $env:CCDI_TEST_MODE
+$script:OldArtifactRoot = $env:CCDI_TEST_ARTIFACT_ROOT
 $env:CCDI_TEST_MODE = "1"
+$runStamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
+$script:RunRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ccdi-validate-$runStamp-" + [Guid]::NewGuid().ToString("N"))
+$env:CCDI_TEST_ARTIFACT_ROOT = $script:RunRoot
+foreach ($childDir in @("logs", "reports", "doctor", "children", "backup", "sandbox")) {
+    New-Item -ItemType Directory -Path (Join-Path $script:RunRoot $childDir) -Force | Out-Null
+}
+Write-Host "[validate] Validation artifact root: $script:RunRoot"
 
 # git 可用性检查
 $gitAvailable = $null -ne (Get-Command "git" -ErrorAction SilentlyContinue)
@@ -104,7 +115,7 @@ function Backup-RealSettings {
 
     try {
         $timestamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
-        $backupDir = Join-Path $RootDir "backup"
+        $backupDir = Join-Path $script:RunRoot "backup"
         if (-not (Test-Path $backupDir)) {
             New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
         }
@@ -271,12 +282,13 @@ function Invoke-PowerShellScript {
     # Determine report output paths
     $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $scriptName = [System.IO.Path]::GetFileNameWithoutExtension($safeFilePath)
-    $reportsDir = Join-Path $RootDir "reports"
+    $reportsDir = Join-Path $script:RunRoot "children"
     if (-not (Test-Path $reportsDir)) {
         New-Item -ItemType Directory -Path $reportsDir -Force | Out-Null
     }
-    $stdoutFile = Join-Path $reportsDir "validate-child-${timestamp}-${scriptName}.stdout.txt"
-    $stderrFile = Join-Path $reportsDir "validate-child-${timestamp}-${scriptName}.stderr.txt"
+    $childId = [Guid]::NewGuid().ToString("N")
+    $stdoutFile = Join-Path $reportsDir "validate-child-${timestamp}-${scriptName}-${childId}.stdout.txt"
+    $stderrFile = Join-Path $reportsDir "validate-child-${timestamp}-${scriptName}-${childId}.stderr.txt"
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "powershell.exe"
@@ -338,7 +350,7 @@ function Invoke-PowerShellScript {
 }
 
 function Invoke-CoreSandboxFlow {
-    $sandbox = Join-Path $RootDir ".sandbox\validate-core"
+    $sandbox = Join-Path $script:RunRoot "sandbox\validate-core"
     $profile = Join-Path $sandbox "userprofile"
     $desktop = Join-Path $sandbox "desktop"
 
@@ -367,6 +379,18 @@ function Invoke-CoreSandboxFlow {
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "doctor.ps1") -Arguments @(
             "-ShareSafe", "-SkipApiTest", "-NoOpenReport", "-TestSafe"
         ) -TimeoutSec 300
+
+        $doctorRoot = Join-Path $script:RunRoot "doctor"
+        foreach ($requiredDoctorFile in @("report.txt", "support-feedback.txt")) {
+            $requiredPath = Join-Path $doctorRoot $requiredDoctorFile
+            if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+                throw "Doctor test artifact missing: $requiredPath"
+            }
+        }
+        $historyReports = @(Get-ChildItem -LiteralPath (Join-Path $doctorRoot "reports") -Filter "report-*.txt" -File -ErrorAction SilentlyContinue)
+        if ($historyReports.Count -lt 1) {
+            throw "Doctor history report missing under: $(Join-Path $doctorRoot 'reports')"
+        }
     }
     finally {
         foreach ($name in $old.Keys) {
@@ -383,7 +407,7 @@ function Invoke-CoreSandboxFlow {
 
 function Invoke-ParseCheck {
     Get-ChildItem . -Filter "*.ps1" -Recurse |
-        Where-Object { $_.FullName -notmatch '\\.git|\\.sandbox|\\backup|\\logs|\\reports|\\release|\\node_modules' } |
+        Where-Object { $_.FullName -notmatch '\\.git|\\.sandbox|\\backup|\\logs|\\reports|\\runs|\\release|\\node_modules' } |
         ForEach-Object {
             $tokens = $null
             $errors = $null
@@ -464,97 +488,140 @@ function Invoke-HardcoreValidation {
     })
 }
 
-$beforeSettings = Get-RealSettingsSnapshot
-Write-Host "[validate] Mode=$Mode Version=$Version Branch=$(git branch --show-current) RequireClean=$requireCleanForRun"
-Write-Host "[validate] Real settings baseline: Exists=$($beforeSettings.Exists) Length=$($beforeSettings.Length) SHA256=$($beforeSettings.SHA256)"
-
-# 备份真实 settings.json，防止 sandbox 测试意外污染。
-# 备份保存在项目 backup/ 目录下，带时间戳，不会被 git 追踪。
-$script:SettingsBackup = $null
-if ($beforeSettings.Exists) {
-    $script:SettingsBackup = Backup-RealSettings
+function Get-RepositoryArtifactSnapshot {
+    $snapshot = [ordered]@{}
+    foreach ($fileName in @("report.txt", "support-feedback.txt")) {
+        $path = Join-Path $RootDir $fileName
+        $snapshot[$fileName] = if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $item = Get-Item -LiteralPath $path
+            [ordered]@{ Exists = $true; Length = $item.Length; SHA256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
+        }
+        else { [ordered]@{ Exists = $false; Length = 0; SHA256 = $null } }
+    }
+    foreach ($dirName in @("logs", "reports", "runs", "backup")) {
+        $dirPath = Join-Path $RootDir $dirName
+        $files = @()
+        if (Test-Path -LiteralPath $dirPath -PathType Container) {
+            $files = @(Get-ChildItem -LiteralPath $dirPath -File -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                $relative = $_.FullName.Substring($dirPath.Length).TrimStart('\', '/')
+                "$relative|$($_.Length)|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+            } | Sort-Object)
+        }
+        $snapshot[$dirName] = [ordered]@{ Exists = (Test-Path -LiteralPath $dirPath -PathType Container); Files = $files }
+    }
+    return $snapshot
 }
 
-# RequireClean 下的 git status 检查（在验证步骤开始前运行）
-if ($requireCleanForRun) {
-    Invoke-ValidationStep -Name "git status clean" -ScriptBlock {
-        $status = git status --short
-        if ($status) {
-            $msg = "Working tree is not clean:`n" + ($status -join "`n")
-            throw $msg
+function Assert-RepositoryArtifactsUnchanged {
+    param($Before, $After)
+    foreach ($name in $Before.Keys) {
+        $beforeJson = $Before[$name] | ConvertTo-Json -Depth 5 -Compress
+        $afterJson = $After[$name] | ConvertTo-Json -Depth 5 -Compress
+        if ($beforeJson -ne $afterJson) {
+            throw "Repository artifact changed during validation: $name"
         }
     }
 }
 
-switch ($Mode) {
-    "Smoke" {
-        Invoke-SmokeValidation
-    }
-    "Full" {
-        Invoke-FullValidation
-    }
-    "Release" {
-        Invoke-ReleaseValidation
-    }
-    "Hardcore" {
-        Invoke-HardcoreValidation
-    }
-    "All" {
-        Invoke-FullValidation
-        Invoke-ReleaseValidation
-        Invoke-HardcoreValidation
-    }
-}
+$validationExitCode = 1
+$beforeSettings = $null
+$beforeArtifacts = Get-RepositoryArtifactSnapshot
+try {
+    $beforeSettings = Get-RealSettingsSnapshot
+    Write-Host "[validate] Mode=$Mode Version=$Version Branch=$(git branch --show-current) RequireClean=$requireCleanForRun"
+    Write-Host "[validate] Real settings baseline: Exists=$($beforeSettings.Exists) Length=$($beforeSettings.Length) SHA256=$($beforeSettings.SHA256)"
 
-$afterSettings = Get-RealSettingsSnapshot
-Invoke-ValidationStep -Name "real settings.json unchanged" -ScriptBlock ([scriptblock]{
-    try {
-        Assert-RealSettingsUnchanged -Before $beforeSettings -After $afterSettings
+    $script:SettingsBackup = $null
+    if ($beforeSettings.Exists) {
+        $script:SettingsBackup = Backup-RealSettings
     }
-    catch {
-        $backupInfo = if ($script:SettingsBackup) { " Backup available: $($script:SettingsBackup.BackupPath) (SHA256: $($script:SettingsBackup.SHA256))" } else { " No backup was taken (settings.json didn't exist before tests)." }
-        throw ($_.Exception.Message + $backupInfo)
-    }
-})
 
-# 结束前 final git status clean（兜底：防止验证步骤意外生成未被 .gitignore 覆盖的文件）
-if ($requireCleanForRun) {
-    Invoke-ValidationStep -Name "final git status clean" -ScriptBlock {
-        $status = git status --short
-        if ($status) {
-            $msg = "Working tree is not clean after validation:`n" + ($status -join "`n")
-            throw $msg
+    if ($requireCleanForRun) {
+        Invoke-ValidationStep -Name "git status clean" -ScriptBlock {
+            $status = git status --short
+            if ($status) { throw ("Working tree is not clean:`n" + ($status -join "`n")) }
         }
     }
-}
 
-Write-Host ""
-Write-Host "==============================================================" -ForegroundColor Cyan
-Write-Host "  Validation Summary" -ForegroundColor Cyan
-Write-Host "==============================================================" -ForegroundColor Cyan
-Write-Host "  Mode:              $Mode"
-Write-Host "  Version:           $Version"
-Write-Host "  Branch:            $(git branch --show-current)"
-Write-Host "  RequireClean:      $requireCleanForRun"
-Write-Host "  Real settings:     Exists=$($beforeSettings.Exists) Length=$($beforeSettings.Length) SHA256=$($beforeSettings.SHA256)"
-Write-Host "  Steps executed:    $script:StepCount"
-Write-Host "  Failures:          $($script:Failures.Count)"
+    switch ($Mode) {
+        "Smoke" { Invoke-SmokeValidation }
+        "Full" { Invoke-FullValidation }
+        "Release" { Invoke-ReleaseValidation }
+        "Hardcore" { Invoke-HardcoreValidation }
+        "All" { Invoke-FullValidation; Invoke-ReleaseValidation; Invoke-HardcoreValidation }
+    }
 
-if ($script:Failures.Count -gt 0) {
+    if ($TestForceFailure) {
+        Invoke-ValidationStep -Name "intentional validation failure (test only)" -ScriptBlock {
+            throw "intentional validation failure requested by -TestForceFailure"
+        }
+    }
+
+    $afterSettings = Get-RealSettingsSnapshot
+    Invoke-ValidationStep -Name "real settings.json unchanged" -ScriptBlock ([scriptblock]{
+        try { Assert-RealSettingsUnchanged -Before $beforeSettings -After $afterSettings }
+        catch {
+            $backupInfo = if ($script:SettingsBackup) { " Backup available: $($script:SettingsBackup.BackupPath) (SHA256: $($script:SettingsBackup.SHA256))" } else { " No backup was taken." }
+            throw ($_.Exception.Message + $backupInfo)
+        }
+    })
+
+    $afterArtifacts = Get-RepositoryArtifactSnapshot
+    Invoke-ValidationStep -Name "repository diagnostic artifacts unchanged" -ScriptBlock ([scriptblock]{
+        Assert-RepositoryArtifactsUnchanged -Before $beforeArtifacts -After $afterArtifacts
+    })
+
+    if ($requireCleanForRun) {
+        Invoke-ValidationStep -Name "final git status clean" -ScriptBlock {
+            $status = git status --short
+            if ($status) { throw ("Working tree is not clean after validation:`n" + ($status -join "`n")) }
+        }
+    }
+
     Write-Host ""
-    Write-Host "==============================================================" -ForegroundColor Red
-    Write-Host "  Validation FAILED: $($script:Failures.Count) step(s)" -ForegroundColor Red
-    Write-Host "==============================================================" -ForegroundColor Red
-    Write-Host "  Failed steps:"
-    foreach ($failure in $script:Failures) {
-        Write-Host "  - $failure" -ForegroundColor Red
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host "  Validation Summary" -ForegroundColor Cyan
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host "  Mode:              $Mode"
+    Write-Host "  Version:           $Version"
+    Write-Host "  Branch:            $(git branch --show-current)"
+    Write-Host "  RequireClean:      $requireCleanForRun"
+    Write-Host "  Real settings:     Exists=$($beforeSettings.Exists) Length=$($beforeSettings.Length) SHA256=$($beforeSettings.SHA256)"
+    Write-Host "  Steps executed:    $script:StepCount"
+    Write-Host "  Failures:          $($script:Failures.Count)"
+
+    if ($script:Failures.Count -gt 0) {
+        Write-Host ""
+        Write-Host "==============================================================" -ForegroundColor Red
+        Write-Host "  Validation FAILED: $($script:Failures.Count) step(s)" -ForegroundColor Red
+        Write-Host "==============================================================" -ForegroundColor Red
+        foreach ($failure in $script:Failures) { Write-Host "  - $failure" -ForegroundColor Red }
+        $validationExitCode = 1
     }
-    Write-Host "==============================================================" -ForegroundColor Red
-    exit 1
+    else {
+        Write-Host ""
+        Write-Host "==============================================================" -ForegroundColor Green
+        Write-Host "  Validation PASSED: $($script:StepCount) step(s)" -ForegroundColor Green
+        Write-Host "==============================================================" -ForegroundColor Green
+        $validationExitCode = 0
+    }
+}
+catch {
+    Write-Host "[validate] UNEXPECTED FAILURE: $($_.Exception.Message)" -ForegroundColor Red
+    $validationExitCode = 1
+}
+finally {
+    if ($script:OldTestMode) { $env:CCDI_TEST_MODE = $script:OldTestMode } else { Remove-Item Env:\CCDI_TEST_MODE -ErrorAction SilentlyContinue }
+    if ($script:OldArtifactRoot) { $env:CCDI_TEST_ARTIFACT_ROOT = $script:OldArtifactRoot } else { Remove-Item Env:\CCDI_TEST_ARTIFACT_ROOT -ErrorAction SilentlyContinue }
+
+    if ($validationExitCode -eq 0) {
+        Remove-Item -LiteralPath $script:RunRoot -Recurse -Force -ErrorAction Stop
+        if (Test-Path -LiteralPath $script:RunRoot) { throw "Validation artifact cleanup failed: $script:RunRoot" }
+        Write-Host "Validation artifacts cleaned."
+    }
+    else {
+        Write-Host "Validation artifacts preserved at: $script:RunRoot" -ForegroundColor Yellow
+    }
 }
 
-Write-Host ""
-Write-Host "==============================================================" -ForegroundColor Green
-Write-Host "  Validation PASSED: $($script:StepCount) step(s)" -ForegroundColor Green
-Write-Host "==============================================================" -ForegroundColor Green
-exit 0
+exit $validationExitCode
