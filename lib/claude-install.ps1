@@ -1206,19 +1206,23 @@ function Invoke-InstallCommandCaptured {
     $proc = $null
 
     try {
-        $startParams = @{
-            FilePath               = $FilePath
-            NoNewWindow             = $true
-            PassThru                = $true
-            RedirectStandardOutput  = $stdout
-            RedirectStandardError   = $stderr
-        }
+        $exitCodeFile = Join-Path $env:TEMP "ccdi_captured_exit_${PID}_$(Get-Random).tmp"
 
-        if ($Arguments -and $Arguments.Count -gt 0) {
-            $startParams.ArgumentList = ConvertTo-CommandLine -Arguments $Arguments
-        }
+        # v1.3.3 fix: Start-Process 的 ArgumentList 数组在 PS5.1 下会错误拆分
+        # 含空格/中文的参数。使用 ConvertTo-CommandLine 转义为命令行字符串。
+        $commandLine = ConvertTo-CommandLine -Arguments (@($FilePath) + $Arguments)
 
-        $proc = Start-Process @startParams
+        # v1.3.3 fix: PS5.1 下 Start-Process -PassThru 的 ExitCode 可能为空。
+        # 通过 cmd.exe /c 包装并在子进程内 echo %ERRORLEVEL% 到临时文件，
+        # 确保所有 PS 版本都能可靠读取 exit code。
+        $cmdExe = if ($env:ComSpec) { $env:ComSpec } else { "cmd.exe" }
+        $innerCommand = "$commandLine > $(ConvertTo-CommandLineArgument -Argument $stdout) 2> $(ConvertTo-CommandLineArgument -Argument $stderr)"
+        $argumentLine = "/d /v:on /s /c `"$innerCommand & echo !ERRORLEVEL! > $(ConvertTo-CommandLineArgument -Argument $exitCodeFile)`""
+
+        $proc = Start-Process -FilePath $cmdExe `
+            -ArgumentList $argumentLine `
+            -NoNewWindow `
+            -PassThru
 
         Write-Log "INFO" "Invoke-InstallCommandCaptured: started PID=$($proc.Id), FriendlyName=$FriendlyName"
 
@@ -1306,8 +1310,18 @@ function Invoke-InstallCommandCaptured {
             }
         }
 
-        $result.ExitCode = $proc.ExitCode
-        $result.Success = ($proc.ExitCode -eq 0)
+        # 从 cmd.exe wrapper 写入的临时文件读取 exit code（PS5.1 可靠）
+        if (Test-Path $exitCodeFile) {
+            $exitText = (Get-Content $exitCodeFile -Raw -ErrorAction SilentlyContinue).Trim()
+            if ($exitText -match '^-?\d+$') {
+                $result.ExitCode = [int]$exitText
+            }
+        }
+        # fallback: 如果临时文件不可用，尝试 Start-Process ExitCode
+        if ($result.ExitCode -eq -1) {
+            $result.ExitCode = $proc.ExitCode
+        }
+        $result.Success = ($result.ExitCode -eq 0)
         $result.DurationMs = [Math]::Round($sw.Elapsed.TotalMilliseconds, 0)
 
         # 读取捕获的输出
@@ -1357,7 +1371,7 @@ function Invoke-InstallCommandCaptured {
     }
     finally {
         # 清理临时文件
-        foreach ($tmp in @($stdout, $stderr)) {
+        foreach ($tmp in @($stdout, $stderr, $exitCodeFile)) {
             if ($tmp -and (Test-Path $tmp)) {
                 Remove-Item $tmp -Force -ErrorAction SilentlyContinue
             }
@@ -3319,6 +3333,24 @@ function Install-ClaudeCodeAuto {
             Write-Log "INFO" "Native Install returned non-zero/unknown exit code, but post-install verification will decide outcome."
         }
 
+        # Mock 决策模式：如果 Native 安装 mock 返回成功，信任 mock 结果，
+        # 不要依赖 Test-ClaudeCommandExisting 的后验验证（它仍返回安装前的 broken/missing 状态）
+        if ($isMockDecision -and $nativeResult.Success) {
+            Write-Log "DEBUG" "MOCK: native install returned success; trusting mock result (post-verify skipped)"
+            $result.Success = $true
+            $result.Method = "official_native"
+            $result.Status = "installed"
+            $result.Version = "1.0.0-mock"
+            Update-CcdiState -Updates @{
+                claudeWasAlreadyInstalled  = $false
+                claudeInstallMethod        = "official_native"
+                claudeInstallStatus        = "installed"
+                claudeInstallCompletedAt   = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+            } | Out-Null
+            Write-Success "Claude Code 安装完成 (mock native)"
+            return $result
+        }
+
         if ($verifyResult.Usable) {
             # 后验验证通过：claude.exe 存在且可用
 
@@ -3657,21 +3689,34 @@ function Install-ClaudeCodeAuto {
                         Write-Log "INFO" "npm 镜像安装命令返回异常状态，将进行后验验证确认真实结果。"
                         Write-Log "DEBUG" "npm mirror install details: Error=$($mirrorResult.Error), Status=$($mirrorResult.Status)"
                     }
-                    # 验证安装（无论 $mirrorResult.Success 如何，均通过后验验证确认）
+                    # 验证安装（mock 模式下必须尊重 $mirrorResult.Success）
                     if ($isMockDecision) {
-                        Write-Log "DEBUG" "MOCK: trusting npm mirror install success"
-                        $result.Success = $true
-                        $result.Method = "npm_npmmirror"
-                        $result.Status = "installed"
-                        $result.Version = "1.0.0-mock"
-                        Update-CcdiState -Updates @{
-                            claudeWasAlreadyInstalled = $false
-                            claudeInstallMethod       = "npm_npmmirror"
-                            claudeInstallStatus       = "installed"
-                            claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-                        } | Out-Null
-                        Write-Success "Claude Code 安装完成 (mock npm mirror)"
-                        return $result
+                        if ($mirrorResult.Success) {
+                            Write-Log "DEBUG" "MOCK: trusting npm mirror install success"
+                            $result.Success = $true
+                            $result.Method = "npm_npmmirror"
+                            $result.Status = "installed"
+                            $result.Version = "1.0.0-mock"
+                            Update-CcdiState -Updates @{
+                                claudeWasAlreadyInstalled = $false
+                                claudeInstallMethod       = "npm_npmmirror"
+                                claudeInstallStatus       = "installed"
+                                claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                            } | Out-Null
+                            Write-Success "Claude Code 安装完成 (mock npm mirror)"
+                            return $result
+                        }
+                        else {
+                            Write-Log "DEBUG" "MOCK: npm mirror install returned failure; returning failed_official_and_mirror"
+                            $result.Method = "npm_npmmirror"
+                            $result.Status = "failed_official_and_mirror"
+                            $result.Success = $false
+                            Update-CcdiState -Updates @{
+                                claudeInstallMethod = "npm_npmmirror"
+                                claudeInstallStatus = "failed_official_and_mirror"
+                            } | Out-Null
+                            return $result
+                        }
                     }
                     Refresh-CurrentProcessPath
                     Write-Info "正在确认 Claude Code 是否已经可用..."
@@ -3828,21 +3873,34 @@ function Install-ClaudeCodeAuto {
         Write-Log "DEBUG" "npm mirror install details: Error=$($mirrorResult.Error), Status=$($mirrorResult.Status)"
     }
 
-    # 3c. 验证安装（mock 模式下自动信任安装结果）
+    # 3c. 验证安装（mock 模式下必须尊重 $mirrorResult.Success）
     if ($isMockDecision) {
-        Write-Log "DEBUG" "MOCK: trusting npm mirror install success"
-        $result.Success = $true
-        $result.Method = "npm_npmmirror"
-        $result.Status = "installed"
-        $result.Version = "1.0.0-mock"
-        Update-CcdiState -Updates @{
-            claudeWasAlreadyInstalled = $false
-            claudeInstallMethod       = "npm_npmmirror"
-            claudeInstallStatus       = "installed"
-            claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-        } | Out-Null
-        Write-Success "Claude Code 安装完成 (mock npm mirror)"
-        return $result
+        if ($mirrorResult.Success) {
+            Write-Log "DEBUG" "MOCK: trusting npm mirror install success"
+            $result.Success = $true
+            $result.Method = "npm_npmmirror"
+            $result.Status = "installed"
+            $result.Version = "1.0.0-mock"
+            Update-CcdiState -Updates @{
+                claudeWasAlreadyInstalled = $false
+                claudeInstallMethod       = "npm_npmmirror"
+                claudeInstallStatus       = "installed"
+                claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+            } | Out-Null
+            Write-Success "Claude Code 安装完成 (mock npm mirror)"
+            return $result
+        }
+        else {
+            Write-Log "DEBUG" "MOCK: npm mirror install returned failure; returning failed_official_and_mirror"
+            $result.Method = "npm_npmmirror"
+            $result.Status = "failed_official_and_mirror"
+            $result.Success = $false
+            Update-CcdiState -Updates @{
+                claudeInstallMethod = "npm_npmmirror"
+                claudeInstallStatus = "failed_official_and_mirror"
+            } | Out-Null
+            return $result
+        }
     }
     Refresh-CurrentProcessPath
     Write-Info "正在确认 Claude Code 是否已经可用..."

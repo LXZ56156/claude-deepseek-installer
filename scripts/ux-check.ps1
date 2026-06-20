@@ -2860,15 +2860,15 @@ x-api-key: $TestApiKey
         $capturedFunc43 -match 'ConvertTo-CommandLine'
     } "未调用 ConvertTo-CommandLine 转义参数"
 
-    # 43c: 空参数时不得强制传 ArgumentList
-    Assert "43c: Invoke-InstallCommandCaptured 检查 Arguments.Count" {
-        $capturedFunc43 -match '\$Arguments\.Count\s+-gt\s+0'
-    } "未检查 Arguments.Count（空参数时可能传空字符串）"
+    # 43c: 使用 cmd.exe wrapper 确保 ExitCode 可靠
+    Assert "43c: Invoke-InstallCommandCaptured 使用 cmd.exe wrapper + !ERRORLEVEL!" {
+        $capturedFunc43 -match '(?s)cmd\.exe.*!ERRORLEVEL!'
+    } "未使用 cmd.exe wrapper 捕获 exit code（PS5.1 下 Start-Process ExitCode 可能为空）"
 
-    # 43d: 使用 splatting 方式
-    Assert "43d: Invoke-InstallCommandCaptured 使用 Start-Process @startParams" {
-        $capturedFunc43 -match 'Start-Process\s+@startParams'
-    } "未使用 Start-Process @startParams 条件 splatting"
+    # 43d: exit code 从临时文件读取
+    Assert "43d: Invoke-InstallCommandCaptured 从临时文件读取 exit code" {
+        $capturedFunc43 -match 'ccdi_captured_exit_.*\.tmp'
+    } "未从临时文件读取 exit code"
 
     # 43e: ConvertTo-CommandLine 存在于 common.ps1（确保不必自己实现）
     $commonText43 = Get-Content (Join-Path $ScriptRoot "lib\common.ps1") -Raw -Encoding UTF8

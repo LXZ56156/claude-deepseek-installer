@@ -13,11 +13,11 @@
 | E | Native 已安装但 PATH 缺失 | existing_native | 自动修 PATH | 待真机 | simulate: static check |
 | F | API Key 错误/余额不足 | 任意 | 安装成功 / API 失败提示清楚 | 已通过（mock） | simulate: Scenario F |
 | G | npm 未知 ExitCode + 后续可用 | npm_npmmirror | Success=true | 已通过（已修 WCCR） | simulate: Scenario G |
-| H | 用户名含空格 | 任意 | 正常安装 | **本次新增** | check.ps1 + ux-check.ps1 运行级测试 |
-| I | TEMP 路径含空格 | 任意 | Invoke-InstallCommandCaptured 参数不拆分 | **本次新增** | check.ps1 + ux-check.ps1 运行级测试 |
-| J | 中文路径 | 任意 | 参数正确传递 | **本次新增** | check.ps1 + ux-check.ps1 运行级测试 |
-| K | Native Install 临时脚本路径含空格 | official_native | ConvertTo-CommandLine 正确转义 | **本次新增** | check.ps1 源码级检查 |
-| L | npm.cmd / winget 参数不回归 | npm_npmmirror / winget | 参数数组通过 ConvertTo-CommandLine 转为安全命令行 | **本次新增** | check.ps1 源码级检查 |
+| H | 用户名含空格 | 任意 | Invoke-InstallCommandCaptured 参数不拆分 | **本次新增** | check.ps1: 运行级参数验证（含中文+空格路径） |
+| I | TEMP 路径含空格 | 任意 | Invoke-InstallCommandCaptured 参数正确传递 | **本次新增** | check.ps1: 运行级参数验证 |
+| J | 中文路径含空格 | 任意 | 参数保持完整（中文原文：中文 参数） | **本次新增** | check.ps1: 逐项精确比较 |
+| K | Native Install / npm / winget 调用点参数转义 | official_native / npm_npmmirror / winget | ConvertTo-CommandLine + cmd.exe wrapper 正确转义 | **本次新增** | check.ps1 + ux-check.ps1: 源码级防回归 |
+| L | Mock 决策矩阵 Native/npm 语义 | official_native / npm_npmmirror | DEC-002/003/009 修复后 10/10 | **本次新增** | install-decision-matrix.ps1: 10/10 |
 
 ## 场景详情
 
@@ -79,44 +79,40 @@
 
 ### 场景 H：用户名含空格
 - **前置条件**：Windows 用户名包含空格（如 `C:\Users\Test User\`）
-- **预期流程**：所有安装路径（Native/npm/winget）正常执行
-- **关键断言**：
-  - Invoke-InstallCommandCaptured 使用 ConvertTo-CommandLine 转义参数
-  - 含空格的路径不会被 Start-Process 拆分为多个参数
-  - 所有参数数量和内容完全一致
+- **验证层级**：`scripts/check.ps1` 运行级参数验证
+- **已验证**：`Invoke-InstallCommandCaptured` 通过 `ConvertTo-CommandLine` + cmd.exe wrapper 正确转义路径参数。含空格的测试目录中脚本正常执行。
+- **未验证**：未运行真实 Native/winget/npm 安装。
 
 ### 场景 I：TEMP 路径含空格
 - **前置条件**：`%TEMP%` 路径包含空格或中文
-- **预期流程**：临时脚本路径正确传递给子进程
-- **关键断言**：
-  - ConvertTo-CommandLineArgument 正确处理含空格路径
-  - 子进程可找到并执行临时脚本
-  - ExitCode = 0
+- **验证层级**：`scripts/check.ps1` 运行级参数验证
+- **已验证**：测试目录 `CCDI 参数测试 中文 空格\test dir with spaces\` 中脚本执行成功，ExitCode=0。
+- **未验证**：未运行真实安装。
 
 ### 场景 J：中文路径
 - **前置条件**：项目路径或 TEMP 路径包含中文字符
-- **预期流程**：所有命令参数正确传递
-- **关键断言**：
-  - 含中文的参数在子进程中保持完整
-  - PowerShell 5.1 下中文不乱码
-  - stdout/stderr 捕获正常
+- **验证层级**：`scripts/check.ps1` 运行级逐项精确比较
+- **已验证**：含中文参数"中文 参数"在子进程中保持原文，逐字节匹配通过。
+- **未验证**：未运行真实安装。
 
-### 场景 K：Native Install 临时脚本路径含空格
-- **前置条件**：`$env:TEMP\claude_native_install_*.ps1` 路径含空格
-- **预期流程**：Native Install 调用 `Invoke-InstallCommandCaptured -FilePath powershell -Arguments @("-NoProfile", ..., "-File", $tempInstallScript)`
-- **关键断言**：
-  - ConvertTo-CommandLine 正确转义 `-File "C:\Users\Test User\..."` 参数
-  - 不再使用裸 `-ArgumentList $Arguments` 数组
-  - 使用 `Start-Process @startParams` 条件传入 ArgumentList
+### 场景 K：Native Install / npm / winget 调用点参数转义
+- **前置条件**：所有安装路径共用的 `Invoke-InstallCommandCaptured` 函数
+- **验证层级**：`scripts/check.ps1` + `scripts/ux-check.ps1` 源码级防回归检查
+- **已验证**：
+  - 不使用裸 `-ArgumentList $Arguments` 数组
+  - 调用 `ConvertTo-CommandLine` 进行参数转义
+  - 使用 cmd.exe wrapper + `!ERRORLEVEL!` 可靠捕获 exit code
+  - `ConvertTo-CommandLineArgument` 处理尾部反斜杠
+- **未验证**：未运行真实 Native/winget/npm 安装。
 
-### 场景 L：npm.cmd / winget 参数不回归
-- **前置条件**：现有 npm 和 winget 安装路径已有正确的参数数组
-- **预期流程**：ConvertTo-CommandLine 对所有参数数组生效
-- **关键断言**：
-  - npm 参数（`install`, `-g`, `@anthropic-ai/claude-code`, `--registry=...`）正确转义
-  - winget 参数（`install`, `--id`, ...）正确转义
-  - 不含空格/特殊字符的普通参数行为不变
-  - 空数组时不传 ArgumentList
+### 场景 L：Mock 决策矩阵 Native/npm 语义
+- **前置条件**：CCDI_TEST_MODE=1 + CCDI_MOCK_INSTALL_DECISION=1
+- **验证层级**：`scripts/install-decision-matrix.ps1` Mock 决策矩阵验证
+- **已验证**：
+  - DEC-002: Native 安装成功后信任 mock（不依赖安装前 broken 状态）→ 10/10
+  - DEC-003: 同上
+  - DEC-009: npm 安装 mock 失败正确返回 failed_official_and_mirror → 10/10
+- **未验证**：未运行真实安装。
 
 ## 自动化验收命令
 

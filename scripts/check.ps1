@@ -18,6 +18,17 @@ $ScriptDir = $PSScriptRoot
 $RootDir = Split-Path -Parent $ScriptDir
 Set-Location $RootDir
 
+# 记录真实 settings.json 基线（测试前）
+$realSettingsPath = Join-Path ([System.Environment]::GetFolderPath('UserProfile')) ".claude\settings.json"
+$realSettingsBeforeExists = Test-Path $realSettingsPath
+$realSettingsBeforeHash = if ($realSettingsBeforeExists) {
+    (Get-FileHash $realSettingsPath -Algorithm SHA256).Hash
+} else { $null }
+$realSettingsBeforeLength = if ($realSettingsBeforeExists) {
+    (Get-Item $realSettingsPath).Length
+} else { 0 }
+Write-Host "[check] Real settings baseline: Exists=$realSettingsBeforeExists, Hash=$realSettingsBeforeHash, Length=$realSettingsBeforeLength"
+
 Write-Host "PowerShell: $($PSVersionTable.PSVersion) $($PSVersionTable.PSEdition)"
 
 $ExcludeDirs = @(
@@ -420,34 +431,34 @@ finally {
     Remove-Item -Path $tempCmdDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "[check] Invoke-InstallCommandCaptured argument escaping (spaces + Chinese)"
+Write-Host "[check] Invoke-InstallCommandCaptured argument escaping (6 param types + empty-args test)"
+
+# === 测试 A：含中文和空格的路径 + 6 种参数类型 ===
 $argTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "CCDI 参数测试 中文 空格 $(Get-Random)"
 $argTestDir = Join-Path $argTestRoot "test dir with spaces"
 New-Item -ItemType Directory -Path $argTestDir -Force | Out-Null
-try {
-    # 创建测试脚本（文件名含空格）
-    $testScriptName = "verify args.ps1"
-    $testScriptPath = Join-Path $argTestDir $testScriptName
 
-    # 测试脚本：将接收到的所有参数以 JSON 数组输出
+try {
+    $testScriptPath = Join-Path $argTestDir "verify args.ps1"
+
+    # 子进程脚本：JSON 数组输出接收到的参数
     @'
 param(
     [Parameter(ValueFromRemainingArguments=$true)]
     [string[]]$ArgsList
 )
-# 用 JSON 数组输出保证空字符串也被保留
 $ArgsList | ConvertTo-Json -Compress
 [Environment]::Exit(0)
 '@ | Set-Content -LiteralPath $testScriptPath -Encoding UTF8
 
-    # 传入多种类型的参数（使用 ASCII 安全字符，避免 validate.ps1 子进程编码干扰）
+    # 六种参数类型（中文路径已由测试目录名覆盖）
     $testArgs = @(
         "-NoProfile"
         "-File"
         $testScriptPath
         "normal"
         "alpha beta"
-        "Chinese-params-test"
+        "Chinese params with spaces"
         'arg-with-"embedded-quotes"'
         "trail\"
         ""
@@ -460,13 +471,35 @@ $ArgsList | ConvertTo-Json -Compress
         -FriendlyName "arg-escape-test" `
         -StartMessage ""
 
-    # PS5.1 Start-Process -NoNewWindow -PassThru 的 ExitCode 可能为空（已知限制）
-    # 不依赖 $capturedResult.Success，直接验证 stdout 内容
-    if ([string]::IsNullOrWhiteSpace($capturedResult.Output)) {
-        throw "Invoke-InstallCommandCaptured arg escape test: no stdout captured (ExitCode=$($capturedResult.ExitCode), Error=$($capturedResult.Error))"
+    # 断言 Success / ExitCode / TimedOut
+    if (-not $capturedResult.Success) {
+        throw "Assertion failed: Success should be true, was $($capturedResult.Success); ExitCode=$($capturedResult.ExitCode)"
+    }
+    if ($capturedResult.ExitCode -ne 0) {
+        throw "Assertion failed: ExitCode should be 0, was $($capturedResult.ExitCode)"
+    }
+    if ($capturedResult.TimedOut) {
+        throw "Assertion failed: TimedOut should be false"
     }
 
-    # 解析 JSON 输出
+    # 断言 stdout 临时文件已清理
+    if ($capturedResult.StdOutPath -and (Test-Path $capturedResult.StdOutPath)) {
+        throw "StdOut temp file not cleaned: $($capturedResult.StdOutPath)"
+    }
+    if ($capturedResult.StdErrPath -and (Test-Path $capturedResult.StdErrPath)) {
+        throw "StdErr temp file not cleaned: $($capturedResult.StdErrPath)"
+    }
+
+    # 断言 stderr 为空（或仅 PowerShell 启动 banner）
+    if (-not [string]::IsNullOrWhiteSpace($capturedResult.Error)) {
+        $errTrimmed = $capturedResult.Error.Trim()
+        # 允许 Windows PowerShell 版权 banner
+        if ($errTrimmed -notmatch '^Windows PowerShell' -and $errTrimmed -notmatch '^PowerShell 7') {
+            throw "Unexpected stderr content: $errTrimmed"
+        }
+    }
+
+    # 解析并比较参数
     try {
         $receivedArgs = $capturedResult.Output.Trim() | ConvertFrom-Json
     }
@@ -474,18 +507,17 @@ $ArgsList | ConvertTo-Json -Compress
         throw "Failed to parse JSON output: $($_.Exception.Message). Raw: [$($capturedResult.Output)]"
     }
 
-    # 预期参数
     $expectedArgs = @(
         "normal"
         "alpha beta"
-        "Chinese-params-test"
+        "Chinese params with spaces"
         'arg-with-"embedded-quotes"'
         "trail\"
         ""
     )
 
     if ($receivedArgs.Count -ne $expectedArgs.Count) {
-        throw "Argument count mismatch: expected $($expectedArgs.Count), got $($receivedArgs.Count). Received: $($receivedArgs -join ' | ')"
+        throw "Argument count mismatch: expected $($expectedArgs.Count), got $($receivedArgs.Count)"
     }
 
     for ($i = 0; $i -lt $expectedArgs.Count; $i++) {
@@ -494,25 +526,57 @@ $ArgsList | ConvertTo-Json -Compress
         }
     }
 
-    Write-Host "[check]   normal arg OK"
-    Write-Host "[check]   space arg OK"
-    Write-Host "[check]   Chinese arg OK"
-    Write-Host "[check]   embedded-quote arg OK"
-    Write-Host "[check]   trailing-backslash arg OK"
-    Write-Host "[check]   empty-string arg OK"
+    Write-Host "[check]   A1 normal arg OK"
+    Write-Host "[check]   A2 space arg OK"
+    Write-Host "[check]   A3 Chinese arg OK"
+    Write-Host "[check]   A4 embedded-quote arg OK"
+    Write-Host "[check]   A5 trailing-backslash arg OK"
+    Write-Host "[check]   A6 empty-string arg OK"
+    Write-Host "[check]   A7 Success/ExitCode/TimedOut OK"
+    Write-Host "[check]   A8 temp file cleanup OK"
 
-    # 验证测试未修改真实 settings.json
-    $realSettingsPath = Join-Path ([System.Environment]::GetFolderPath('UserProfile')) ".claude\settings.json"
-    if (Test-Path $realSettingsPath) {
-        $realSettingsBefore = (Get-FileHash $realSettingsPath -Algorithm SHA256).Hash
-        $realSettingsAfter = (Get-FileHash $realSettingsPath -Algorithm SHA256).Hash
-        if ($realSettingsBefore -ne $realSettingsAfter) {
-            throw "arg escape test modified real settings.json"
-        }
+    # === 测试 B：空参数列表 ===
+    $emptyArgsScriptPath = Join-Path $argTestDir "empty-args-test.ps1"
+    @'
+Write-Output "no-args-ok"
+[Environment]::Exit(0)
+'@ | Set-Content -LiteralPath $emptyArgsScriptPath -Encoding UTF8
+
+    $emptyResult = Invoke-InstallCommandCaptured -FilePath "powershell.exe" `
+        -Arguments @("-NoProfile", "-File", $emptyArgsScriptPath) `
+        -TimeoutSec 30 `
+        -HeartbeatSec 60 `
+        -FriendlyName "empty-args-test" `
+        -StartMessage ""
+
+    if (-not $emptyResult.Success) {
+        throw "Empty args test: Success should be true, was $($emptyResult.Success)"
     }
+    if ($emptyResult.ExitCode -ne 0) {
+        throw "Empty args test: ExitCode should be 0, was $($emptyResult.ExitCode)"
+    }
+    if ($emptyResult.TimedOut) {
+        throw "Empty args test: TimedOut should be false"
+    }
+    if ($emptyResult.Output.Trim() -ne "no-args-ok") {
+        throw "Empty args test: unexpected output: $($emptyResult.Output)"
+    }
+    if ($emptyResult.StdOutPath -and (Test-Path $emptyResult.StdOutPath)) {
+        throw "Empty args test: StdOut temp file not cleaned"
+    }
+    if ($emptyResult.StdErrPath -and (Test-Path $emptyResult.StdErrPath)) {
+        throw "Empty args test: StdErr temp file not cleaned"
+    }
+
+    Write-Host "[check]   B1 empty-args Success/ExitCode/TimedOut OK"
+    Write-Host "[check]   B2 empty-args temp file cleanup OK"
 }
 finally {
     Remove-Item -Path $argTestRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+# 验证测试目录被清理
+if (Test-Path $argTestRoot) {
+    throw "Test directory not cleaned: $argTestRoot"
 }
 Write-Host "[check] Invoke-InstallCommandCaptured argument escaping OK"
 
@@ -3711,7 +3775,8 @@ if ($capturedFuncBody -notmatch '内部异常，正在终止子进程树') {
 }
 
 # U. Invoke-InstallCommandCaptured must NOT pass bare $Arguments array to Start-Process
-#    (v1.3.3 fix: array gets re-joined by PS5.1 Start-Process, breaking args with spaces/Chinese)
+#    (v1.3.3 fix: array gets re-joined by PS5.1 Start-Process, breaking args with spaces/Chinese;
+#     now uses cmd.exe wrapper + ConvertTo-CommandLine for reliable exit code capture)
 if ($capturedFuncBody -match '-ArgumentList\s+\$Arguments\b') {
     throw "Invoke-InstallCommandCaptured must NOT use -ArgumentList `$Arguments (bare array); use ConvertTo-CommandLine for proper Windows command-line escaping"
 }
@@ -3721,14 +3786,14 @@ if ($capturedFuncBody -notmatch 'ConvertTo-CommandLine') {
     throw "Invoke-InstallCommandCaptured must call ConvertTo-CommandLine to escape arguments before Start-Process"
 }
 
-# W. Invoke-InstallCommandCaptured must conditionally pass ArgumentList (skip when empty)
-if ($capturedFuncBody -notmatch '\$Arguments\.Count\s+-gt\s+0') {
-    throw "Invoke-InstallCommandCaptured must check Arguments.Count before passing ArgumentList (empty args should skip ArgumentList)"
+# W. Invoke-InstallCommandCaptured must use cmd.exe /c wrapper for reliable ExitCode (PS5.1)
+if ($capturedFuncBody -notmatch '(?s)cmd\.exe.*!ERRORLEVEL!') {
+    throw "Invoke-InstallCommandCaptured must use cmd.exe wrapper with !ERRORLEVEL! for reliable exit code capture on PS5.1"
 }
 
-# X. Invoke-InstallCommandCaptured must use splatting (@startParams) not inline params
-if ($capturedFuncBody -notmatch 'Start-Process\s+@startParams') {
-    throw "Invoke-InstallCommandCaptured must use Start-Process @startParams (splatting) to conditionally include ArgumentList"
+# X. Invoke-InstallCommandCaptured must read exit code from temp file
+if ($capturedFuncBody -notmatch 'ccdi_captured_exit_.*\.tmp') {
+    throw "Invoke-InstallCommandCaptured must capture exit code from ccdi_captured_exit_*.tmp file"
 }
 
 # H. 全仓库禁止旧等待句
@@ -5051,5 +5116,27 @@ if (Test-Path $releaseZip) {
 else {
     Write-Host "[check] Release ZIP 未找到，跳过 ZIP 内容检查"
 }
+
+# 验证真实 settings.json 在全部测试后未变
+$realSettingsAfterExists = Test-Path $realSettingsPath
+$realSettingsAfterHash = if ($realSettingsAfterExists) {
+    (Get-FileHash $realSettingsPath -Algorithm SHA256).Hash
+} else { $null }
+$realSettingsAfterLength = if ($realSettingsAfterExists) {
+    (Get-Item $realSettingsPath).Length
+} else { 0 }
+
+if ($realSettingsBeforeExists -ne $realSettingsAfterExists) {
+    throw "Real settings.json existence changed during tests: before=$realSettingsBeforeExists, after=$realSettingsAfterExists"
+}
+if ($realSettingsBeforeExists -and $realSettingsAfterExists) {
+    if ($realSettingsBeforeHash -ne $realSettingsAfterHash) {
+        throw "Real settings.json SHA256 changed during tests: before=$realSettingsBeforeHash, after=$realSettingsAfterHash"
+    }
+    if ($realSettingsBeforeLength -ne $realSettingsAfterLength) {
+        throw "Real settings.json length changed during tests: before=$realSettingsBeforeLength, after=$realSettingsAfterLength"
+    }
+}
+Write-Host "[check] Real settings.json unchanged: Exists=$realSettingsAfterExists, Hash=$realSettingsAfterHash, Length=$realSettingsAfterLength"
 
 Write-Host "[check] OK"
