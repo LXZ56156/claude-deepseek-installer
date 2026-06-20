@@ -2941,6 +2941,34 @@ x-api-key: $TestApiKey
         $commonText44 -match 'Join-Path\s+\$env:CCDI_TEST_ARTIFACT_ROOT\s+"backup"'
     } "配置测试仍可能向仓库 backup 写入"
 
+    # ============================================================
+    # 44i. validate preflight cleanup 防回归（git 检查/try 内快照/cleanup catch/TestForcePreflightFailure）
+    # ============================================================
+    Assert "44i-1: git 检查在 try 内，用 throw 而非 exit" {
+        $validateText44 -match 'if\s*\(\s*-not\s*\$gitAvailable\s*\)\s*\{\s*throw\s+"git is not available' -and
+        $validateText44 -notmatch '\$gitAvailable\s*=\s*\$null\s*-ne\s*\(Get-Command\s+"git".*\n\s*if\s*\(\s*-not\s*\$gitAvailable\s*\)\s*\{\s*\n\s*Write-Host.*ERROR.*git is not available'
+    } "validate.ps1 git 检查必须在 try 内使用 throw，禁止在 try 外 exit 1"
+    Assert "44i-2: beforeArtifacts 赋值在主 try 内" {
+        $validateText44 -notmatch '\$beforeArtifacts\s*=\s*Get-RepositoryArtifactSnapshot\s*\n\s*\n\s*try' -and
+        $validateText44 -match 'try\s*\{[\s\S]{0,500}\$beforeArtifacts\s*=\s*Get-RepositoryArtifactSnapshot'
+    } "validate.ps1 beforeArtifacts 必须在 try 内赋值，禁止在 try 前"
+    Assert "44i-3: RunRoot 创建后无 try 外的 exit 1" {
+        $validateText44 -notmatch '\$script:RunRoot\s*=\s*Join-Path[\s\S]{0,2000}exit\s+1[\s\S]{0,500}try\s*\{'
+    } "validate.ps1 RunRoot 创建后禁止在 try 外使用 exit 1"
+    Assert "44i-4: 成功 cleanup 使用独立 try/catch" {
+        $validateText44 -match 'if\s*\(\s*\$validationExitCode\s+-eq\s+0\s*\)\s*\{\s*[\s\S]{0,100}try\s*\{'
+    } "validate.ps1 成功清理必须使用独立 try/catch"
+    Assert "44i-5: cleanup 失败设置 validationExitCode=1" {
+        $validateText44 -match 'catch\s*\{[\s\S]{0,100}\$validationExitCode\s*=\s*1'
+    } "validate.ps1 cleanup catch 必须设置 validationExitCode=1"
+    Assert "44i-6: 所有失败路径输出 preserved at" {
+        ([regex]::Matches($validateText44, 'Validation artifacts preserved at:')).Count -ge 2
+    } "validate.ps1 至少两个 'Validation artifacts preserved at:' 出现点（catch 块 + cleanup 失败）"
+    Assert "44i-7: TestForcePreflightFailure 存在且在 try 内" {
+        $validateText44 -match 'TestForcePreflightFailure' -and
+        $validateText44 -match 'if\s*\(\s*\$TestForcePreflightFailure\s*\)\s*\{\s*throw\s+"Intentional preflight failure'
+    } "validate.ps1 必须定义 TestForcePreflightFailure 参数并在 try 内抛出测试异常"
+
     Write-Host ""
 
     # ============================================================

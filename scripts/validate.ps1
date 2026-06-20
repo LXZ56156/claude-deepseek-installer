@@ -30,7 +30,9 @@ param(
 
     [switch]$RequireClean,
 
-    [switch]$TestForceFailure
+    [switch]$TestForceFailure,
+
+    [switch]$TestForcePreflightFailure
 )
 
 Set-StrictMode -Version Latest
@@ -57,13 +59,6 @@ foreach ($childDir in @("logs", "reports", "doctor", "children", "backup", "sand
     New-Item -ItemType Directory -Path (Join-Path $script:RunRoot $childDir) -Force | Out-Null
 }
 Write-Host "[validate] Validation artifact root: $script:RunRoot"
-
-# git 可用性检查
-$gitAvailable = $null -ne (Get-Command "git" -ErrorAction SilentlyContinue)
-if (-not $gitAvailable) {
-    Write-Host "[validate] ERROR: git is not available. Validation cannot proceed." -ForegroundColor Red
-    exit 1
-}
 
 # RequireClean 逻辑
 $requireCleanForRun = $RequireClean -or ($Mode -eq "All")
@@ -525,9 +520,22 @@ function Assert-RepositoryArtifactsUnchanged {
 
 $validationExitCode = 1
 $beforeSettings = $null
-$beforeArtifacts = Get-RepositoryArtifactSnapshot
+$beforeArtifacts = $null
 try {
+    # Git 可用性检查（必须在 try 内，确保异常能被 catch 捕获并保留 RunRoot）
+    $gitAvailable = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
+    if (-not $gitAvailable) {
+        throw "git is not available. Validation cannot proceed."
+    }
+
+    $beforeArtifacts = Get-RepositoryArtifactSnapshot
     $beforeSettings = Get-RealSettingsSnapshot
+
+    # 测试专用：前置快照阶段抛出异常，验证 RunRoot 保留逻辑
+    if ($TestForcePreflightFailure) {
+        throw "Intentional preflight failure requested by -TestForcePreflightFailure"
+    }
+
     Write-Host "[validate] Mode=$Mode Version=$Version Branch=$(git branch --show-current) RequireClean=$requireCleanForRun"
     Write-Host "[validate] Real settings baseline: Exists=$($beforeSettings.Exists) Length=$($beforeSettings.Length) SHA256=$($beforeSettings.SHA256)"
 
@@ -615,9 +623,18 @@ finally {
     if ($script:OldArtifactRoot) { $env:CCDI_TEST_ARTIFACT_ROOT = $script:OldArtifactRoot } else { Remove-Item Env:\CCDI_TEST_ARTIFACT_ROOT -ErrorAction SilentlyContinue }
 
     if ($validationExitCode -eq 0) {
-        Remove-Item -LiteralPath $script:RunRoot -Recurse -Force -ErrorAction Stop
-        if (Test-Path -LiteralPath $script:RunRoot) { throw "Validation artifact cleanup failed: $script:RunRoot" }
-        Write-Host "Validation artifacts cleaned."
+        try {
+            Remove-Item -LiteralPath $script:RunRoot -Recurse -Force -ErrorAction Stop
+            if (Test-Path -LiteralPath $script:RunRoot) {
+                throw "RunRoot still exists after cleanup"
+            }
+            Write-Host "Validation artifacts cleaned."
+        }
+        catch {
+            $validationExitCode = 1
+            Write-Host "Validation artifact cleanup failed: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "Validation artifacts preserved at: $script:RunRoot" -ForegroundColor Yellow
+        }
     }
     else {
         Write-Host "Validation artifacts preserved at: $script:RunRoot" -ForegroundColor Yellow

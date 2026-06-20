@@ -1213,6 +1213,52 @@ if ($validateText -notmatch 'Validation artifacts cleaned\.') { throw "validate 
 if ($validateText -notmatch 'Validation artifacts preserved at:') { throw "validate failure must report preserved RunRoot" }
 if ($validateText -notmatch 'Remove-Item\s+-LiteralPath\s+\$script:RunRoot\s+-Recurse') { throw "validate success must remove RunRoot" }
 
+# 18h. validate.ps1 preflight cleanup regression guards
+# Git check must be inside main try, not before it
+if ($validateText -match 'Write-Host\s+"\[validate\] Validation artifact root:.*\n\s*\n\s*\$gitAvailable') {
+    throw "validate.ps1 git check must be inside the main try block, not before it"
+}
+if ($validateText -notmatch 'if\s*\(\s*-not\s*\$gitAvailable\s*\)\s*\{\s*throw\s+"git is not available') {
+    throw "validate.ps1 git check must throw (not exit) inside the main try block"
+}
+# beforeArtifacts assignment must be inside try
+if ($validateText -match '\$beforeArtifacts\s*=\s*Get-RepositoryArtifactSnapshot\s*\n\s*\n\s*try') {
+    throw "validate.ps1 beforeArtifacts snapshot must be inside the main try block, not before it"
+}
+if ($validateText -notmatch 'try\s*\{[\s\S]{0,300}\$beforeArtifacts\s*=\s*Get-RepositoryArtifactSnapshot') {
+    throw "validate.ps1 beforeArtifacts assignment must be inside main try block"
+}
+# No exit 1 after RunRoot creation outside try
+# (Check that there are no exit/throw statements between RunRoot creation and try block)
+if ($validateText -match '\$script:RunRoot\s*=\s*Join-Path[\s\S]{0,1500}exit\s+1[\s\S]{0,500}try\s*\{') {
+    throw "validate.ps1 must not have exit 1 between RunRoot creation and main try block"
+}
+# cleanup must have independent try/catch
+if ($validateText -notmatch 'if\s*\(\s*\$validationExitCode\s+-eq\s+0\s*\)\s*\{\s*[\s\S]{0,100}try\s*\{') {
+    throw "validate.ps1 success cleanup must use independent try/catch"
+}
+# cleanup failure must set validationExitCode=1
+if ($validateText -notmatch 'catch\s*\{[\s\S]{0,100}\$validationExitCode\s*=\s*1') {
+    throw "validate.ps1 cleanup catch must set validationExitCode=1"
+}
+# All failure paths must output "preserved at"
+if ($validateText -match 'catch\s*\{[\s\S]{0,200}\}(?![\s\S]*Validation artifacts preserved at:)') {
+    throw "validate.ps1 all failure paths must output 'Validation artifacts preserved at:'"
+}
+# TestForcePreflightFailure must exist and be inside try
+if ($validateText -notmatch 'TestForcePreflightFailure') {
+    throw "validate.ps1 must define -TestForcePreflightFailure parameter"
+}
+if ($validateText -notmatch 'if\s*\(\s*\$TestForcePreflightFailure\s*\)\s*\{\s*throw\s+"Intentional preflight failure') {
+    throw "validate.ps1 TestForcePreflightFailure check must be inside main try block"
+}
+# validate failure paths must all output "Validation artifacts preserved at:"
+# Verify both the catch block and the cleanup failure catch output it
+$preservedCount = ([regex]::Matches($validateText, 'Validation artifacts preserved at:')).Count
+if ($preservedCount -lt 2) {
+    throw "validate.ps1 must have at least 2 'Validation artifacts preserved at:' occurrences (catch + cleanup failure)"
+}
+
 $doctorArtifactText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
 if ($doctorArtifactText -notmatch 'CCDI_TEST_MODE\s+-eq\s+"1".*CCDI_TEST_ARTIFACT_ROOT') { throw "doctor test artifacts must require test mode and ArtifactRoot" }
 if ($doctorArtifactText -notmatch 'DoctorOutputRoot\s*=\s*\$ScriptDir') { throw "doctor normal mode must default artifacts to ScriptDir" }
