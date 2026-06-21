@@ -2815,8 +2815,8 @@ x-api-key: $TestApiKey
         $allBuyerContent40 += (Get-Content $f.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)
     }
 
-    Assert "40a: 买家文档包含 '优先发送 support-feedback.txt'" {
-        $allBuyerContent40 -match '优先发送 support-feedback\.txt'
+    Assert "40a: 买家文档明确优先发送 support-feedback.txt" {
+        $allBuyerContent40 -match '优先发送[^\r\n]*support-feedback\.txt'
     } "买家文档必须引导优先发送 support-feedback.txt"
 
     Assert "40b: 买家文档包含 '不要发送完整 API Key' 安全警告" {
@@ -2914,10 +2914,15 @@ x-api-key: $TestApiKey
         }
 
         if ($content41 -notmatch '不主动读取或输出' -or $content41 -notmatch '\.env' -or
-            $content41 -notmatch 'settings\.json' -or $content41 -notmatch 'credentials' -or
+            $content41 -notmatch 'credentials' -or
             $content41 -notmatch '生产环境配置' -or $content41 -notmatch '客户隐私数据' -or
-            $content41 -notmatch '说明原因并等待确认' -or $content41 -notmatch '字段名称、结构' -or
-            $content41 -notmatch '不要让我粘贴完整敏感文件') {
+            $content41 -notmatch '%USERPROFILE%\\\.claude\\settings\.json 默认敏感' -or
+            $content41 -notmatch '禁止完整读取或输出' -or
+            $content41 -notmatch '其他 settings\.json 先判断用途' -or
+            $content41 -notmatch '普通编辑器设置可以只读检查' -or
+            $content41 -notmatch '可能含凭据时先说明原因并等待确认' -or
+            $content41 -notmatch '字段名称、结构或脱敏值' -or
+            $content41 -notmatch '不要求我粘贴完整文件') {
             $sensitiveReadBoundaryOk41 = $false
             [void]$promptFailureDetails41.Add("$($f.Name): 敏感文件读取边界不完整")
         }
@@ -3215,8 +3220,8 @@ x-api-key: $TestApiKey
     $content04 = Get-Content (Join-Path $ScriptRoot "04-常见问题和售后.txt") -Raw -Encoding UTF8
     $hasSupportFeedback45l = $content04 -match 'support-feedback\.txt'
     $hasReport45l = $content04 -match 'report\.txt'
-    $supportPreferred45l = $content04 -match '优先发送 support-feedback\.txt'
-    $reportFallback45l = $content04 -match '没有 support-feedback\.txt.*report\.txt|没有 support-feedback\.txt.*\r?\n.*report\.txt'
+    $supportPreferred45l = $content04 -match '优先发送[^\r\n]*support-feedback\.txt'
+    $reportFallback45l = $content04 -match 'support-feedback\.txt[^\r\n]*(如果没有|不存在)[^\r\n]*report\.txt'
     $noFullKey45l = $content04 -match '不要发送完整 API Key'
     $noSettings45l = $content04 -match '不要发送 settings\.json'
     $noBackup45l = $content04 -match '不要发送以下目录或文件[\s\S]*backup/'
@@ -3333,6 +3338,14 @@ x-api-key: $TestApiKey
         $readmeText45 -match '命令输出' -and $readmeText45 -match '工具结果' -and
         $readmeText45 -match '可能.*发送到配置的 API 地址'
     } "README 必须说明提示词、相关项目内容、命令输出和工具结果可能发送到配置的 API"
+    Assert "45z-1: README 明确否定整个项目必然上传" {
+        $readmeText45 -match '不(表示|代表).*整个项目.*(一定|全部).*上传'
+    } "README 必须明确写明不表示或不代表整个项目一定/全部上传"
+    Assert "45z-2: 售后和高级命令定位到工具解压目录" {
+        $readmeText45 -match '本工具解压目录.*一键诊断\.cmd.*同一个文件夹' -and
+        $readmeText45 -notmatch '项目根目录' -and
+        $content04 -match '本工具解压目录' -and $content04 -match '与 一键诊断\.cmd 同一个文件夹'
+    } "README 和 04 必须说明文件位于本工具解压目录，即与一键诊断.cmd同文件夹"
 
     Assert "45aa: 00 推荐任务类型并回到 03 选择" {
         $promptMap45['00-先用这个-检查环境和项目.txt'] -match '下一步任务类型' -and
@@ -3345,6 +3358,11 @@ x-api-key: $TestApiKey
         $promptMap45['03-微信小程序开发.txt'] -match '不等同于 AppSecret' -and
         $promptMap45['03-微信小程序开发.txt'] -match '对外报告或截图应脱敏'
     } "微信模板必须区分 AppID 与 AppSecret 并说明对外脱敏"
+    Assert "45ac: 07 先读非敏感配置，敏感值先确认" {
+        $promptMap45['07-生成README和使用说明.txt'] -notmatch '读取.*真实配置' -and
+        $promptMap45['07-生成README和使用说明.txt'] -match '读取.*非敏感配置.*配置示例.*字段结构' -and
+        $promptMap45['07-生成README和使用说明.txt'] -match '可能包含密钥或隐私数据时，停止读取值.*等待确认'
+    } "07 必须先读非敏感配置与字段结构，发现敏感值后停止并等待确认"
 
     Write-Host ""
 

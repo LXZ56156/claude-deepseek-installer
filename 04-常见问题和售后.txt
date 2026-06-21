@@ -95,8 +95,8 @@ API 错误不等于安装失败。Claude Code 能启动，说明安装部分可�
 
    一键诊断.cmd
 
-第四步：只发送项目根目录的售后文件。优先发送 support-feedback.txt。
-如果项目根目录没有 support-feedback.txt，再发送项目根目录的 report.txt 作为备用。
+第四步：只发送本工具解压目录中的售后文件，也就是与 一键诊断.cmd 同一个文件夹。
+优先发送该文件夹中的 support-feedback.txt；如果没有，再发送同一文件夹中的 report.txt 作为备用。
 
 不要只发截图，截图只能作为补充。发送截图前检查是否包含完整 Key。
 

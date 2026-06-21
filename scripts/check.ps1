@@ -5323,7 +5323,7 @@ $doc02 = Get-Content (Join-Path $RootDir "02-安装完成后怎么开始使用.t
 $doc04 = Get-Content (Join-Path $RootDir "04-常见问题和售后.txt") -Raw -Encoding UTF8
 if ($doc01 -notmatch '02-安装完成后怎么开始使用\.txt\s*$') { throw "01 文档末尾必须把 02 作为唯一主要下一步" }
 if ($doc02 -notmatch '03-常用提示词模板\.txt\s*$') { throw "02 文档末尾必须把 03 作为唯一主要下一步" }
-if ($doc04 -notmatch '(?s)不要重复安装.*一键修复依赖\.cmd.*一键诊断\.cmd.*优先发送 support-feedback\.txt.*没有 support-feedback\.txt.*report\.txt') {
+if ($doc04 -notmatch '(?s)不要重复安装.*一键修复依赖\.cmd.*一键诊断\.cmd.*优先发送[^\r\n]*support-feedback\.txt.*(如果没有|不存在)[^\r\n]*report\.txt') {
     throw "04 文档售后分流顺序不完整或不正确"
 }
 foreach ($requiredCode in @('400', '401', '402', '422', '429', '500', '503')) {
@@ -5332,9 +5332,12 @@ foreach ($requiredCode in @('400', '401', '402', '422', '429', '500', '503')) {
 foreach ($forbiddenSend in @('完整 API Key', 'settings.json', 'backup/', 'logs/', 'reports/ 目录中的任何文件', '私钥', '密码', 'Cookie')) {
     if ($doc04 -notmatch [regex]::Escape($forbiddenSend)) { throw "04 文档缺少禁止发送项: $forbiddenSend" }
 }
-if ($doc04 -notmatch '优先发送 support-feedback\.txt' -or
-    $doc04 -notmatch '没有 support-feedback\.txt.*report\.txt|没有 support-feedback\.txt.*\r?\n.*report\.txt') {
+if ($doc04 -notmatch '优先发送[^\r\n]*support-feedback\.txt' -or
+    $doc04 -notmatch 'support-feedback\.txt[^\r\n]*(如果没有|不存在)[^\r\n]*report\.txt') {
     throw "04 文档必须明确 support-feedback 优先、report 仅作备用"
+}
+if ($doc04 -notmatch '本工具解压目录' -or $doc04 -notmatch '与 一键诊断\.cmd 同一个文件夹') {
+    throw "04 文档必须说明售后文件位于本工具解压目录，即与一键诊断.cmd同一个文件夹"
 }
 if ($doc04 -notmatch '不要只发截图' -or $doc04 -notmatch '截图只能作为补充') { throw "04 文档必须说明截图只能作为补充" }
 Write-Host "[check]   4j. 主文档职责链和售后分流 OK"
@@ -5362,10 +5365,15 @@ foreach ($name in $actualTemplateNames) {
         throw "模板 $name 缺少敏感信息保护规则"
     }
     if ($content -notmatch '不主动读取或输出' -or $content -notmatch '\.env' -or
-        $content -notmatch 'settings\.json' -or $content -notmatch 'credentials' -or
+        $content -notmatch 'credentials' -or
         $content -notmatch '生产环境配置' -or $content -notmatch '客户隐私数据' -or
-        $content -notmatch '说明原因并等待确认' -or $content -notmatch '字段名称、结构' -or
-        $content -notmatch '不要让我粘贴完整敏感文件') {
+        $content -notmatch '%USERPROFILE%\\\.claude\\settings\.json 默认敏感' -or
+        $content -notmatch '禁止完整读取或输出' -or
+        $content -notmatch '其他 settings\.json 先判断用途' -or
+        $content -notmatch '普通编辑器设置可以只读检查' -or
+        $content -notmatch '可能含凭据时先说明原因并等待确认' -or
+        $content -notmatch '字段名称、结构或脱敏值' -or
+        $content -notmatch '不要求我粘贴完整文件') {
         throw "模板 $name 缺少敏感文件读取必要性、确认、脱敏或禁止粘贴规则"
     }
 }
@@ -5412,8 +5420,15 @@ Write-Host "[check]   4m. 专项模板产品边界 OK"
 
 # 2q. 本轮定向文档修正：数据流、系统要求、模板选择和官方链接
 if ($readmeText -notmatch '内存.*4\s*GB|4\s*GB.*内存') { throw "README.md 缺少 4 GB 物理内存要求" }
-foreach ($dataFlowTerm in @('不是本地大模型', '本地配置.*不等于模型推理', '提示词', '项目内容', '命令输出', '工具结果', '可能.*发送到配置的 API 地址', '整个项目一定会上传', '自定义 Base URL', '数据政策', '隐私政策和服务条款')) {
+foreach ($dataFlowTerm in @('不是本地大模型', '本地配置.*不等于模型推理', '提示词', '项目内容', '命令输出', '工具结果', '可能.*发送到配置的 API 地址', '自定义 Base URL', '数据政策', '隐私政策和服务条款')) {
     if ($readmeText -notmatch $dataFlowTerm) { throw "README.md 数据流说明缺少: $dataFlowTerm" }
+}
+if ($readmeText -notmatch '不(表示|代表).*整个项目.*(一定|全部).*上传') {
+    throw "README.md 必须明确否定整个项目一定或全部上传"
+}
+if ($readmeText -notmatch '本工具解压目录.*一键诊断\.cmd.*同一个文件夹' -or
+    $readmeText -match '项目根目录') {
+    throw "README.md 售后和高级命令必须定位到本工具解压目录，即一键诊断.cmd同文件夹"
 }
 if ($readmeText -match '(?im)^.*Git 不是 Claude Code 基础启动') { throw "README.md 不得保留独立 Git 推荐段落" }
 if ($readmeText -notmatch 'https://code\.claude\.com/docs/en/overview') { throw "README.md Claude Code 官方链接不是当前规范地址" }
@@ -5426,6 +5441,11 @@ if ($prompt00 -notmatch '下一步任务类型' -or $prompt00 -notmatch '回到 
 $prompt07 = $promptContents['07-生成README和使用说明.txt']
 foreach ($term in @('目标文档名称、读者和用途', 'README.md', '安装说明', '使用说明', '配置说明', '常见问题', '用户明确指定的其他文档', '创建或修改目标文档', '不要修改用户没有指定的其他文档')) {
     if ($prompt07 -notmatch [regex]::Escape($term)) { throw "07 模板目标文档规则缺少: $term" }
+}
+if ($prompt07 -match '读取.*真实配置' -or
+    $prompt07 -notmatch '读取.*非敏感配置.*配置示例.*字段结构' -or
+    $prompt07 -notmatch '可能包含密钥或隐私数据时，停止读取值.*等待确认') {
+    throw "07 模板必须先读取非敏感配置和字段结构，遇到敏感值时停止并确认"
 }
 Write-Host "[check]   4n. 数据流、4 GB、任务类型、目标文档和官方链接 OK"
 

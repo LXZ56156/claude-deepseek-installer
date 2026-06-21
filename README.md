@@ -109,11 +109,11 @@ Windows 和 WSL 是两套独立环境，软件、命令路径和配置不会自�
 
 安装结果以后验验证为准，安装包 ExitCode 不直接决定成败。工具会结合命令可用性和 fresh shell（新开 PowerShell）验证判断结果；网络或备用安装方式的内部细节不需要普通买家手动处理。
 
-售后只发送项目根目录的必要脱敏文件：优先发送 `support-feedback.txt`；如果没有，再发送项目根目录的 `report.txt`。不要发送 `backup/`、`logs/`、`reports/` 目录中的任何文件、`settings.json`、完整 API Key、私钥、密码、Cookie 或其他敏感文件。如果截图，请先确认截图里没有完整 API Key。
+售后只发送本工具解压目录中的必要脱敏文件，也就是与 `一键诊断.cmd` 同一个文件夹：优先发送 `support-feedback.txt`；如果没有，再发送同一文件夹中的 `report.txt`。不要发送 `backup/`、`logs/`、`reports/` 目录中的任何文件、`settings.json`、完整 API Key、私钥、密码、Cookie 或其他敏感文件。如果截图，请先确认截图里没有完整 API Key。
 
 ## 高级命令行用法
 
-普通买家优先使用 `.cmd` 入口。需要明确控制时，可在项目根目录运行：
+普通买家优先使用 `.cmd` 入口。需要明确控制时，可在本工具解压目录，也就是与 `一键诊断.cmd` 同一个文件夹运行：
 
 ```powershell
 # 主菜单
