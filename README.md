@@ -39,6 +39,7 @@ Windows 10/11 上的 Claude Code 安装、DeepSeek API 本地配置、诊断、�
 - Windows 10 1809 或更高版本，或 Windows 11。
 - x64 或 ARM64 系统。
 - PowerShell 5.1 或更高版本。
+- 物理内存 4 GB 以上。
 - 可用网络连接。
 - 用户自己的 DeepSeek API Key。
 - WSL 功能仅供需要 Ubuntu 20.04 或更高版本环境的高级用户使用。
@@ -92,12 +93,12 @@ lib/
 
 ## 安全与数据流
 
-1. API Key 由用户在本机输入，输入时不回显。
-2. 配置写入 `%USERPROFILE%\.claude\settings.json`，修改前会在工具的运行目录中创建备份。
-3. 不要发送完整 API Key，也不要发送 `settings.json`；完整 Key 不应出现在日志、诊断报告或售后材料中。
-4. Key 不会发送到卖家服务器或项目作者服务器。
-5. 用户主动进行 API 测试或使用 Claude Code 时，请求会携带 Key 发往配置的 API 地址；默认地址属于 DeepSeek 官方 API。
-6. 如果用户自行设置自定义 Base URL，Key 会发送到该地址，用户应自行确认其可信性。
+1. 本工具只负责在本机安装 Claude Code 和写入配置，不是本地大模型；“本地配置”不等于模型推理在本机运行。
+2. API Key 由用户在本机输入，输入时不回显。配置写入 `%USERPROFILE%\.claude\settings.json`，修改前会在工具的运行目录中创建备份。
+3. 使用 Claude Code 时，用户输入的提示词，以及 Claude Code 为完成任务选择、读取或提供给模型的相关代码、项目内容、命令输出、错误信息和工具结果，可能作为模型请求的一部分发送到配置的 API 地址。这不表示整个项目一定会上传。
+4. 默认 API 地址是本工具当前配置的 DeepSeek 官方 API 地址。如果用户设置自定义 Base URL，相关请求内容和 API Key 都会发送到该自定义地址；用户必须自行确认其可信性和数据政策。
+5. 安装工具不会把 API Key、项目代码或诊断材料上传到卖家服务器或项目作者服务器，但卖家和作者不能控制 DeepSeek 或其他模型提供者如何处理请求。请求的存储和处理以模型提供者的隐私政策和服务条款为准。
+6. 不要让 AI 读取或处理不必要的密钥、凭据、隐私数据和生产数据。不要发送完整 API Key，也不要发送 `settings.json`。
 7. 默认以普通用户身份运行。只有 Windows 对某个系统安装器明确弹出 UAC 时，用户才应核对文件和操作后决定是否允许；管理员权限不是通用修复方案。
 
 ## Windows 与 WSL
@@ -108,7 +109,7 @@ Windows 和 WSL 是两套独立环境，软件、命令路径和配置不会自�
 
 安装结果以后验验证为准，安装包 ExitCode 不直接决定成败。工具会结合命令可用性和 fresh shell（新开 PowerShell）验证判断结果；网络或备用安装方式的内部细节不需要普通买家手动处理。
 
-售后材料只发送必要的脱敏文件：优先发送 `support-feedback.txt`；不要发送 backup、logs、reports/full-report-*、settings.json 或完整 API Key。如果截图，请先确认截图里没有完整 API Key。
+售后只发送项目根目录的必要脱敏文件：优先发送 `support-feedback.txt`；如果没有，再发送项目根目录的 `report.txt`。不要发送 `backup/`、`logs/`、`reports/` 目录中的任何文件、`settings.json`、完整 API Key、私钥、密码、Cookie 或其他敏感文件。如果截图，请先确认截图里没有完整 API Key。
 
 ## 高级命令行用法
 
@@ -137,8 +138,6 @@ WSL 中可运行：
 bash ./install_wsl.sh
 ```
 
-Git 不是 Claude Code 基础启动的强制依赖，也不会进入本工具的安装主流程。它是项目克隆、版本管理、查看改动和安全回退时强烈推荐的开发工具，应由用户确认后单独安装和配置。
-
 ## 免责声明
 
 本项目按现状提供。用户应自行保管账号、API Key 和项目数据，并对 API 费用、账户状态、网络环境、自定义地址及执行第三方命令的风险负责。Claude、Claude Code 和 DeepSeek 的服务能力、价格、限制与可用性以各自官方信息为准。
@@ -149,7 +148,7 @@ Git 不是 Claude Code 基础启动的强制依赖，也不会进入本工具的
 
 ## 官方链接
 
-- [Claude Code 官方文档](https://docs.anthropic.com/en/docs/claude-code/overview)
+- [Claude Code 官方文档](https://code.claude.com/docs/en/overview)
 - [DeepSeek API 官方文档](https://api-docs.deepseek.com/)
 - [PowerShell 官方文档](https://learn.microsoft.com/powershell/)
 - [WSL 官方文档](https://learn.microsoft.com/windows/wsl/)

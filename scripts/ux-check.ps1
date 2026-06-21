@@ -1142,7 +1142,7 @@ x-api-key: $TestApiKey
     # --- 23g: 文档售后模板检查 ---
     Assert "README.md 包含统一售后安全提示" {
         $readmeText -match 'support-feedback\.txt' -and
-        $readmeText -match '不要发送 backup.*logs.*reports/full-report' -and
+        $readmeText -match '不要发送.*backup.*logs.*reports/.*目录中的任何文件' -and
         $readmeText -match '不要发送完整 API Key' -and
         $readmeText -match '如果截图，请先确认截图里没有完整 API Key'
     } "README.md 必须包含统一售后安全提示模板"
@@ -2873,6 +2873,8 @@ x-api-key: $TestApiKey
     $fourStagesOk41 = $true
     $sensitiveInfoOk41 = $true
     $planConfirmOk41 = $true
+    $conditionalPlanOk41 = $true
+    $sensitiveReadBoundaryOk41 = $true
     $executionEvidenceOk41 = $true
     $promptFailureDetails41 = New-Object System.Collections.Generic.List[string]
 
@@ -2897,10 +2899,27 @@ x-api-key: $TestApiKey
             [void]$promptFailureDetails41.Add("$($f.Name): 敏感信息保护不完整")
         }
 
-        if ($content41 -notmatch '准备修改的文件' -or $content41 -notmatch '准备执行的命令' -or
-            $content41 -notmatch '等待用户确认|等我确认|必须等我确认') {
+        if ($content41 -notmatch '等待用户确认|等我确认|必须等我确认') {
             $planConfirmOk41 = $false
-            [void]$promptFailureDetails41.Add("$($f.Name): 计划或确认规则不完整")
+            [void]$promptFailureDetails41.Add("$($f.Name): 危险操作确认规则不完整")
+        }
+
+        if ($content41 -notmatch '无需修改文件' -or $content41 -notmatch '不要虚构修改' -or
+            $content41 -notmatch '确实(需要变更|要求创建或修改)' -or
+            $content41 -notmatch '准备修改的文件|列出该文档' -or
+            $content41 -notmatch '写入命令' -or $content41 -notmatch '无需执行命令' -or
+            $content41 -notmatch '不要虚构命令' -or $content41 -notmatch '单独列出安装计划') {
+            $conditionalPlanOk41 = $false
+            [void]$promptFailureDetails41.Add("$($f.Name): 条件计划规则不完整")
+        }
+
+        if ($content41 -notmatch '不主动读取或输出' -or $content41 -notmatch '\.env' -or
+            $content41 -notmatch 'settings\.json' -or $content41 -notmatch 'credentials' -or
+            $content41 -notmatch '生产环境配置' -or $content41 -notmatch '客户隐私数据' -or
+            $content41 -notmatch '说明原因并等待确认' -or $content41 -notmatch '字段名称、结构' -or
+            $content41 -notmatch '不要让我粘贴完整敏感文件') {
+            $sensitiveReadBoundaryOk41 = $false
+            [void]$promptFailureDetails41.Add("$($f.Name): 敏感文件读取边界不完整")
         }
 
         if ($content41 -notmatch '实际' -or $content41 -notmatch '验收|测试|验证') {
@@ -2911,9 +2930,11 @@ x-api-key: $TestApiKey
 
     Assert "41a: 每个提示词模板以 '使用方法' 行开头" { $usageHeaderOk41 } "每个模板文件必须以使用方法行开头"
     Assert "41b: 每个模板包含 A-D 四阶段" { $fourStagesOk41 } "每个模板必须包含只读检查、计划、等待确认、执行验收四阶段"
-    Assert "41c: 每个模板包含计划和等待确认规则" { $planConfirmOk41 } "每个模板必须列出文件/命令计划并等待确认"
+    Assert "41c: 每个模板包含危险操作等待确认规则" { $planConfirmOk41 } "每个模板必须要求危险操作等待确认"
     Assert "41d: 每个模板包含敏感信息保护" { $sensitiveInfoOk41 } "每个模板必须保护 API Key、密码、Cookie 和私钥"
     Assert "41e: 每个模板要求实际执行后验收" { $executionEvidenceOk41 } "每个模板必须要求测试或验证并报告实际结果"
+    Assert "41f: 每个模板按任务需要生成计划且不得虚构" { $conditionalPlanOk41 } "每个模板必须区分无需修改、真实变更和安装计划"
+    Assert "41g: 每个模板限制主动读取敏感文件" { $sensitiveReadBoundaryOk41 } "每个模板必须先判断必要性并确认，再检查结构或脱敏值"
     if ($promptFailureDetails41.Count -gt 0) {
         Write-Host ("  [DETAIL] " + ($promptFailureDetails41 -join '; ')) -ForegroundColor DarkYellow
     }
@@ -3136,7 +3157,7 @@ x-api-key: $TestApiKey
     } "买家 TXT 文件中不应出现代码围栏"
 
     Assert "45c: 买家 TXT 不含 Markdown 表格分隔行" {
-        $allBuyerContent -notmatch '\|[- ]{3,}\|' -or $allBuyerContent -notmatch '\|.*\|'
+        $allBuyerContent -notmatch '(?m)^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$'
     } "买家 TXT 文件中不应出现 Markdown 表格"
 
     Assert "45d: 买家 TXT 不引用 QUICK_START.md / docs/ / examples/ / scripts/" {
@@ -3150,9 +3171,10 @@ x-api-key: $TestApiKey
         $allContent -notmatch '不.*发送.*任何.*第三方'
     } "安全说明不得使用绝对化表述"
 
-    Assert "45f: 安全说明明确'不发送到卖家服务器'" {
-        $allContent -match '不发送到卖家服务器|不.*发送.*卖家.*服务器'
-    } "安全说明必须明确 Key 不发送到卖家服务器"
+    Assert "45f: 安装工具不向卖家服务器上传敏感内容" {
+        $readmeText45 -match '安装工具.*不会.*(API Key|Key).*卖家服务器' -and
+        $readmeText45 -match '项目代码' -and $readmeText45 -match '诊断材料'
+    } "README 必须明确安装工具不向卖家服务器上传 Key、项目代码或诊断材料"
 
     Assert "45g: 无固定安装耗时承诺" {
         $allContent -notmatch '(需要|只需|仅需|约|大概|大约)\s*\d+\s*分钟' -and
@@ -3183,22 +3205,35 @@ x-api-key: $TestApiKey
         ($expected | Where-Object { $templateIndex -notmatch [regex]::Escape($_) }).Count -eq 0
     } "03-常用提示词模板.txt 必须引用全部 8 个模板文件名"
 
-    Assert "45k: 01-04 均包含不提供声明（账号/Key/代理）" {
+    Assert "45k: 买家文档整体覆盖不提供声明（账号/Key/代理）" {
         $noAccount = ($allBuyerContent -match '不提供 Claude 账号' -or $allBuyerContent -match '不提供.*账号').ToString()
         $noKey = ($allBuyerContent -match '不提供 DeepSeek API Key' -or $allBuyerContent -match '不提供.*API Key').ToString()
         $noProxy = ($allBuyerContent -match '不提供代理 API' -or $allBuyerContent -match '不提供.*代理').ToString()
         $noAccount -eq 'True' -and $noKey -eq 'True' -and $noProxy -eq 'True'
-    } "买家文档必须覆盖：不提供 Claude 账号、不提供 DeepSeek Key、不提供代理 API"
+    } "4 份买家文档整体必须覆盖：不提供 Claude 账号、不提供 DeepSeek Key、不提供代理 API"
 
-    Assert "45l: 04 包含售后安全提示" {
-        $content04 = Get-Content (Join-Path $ScriptRoot "04-常见问题和售后.txt") -Raw -Encoding UTF8
-        $content04 -match 'support-feedback\.txt' -and
-        $content04 -match 'report\.txt' -and
-        $content04 -match '不要.*(发送|发)(?!.*support-feedback)(?!.*report).*(Key|API Key|完整)' -or
-        $content04 -match '不要.*完整.*Key' -and
-        $content04 -match 'settings\.json' -and
-        $content04 -match '不要.*只.*截图'
-    } "04 售后文档必须包含 support-feedback/report 优先级、不要发 Key/settings.json、不要只发截图"
+    $content04 = Get-Content (Join-Path $ScriptRoot "04-常见问题和售后.txt") -Raw -Encoding UTF8
+    $hasSupportFeedback45l = $content04 -match 'support-feedback\.txt'
+    $hasReport45l = $content04 -match 'report\.txt'
+    $supportPreferred45l = $content04 -match '优先发送 support-feedback\.txt'
+    $reportFallback45l = $content04 -match '没有 support-feedback\.txt.*report\.txt|没有 support-feedback\.txt.*\r?\n.*report\.txt'
+    $noFullKey45l = $content04 -match '不要发送完整 API Key'
+    $noSettings45l = $content04 -match '不要发送 settings\.json'
+    $noBackup45l = $content04 -match '不要发送以下目录或文件[\s\S]*backup/'
+    $noLogs45l = $content04 -match '不要发送以下目录或文件[\s\S]*logs/'
+    $noReportsDir45l = $content04 -match 'reports/ 目录中的任何文件'
+    $noScreenshotOnly45l = $content04 -match '不要只发截图'
+
+    Assert "45l-1: 04 包含 support-feedback.txt" { $hasSupportFeedback45l } "04 缺少 support-feedback.txt"
+    Assert "45l-2: 04 包含 report.txt" { $hasReport45l } "04 缺少 report.txt"
+    Assert "45l-3: 04 明确 support-feedback 优先" { $supportPreferred45l } "04 未明确优先发送 support-feedback.txt"
+    Assert "45l-4: 04 明确 report 仅作备用" { $reportFallback45l } "04 未明确仅在 support-feedback 不存在时发送 report.txt"
+    Assert "45l-5: 04 禁止发送完整 API Key" { $noFullKey45l } "04 缺少不要发送完整 API Key"
+    Assert "45l-6: 04 禁止发送 settings.json" { $noSettings45l } "04 缺少不要发送 settings.json"
+    Assert "45l-7: 04 禁止发送 backup/" { $noBackup45l } "04 缺少不要发送 backup/"
+    Assert "45l-8: 04 禁止发送 logs/" { $noLogs45l } "04 缺少不要发送 logs/"
+    Assert "45l-9: 04 禁止发送整个 reports/" { $noReportsDir45l } "04 缺少不要发送 reports/ 目录中的任何文件"
+    Assert "45l-10: 04 不建议只发截图" { $noScreenshotOnly45l } "04 缺少不要只发截图"
 
     $promptDir45 = Join-Path $ScriptRoot "提示词模板"
     $promptFiles45 = @(Get-ChildItem -LiteralPath $promptDir45 -Filter "*.txt" -File | Sort-Object Name)
@@ -3266,10 +3301,12 @@ x-api-key: $TestApiKey
         $promptMap45['06-安全修改代码.txt'] -match '不回退不属于本任务的改动' -and
         $promptMap45['06-安全修改代码.txt'] -match '回归测试'
     } "安全修改模板必须保护用户工作并要求回归测试"
-    Assert "45u: README 模板禁止编造功能" {
+    Assert "45u: 目标文档模板禁止编造并仅修改指定文档" {
         $promptMap45['07-生成README和使用说明.txt'] -match '不要编造功能' -and
-        $promptMap45['07-生成README和使用说明.txt'] -match '需要人工确认'
-    } "README 模板必须基于真实项目并标记无法验证内容"
+        $promptMap45['07-生成README和使用说明.txt'] -match '需要人工确认' -and
+        $promptMap45['07-生成README和使用说明.txt'] -match '目标文档' -and
+        $promptMap45['07-生成README和使用说明.txt'] -match '不要修改用户没有指定的其他文档'
+    } "目标文档模板必须基于真实项目、标记无法验证内容并只修改指定文档"
 
     $readmeTop45 = (($readmeText45 -split "`r?`n") | Select-Object -First 30) -join "`n"
     Assert "45v: README 顶部包含完整买家入口和售后文件" {
@@ -3284,6 +3321,30 @@ x-api-key: $TestApiKey
         $readmeText45 -match '不属于买家 ZIP' -and
         $readmeText45 -notmatch 'QUICK_START\.md'
     } "README 必须明确源码仓库内容不等于买家 ZIP，且不引用 QUICK_START.md"
+
+    Assert "45x: README 包含 4 GB 物理内存要求" {
+        $readmeText45 -match '内存.*4\s*GB|4\s*GB.*内存'
+    } "README 必须包含内存与 4 GB 的组合要求"
+    Assert "45y: README 说明本地配置不等于本地模型" {
+        $readmeText45 -match '不是本地大模型' -and $readmeText45 -match '本地配置.*不等于模型推理'
+    } "README 必须区分本机配置行为与远程模型推理"
+    Assert "45z: README 说明模型请求可能包含相关项目内容" {
+        $readmeText45 -match '提示词' -and $readmeText45 -match '项目内容' -and
+        $readmeText45 -match '命令输出' -and $readmeText45 -match '工具结果' -and
+        $readmeText45 -match '可能.*发送到配置的 API 地址'
+    } "README 必须说明提示词、相关项目内容、命令输出和工具结果可能发送到配置的 API"
+
+    Assert "45aa: 00 推荐任务类型并回到 03 选择" {
+        $promptMap45['00-先用这个-检查环境和项目.txt'] -match '下一步任务类型' -and
+        $promptMap45['00-先用这个-检查环境和项目.txt'] -match '回到 03-常用提示词模板\.txt' -and
+        $promptMap45['00-先用这个-检查环境和项目.txt'] -match '不要猜模板编号' -and
+        $promptMap45['00-先用这个-检查环境和项目.txt'] -notmatch '推荐最适合.*模板编号'
+    } "00 不得猜模板编号，必须推荐任务类型并让用户回到 03"
+    Assert "45ab: 微信模板区分 AppID 与秘密" {
+        $promptMap45['03-微信小程序开发.txt'] -match 'AppID 是项目标识' -and
+        $promptMap45['03-微信小程序开发.txt'] -match '不等同于 AppSecret' -and
+        $promptMap45['03-微信小程序开发.txt'] -match '对外报告或截图应脱敏'
+    } "微信模板必须区分 AppID 与 AppSecret 并说明对外脱敏"
 
     Write-Host ""
 

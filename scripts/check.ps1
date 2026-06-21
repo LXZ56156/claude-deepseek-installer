@@ -5233,8 +5233,9 @@ if ($readmeText -match 'Key 不会发送给服务提供者或其他第三方') {
     throw "README.md API Key 安全说明口径矛盾：同时声称不发送第三方又发送 DeepSeek"
 }
 # 检查新口径是否存在
-if ($readmeText -notmatch 'Key 不会发送到卖家服务器') {
-    throw "README.md 安全说明必须明确：不发送到卖家服务器"
+if ($readmeText -notmatch '安装工具.*不会.*(API Key|Key).*卖家服务器' -or
+    $readmeText -notmatch '项目代码' -or $readmeText -notmatch '诊断材料') {
+    throw "README.md 安全说明必须明确：安装工具不向卖家服务器上传 Key、项目代码或诊断材料"
 }
 if ($readmeText -notmatch '自定义 Base URL') {
     throw "README.md 安全说明必须包含自定义 Base URL 风险提示"
@@ -5325,11 +5326,15 @@ if ($doc02 -notmatch '03-常用提示词模板\.txt\s*$') { throw "02 文档末�
 if ($doc04 -notmatch '(?s)不要重复安装.*一键修复依赖\.cmd.*一键诊断\.cmd.*优先发送 support-feedback\.txt.*没有 support-feedback\.txt.*report\.txt') {
     throw "04 文档售后分流顺序不完整或不正确"
 }
-foreach ($requiredCode in @('401', '402', '403', '404', '429', '5xx')) {
+foreach ($requiredCode in @('400', '401', '402', '422', '429', '500', '503')) {
     if ($doc04 -notmatch [regex]::Escape($requiredCode)) { throw "04 文档缺少 API 错误码: $requiredCode" }
 }
-foreach ($forbiddenSend in @('完整 API Key', 'settings.json', 'backup/', 'logs/', 'reports/full-report-', '密码或私钥')) {
+foreach ($forbiddenSend in @('完整 API Key', 'settings.json', 'backup/', 'logs/', 'reports/ 目录中的任何文件', '私钥', '密码', 'Cookie')) {
     if ($doc04 -notmatch [regex]::Escape($forbiddenSend)) { throw "04 文档缺少禁止发送项: $forbiddenSend" }
+}
+if ($doc04 -notmatch '优先发送 support-feedback\.txt' -or
+    $doc04 -notmatch '没有 support-feedback\.txt.*report\.txt|没有 support-feedback\.txt.*\r?\n.*report\.txt') {
+    throw "04 文档必须明确 support-feedback 优先、report 仅作备用"
 }
 if ($doc04 -notmatch '不要只发截图' -or $doc04 -notmatch '截图只能作为补充') { throw "04 文档必须说明截图只能作为补充" }
 Write-Host "[check]   4j. 主文档职责链和售后分流 OK"
@@ -5343,14 +5348,28 @@ foreach ($name in $actualTemplateNames) {
     foreach ($stage in @('阶段 A：只读检查', '阶段 B：形成判断和计划', '阶段 C：等待用户确认', '阶段 D：执行和验收')) {
         if ($content -notmatch [regex]::Escape($stage)) { throw "模板 $name 缺少: $stage" }
     }
-    foreach ($concept in @('准备修改的文件', '准备执行的命令', '风险和影响', '验收方法', '安装软件', '修改配置', '环境变量', '破坏性命令', '实际')) {
+    foreach ($concept in @('风险和影响', '验收方法', '安装软件', '修改配置', '环境变量', '破坏性命令', '实际')) {
         if ($content -notmatch [regex]::Escape($concept)) { throw "模板 $name 缺少协议概念: $concept" }
+    }
+    if ($content -notmatch '无需修改文件' -or $content -notmatch '不要虚构修改' -or
+        $content -notmatch '确实(需要变更|要求创建或修改)' -or
+        $content -notmatch '准备修改的文件|列出该文档' -or
+        $content -notmatch '写入命令' -or $content -notmatch '无需执行命令' -or
+        $content -notmatch '不要虚构命令' -or $content -notmatch '单独列出安装计划') {
+        throw "模板 $name 缺少分析无需修改、真实变更或独立安装计划的条件规则"
     }
     if ($content -notmatch 'API Key' -or $content -notmatch '密码' -or $content -notmatch 'Cookie' -or $content -notmatch '私钥') {
         throw "模板 $name 缺少敏感信息保护规则"
     }
+    if ($content -notmatch '不主动读取或输出' -or $content -notmatch '\.env' -or
+        $content -notmatch 'settings\.json' -or $content -notmatch 'credentials' -or
+        $content -notmatch '生产环境配置' -or $content -notmatch '客户隐私数据' -or
+        $content -notmatch '说明原因并等待确认' -or $content -notmatch '字段名称、结构' -or
+        $content -notmatch '不要让我粘贴完整敏感文件') {
+        throw "模板 $name 缺少敏感文件读取必要性、确认、脱敏或禁止粘贴规则"
+    }
 }
-Write-Host "[check]   4k. 8 个模板四阶段协议和安全规则 OK"
+Write-Host "[check]   4k. 8 个模板四阶段、条件计划和敏感读取边界 OK"
 
 # 2o. Git 只能出现在指定模板，且不能被描述为基础启动强制依赖
 $gitTemplateNames = @(
@@ -5378,11 +5397,11 @@ Write-Host "[check]   4l. Git 规则范围和安全边界 OK"
 
 # 2p. 各专项模板的关键产品边界
 $templateRequirements = @{
-    '03-微信小程序开发.txt' = @('微信开发者工具', 'Claude Code 不能替代', 'app.json', 'project.config.json', 'miniprogram/', '真机调试')
+    '03-微信小程序开发.txt' = @('微信开发者工具', 'Claude Code 不能替代', 'app.json', 'project.config.json', 'miniprogram/', '真机调试', 'AppID 是项目标识', '不等同于 AppSecret', '对外报告或截图应脱敏')
     '04-网页前端项目.txt' = @('不强制 React', '不更换包管理器', '不删除锁文件', '不要直接运行 npm install', '无法打开浏览器时如实说明')
     '05-Python脚本开发.txt' = @('py、python、python3', 'venv', 'UTF-8', '全局 pip install', '退出码')
     '06-安全修改代码.txt' = @('保护用户已有修改', '不回退不属于本任务的改动', '根因', '回归测试')
-    '07-生成README和使用说明.txt' = @('不要编造功能', '需要人工确认', '项目实际配置验证')
+    '07-生成README和使用说明.txt' = @('不要编造功能', '需要人工确认', '项目实际配置验证', '目标文档', '只修改 README', '不要修改用户没有指定的其他文档')
 }
 foreach ($name in $templateRequirements.Keys) {
     foreach ($term in $templateRequirements[$name]) {
@@ -5390,6 +5409,25 @@ foreach ($name in $templateRequirements.Keys) {
     }
 }
 Write-Host "[check]   4m. 专项模板产品边界 OK"
+
+# 2q. 本轮定向文档修正：数据流、系统要求、模板选择和官方链接
+if ($readmeText -notmatch '内存.*4\s*GB|4\s*GB.*内存') { throw "README.md 缺少 4 GB 物理内存要求" }
+foreach ($dataFlowTerm in @('不是本地大模型', '本地配置.*不等于模型推理', '提示词', '项目内容', '命令输出', '工具结果', '可能.*发送到配置的 API 地址', '整个项目一定会上传', '自定义 Base URL', '数据政策', '隐私政策和服务条款')) {
+    if ($readmeText -notmatch $dataFlowTerm) { throw "README.md 数据流说明缺少: $dataFlowTerm" }
+}
+if ($readmeText -match '(?im)^.*Git 不是 Claude Code 基础启动') { throw "README.md 不得保留独立 Git 推荐段落" }
+if ($readmeText -notmatch 'https://code\.claude\.com/docs/en/overview') { throw "README.md Claude Code 官方链接不是当前规范地址" }
+
+$prompt00 = $promptContents['00-先用这个-检查环境和项目.txt']
+if ($prompt00 -notmatch '下一步任务类型' -or $prompt00 -notmatch '回到 03-常用提示词模板\.txt' -or
+    $prompt00 -notmatch '不要猜模板编号' -or $prompt00 -match '推荐最适合.*模板编号') {
+    throw "00 模板必须推荐任务类型并回到 03 选择，不得要求 AI 猜模板编号"
+}
+$prompt07 = $promptContents['07-生成README和使用说明.txt']
+foreach ($term in @('目标文档名称、读者和用途', 'README.md', '安装说明', '使用说明', '配置说明', '常见问题', '用户明确指定的其他文档', '创建或修改目标文档', '不要修改用户没有指定的其他文档')) {
+    if ($prompt07 -notmatch [regex]::Escape($term)) { throw "07 模板目标文档规则缺少: $term" }
+}
+Write-Host "[check]   4n. 数据流、4 GB、任务类型、目标文档和官方链接 OK"
 
 Write-Host "[check] v1.3.3 buyer documentation safety OK"
 
