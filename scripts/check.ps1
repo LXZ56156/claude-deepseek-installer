@@ -5284,6 +5284,113 @@ if ($readmeText -notmatch '提示词模板') {
 }
 Write-Host "[check]   4g. README 买家文件引用完整 OK"
 
+# 2k. 模板索引必须与目录集合完全一致，而不是只检查包含关系
+$promptDir = Join-Path $RootDir "提示词模板"
+$actualTemplateNames = @(Get-ChildItem -LiteralPath $promptDir -Filter "*.txt" -File | ForEach-Object { $_.Name } | Sort-Object)
+$templateIndexText = Get-Content (Join-Path $RootDir "03-常用提示词模板.txt") -Raw -Encoding UTF8
+$indexedTemplateNames = @([regex]::Matches($templateIndexText, '(?m)^\s+([^\r\n]+\.txt)\s*$') | ForEach-Object { $_.Groups[1].Value } | Sort-Object)
+if ($actualTemplateNames.Count -ne 8) {
+    throw "提示词模板目录必须恰好包含 8 个 .txt 文件，实际: $($actualTemplateNames.Count)"
+}
+if (@(Compare-Object $actualTemplateNames $indexedTemplateNames).Count -ne 0) {
+    $difference = Compare-Object $actualTemplateNames $indexedTemplateNames | Out-String
+    throw "03-常用提示词模板.txt 索引与目录不完全一致:`n$difference"
+}
+Write-Host "[check]   4h. 模板索引与目录集合完全一致 OK"
+
+# 2l. 12 个 TXT 的格式、编码和终端字符安全
+$allTxtRelativePaths = $buyerDocFiles + @($actualTemplateNames | ForEach-Object { "提示词模板/$_" })
+$unsafeGlyphPattern = '[\u2500-\u257F\u2580-\u259F\u2600-\u27BF\uD83C-\uDBFF\uDC00-\uDFFF]'
+foreach ($relativePath in $allTxtRelativePaths) {
+    $fullPath = Join-Path $RootDir $relativePath
+    $bytes = [System.IO.File]::ReadAllBytes($fullPath)
+    $utf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    try { $content = $utf8.GetString($bytes) }
+    catch { throw "TXT 不是有效 UTF-8: $relativePath" }
+    if ($content -match '(?m)^#\s' -or $content -match '```' -or $content -match '(?m)^\s*\|.*\|\s*$') {
+        throw "TXT 包含 Markdown 标题、代码围栏或表格: $relativePath"
+    }
+    if ($content -match $unsafeGlyphPattern) {
+        throw "TXT 包含 emoji、框线或终端高风险字符: $relativePath"
+    }
+}
+Write-Host "[check]   4i. 12 个 TXT 均为 UTF-8 且无 Markdown/emoji/框线字符 OK"
+
+# 2m. 主文档职责链和售后分流
+$doc01 = Get-Content (Join-Path $RootDir "01-先看我-安装说明.txt") -Raw -Encoding UTF8
+$doc02 = Get-Content (Join-Path $RootDir "02-安装完成后怎么开始使用.txt") -Raw -Encoding UTF8
+$doc04 = Get-Content (Join-Path $RootDir "04-常见问题和售后.txt") -Raw -Encoding UTF8
+if ($doc01 -notmatch '02-安装完成后怎么开始使用\.txt\s*$') { throw "01 文档末尾必须把 02 作为唯一主要下一步" }
+if ($doc02 -notmatch '03-常用提示词模板\.txt\s*$') { throw "02 文档末尾必须把 03 作为唯一主要下一步" }
+if ($doc04 -notmatch '(?s)不要重复安装.*一键修复依赖\.cmd.*一键诊断\.cmd.*优先发送 support-feedback\.txt.*没有 support-feedback\.txt.*report\.txt') {
+    throw "04 文档售后分流顺序不完整或不正确"
+}
+foreach ($requiredCode in @('401', '402', '403', '404', '429', '5xx')) {
+    if ($doc04 -notmatch [regex]::Escape($requiredCode)) { throw "04 文档缺少 API 错误码: $requiredCode" }
+}
+foreach ($forbiddenSend in @('完整 API Key', 'settings.json', 'backup/', 'logs/', 'reports/full-report-', '密码或私钥')) {
+    if ($doc04 -notmatch [regex]::Escape($forbiddenSend)) { throw "04 文档缺少禁止发送项: $forbiddenSend" }
+}
+if ($doc04 -notmatch '不要只发截图' -or $doc04 -notmatch '截图只能作为补充') { throw "04 文档必须说明截图只能作为补充" }
+Write-Host "[check]   4j. 主文档职责链和售后分流 OK"
+
+# 2n. 8 个模板统一四阶段协议和敏感操作确认
+$promptContents = @{}
+foreach ($name in $actualTemplateNames) {
+    $content = Get-Content (Join-Path $promptDir $name) -Raw -Encoding UTF8
+    $promptContents[$name] = $content
+    if ($content -notmatch '^使用方法') { throw "模板第一行不含使用方法: $name" }
+    foreach ($stage in @('阶段 A：只读检查', '阶段 B：形成判断和计划', '阶段 C：等待用户确认', '阶段 D：执行和验收')) {
+        if ($content -notmatch [regex]::Escape($stage)) { throw "模板 $name 缺少: $stage" }
+    }
+    foreach ($concept in @('准备修改的文件', '准备执行的命令', '风险和影响', '验收方法', '安装软件', '修改配置', '环境变量', '破坏性命令', '实际')) {
+        if ($content -notmatch [regex]::Escape($concept)) { throw "模板 $name 缺少协议概念: $concept" }
+    }
+    if ($content -notmatch 'API Key' -or $content -notmatch '密码' -or $content -notmatch 'Cookie' -or $content -notmatch '私钥') {
+        throw "模板 $name 缺少敏感信息保护规则"
+    }
+}
+Write-Host "[check]   4k. 8 个模板四阶段协议和安全规则 OK"
+
+# 2o. Git 只能出现在指定模板，且不能被描述为基础启动强制依赖
+$gitTemplateNames = @(
+    '00-先用这个-检查环境和项目.txt',
+    '01-接手已有代码项目.txt',
+    '02-补装开发环境和依赖.txt',
+    '06-安全修改代码.txt'
+)
+foreach ($name in $actualTemplateNames) {
+    $content = $promptContents[$name]
+    if ($name -in $gitTemplateNames) {
+        foreach ($rule in @('git --version', 'git status', '不影响 Claude Code 基础启动', '强烈推荐')) {
+            if ($content -notmatch [regex]::Escape($rule)) { throw "Git 模板 $name 缺少规则: $rule" }
+        }
+        if ($content -notmatch '不(要)?自动安装') { throw "Git 模板 $name 缺少禁止自动安装规则" }
+        foreach ($prohibited in @('user.name', 'user.email', 'git init', 'commit', 'push', 'git reset --hard', 'git clean', '强制推送')) {
+            if ($content -notmatch [regex]::Escape($prohibited)) { throw "Git 模板 $name 缺少禁止规则: $prohibited" }
+        }
+    }
+    elseif ($content -match '(?i)\bgit\b') {
+        throw "Git 规则出现在非指定模板: $name"
+    }
+}
+Write-Host "[check]   4l. Git 规则范围和安全边界 OK"
+
+# 2p. 各专项模板的关键产品边界
+$templateRequirements = @{
+    '03-微信小程序开发.txt' = @('微信开发者工具', 'Claude Code 不能替代', 'app.json', 'project.config.json', 'miniprogram/', '真机调试')
+    '04-网页前端项目.txt' = @('不强制 React', '不更换包管理器', '不删除锁文件', '不要直接运行 npm install', '无法打开浏览器时如实说明')
+    '05-Python脚本开发.txt' = @('py、python、python3', 'venv', 'UTF-8', '全局 pip install', '退出码')
+    '06-安全修改代码.txt' = @('保护用户已有修改', '不回退不属于本任务的改动', '根因', '回归测试')
+    '07-生成README和使用说明.txt' = @('不要编造功能', '需要人工确认', '项目实际配置验证')
+}
+foreach ($name in $templateRequirements.Keys) {
+    foreach ($term in $templateRequirements[$name]) {
+        if ($promptContents[$name] -notmatch [regex]::Escape($term)) { throw "专项模板 $name 缺少边界: $term" }
+    }
+}
+Write-Host "[check]   4m. 专项模板产品边界 OK"
+
 Write-Host "[check] v1.3.3 buyer documentation safety OK"
 
 # ============================================================

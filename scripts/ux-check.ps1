@@ -2870,42 +2870,53 @@ x-api-key: $TestApiKey
     $promptFiles41 = Get-ChildItem -LiteralPath $promptDir41 -Filter "*.txt" -ErrorAction SilentlyContinue
 
     $usageHeaderOk41 = $true
-    $negativeApiKeyOk41 = $true
-    $negativeSettingsOk41 = $true
+    $fourStagesOk41 = $true
+    $sensitiveInfoOk41 = $true
     $planConfirmOk41 = $true
-
-    $needPlanConfirm41 = @("00", "02", "04", "05", "06")
+    $executionEvidenceOk41 = $true
+    $promptFailureDetails41 = New-Object System.Collections.Generic.List[string]
 
     foreach ($f in $promptFiles41) {
         $content41 = Get-Content $f.FullName -Raw -Encoding UTF8
 
         if ($content41 -notmatch '^使用方法') {
             $usageHeaderOk41 = $false
+            [void]$promptFailureDetails41.Add("$($f.Name): 第一行缺少使用方法")
         }
 
-        if ($content41 -match '完整 API Key 发给') {
-            $negativeApiKeyOk41 = $false
-        }
-
-        if ($content41 -match '输出 settings\.json 原文') {
-            $negativeSettingsOk41 = $false
-        }
-
-        $baseName41 = $f.BaseName
-        foreach ($prefix in $needPlanConfirm41) {
-            if ($baseName41.StartsWith($prefix)) {
-                if ($content41 -notmatch '先列计划|等用户确认|等我确认') {
-                    $planConfirmOk41 = $false
-                }
-                break
+        foreach ($stage41 in @('阶段 A：只读检查', '阶段 B：形成判断和计划', '阶段 C：等待用户确认', '阶段 D：执行和验收')) {
+            if ($content41 -notmatch [regex]::Escape($stage41)) {
+                $fourStagesOk41 = $false
+                [void]$promptFailureDetails41.Add("$($f.Name): 缺少 $stage41")
             }
+        }
+
+        if ($content41 -notmatch 'API Key' -or $content41 -notmatch '密码' -or
+            $content41 -notmatch 'Cookie' -or $content41 -notmatch '私钥') {
+            $sensitiveInfoOk41 = $false
+            [void]$promptFailureDetails41.Add("$($f.Name): 敏感信息保护不完整")
+        }
+
+        if ($content41 -notmatch '准备修改的文件' -or $content41 -notmatch '准备执行的命令' -or
+            $content41 -notmatch '等待用户确认|等我确认|必须等我确认') {
+            $planConfirmOk41 = $false
+            [void]$promptFailureDetails41.Add("$($f.Name): 计划或确认规则不完整")
+        }
+
+        if ($content41 -notmatch '实际' -or $content41 -notmatch '验收|测试|验证') {
+            $executionEvidenceOk41 = $false
+            [void]$promptFailureDetails41.Add("$($f.Name): 执行后验收规则不完整")
         }
     }
 
     Assert "41a: 每个提示词模板以 '使用方法' 行开头" { $usageHeaderOk41 } "每个模板文件必须以使用方法行开头"
-    Assert "41b: 模板 00/02/04/05/06 包含 '先列计划'/'等用户确认'/'等我确认'" { $planConfirmOk41 } "关键模板必须包含计划确认用语"
-    Assert "41c: 提示词模板不包含 '完整 API Key 发给' 正面指令" { $negativeApiKeyOk41 } "模板不得引导用户发送完整 API Key"
-    Assert "41d: 提示词模板不包含 '输出 settings.json 原文' 指令" { $negativeSettingsOk41 } "模板不得引导 AI 输出 settings.json 原文"
+    Assert "41b: 每个模板包含 A-D 四阶段" { $fourStagesOk41 } "每个模板必须包含只读检查、计划、等待确认、执行验收四阶段"
+    Assert "41c: 每个模板包含计划和等待确认规则" { $planConfirmOk41 } "每个模板必须列出文件/命令计划并等待确认"
+    Assert "41d: 每个模板包含敏感信息保护" { $sensitiveInfoOk41 } "每个模板必须保护 API Key、密码、Cookie 和私钥"
+    Assert "41e: 每个模板要求实际执行后验收" { $executionEvidenceOk41 } "每个模板必须要求测试或验证并报告实际结果"
+    if ($promptFailureDetails41.Count -gt 0) {
+        Write-Host ("  [DETAIL] " + ($promptFailureDetails41 -join '; ')) -ForegroundColor DarkYellow
+    }
 
     Write-Host ""
 
@@ -3188,6 +3199,91 @@ x-api-key: $TestApiKey
         $content04 -match 'settings\.json' -and
         $content04 -match '不要.*只.*截图'
     } "04 售后文档必须包含 support-feedback/report 优先级、不要发 Key/settings.json、不要只发截图"
+
+    $promptDir45 = Join-Path $ScriptRoot "提示词模板"
+    $promptFiles45 = @(Get-ChildItem -LiteralPath $promptDir45 -Filter "*.txt" -File | Sort-Object Name)
+    $promptNames45 = @($promptFiles45 | ForEach-Object { $_.Name })
+    $templateIndex45 = Get-Content (Join-Path $ScriptRoot "03-常用提示词模板.txt") -Raw -Encoding UTF8
+    $indexedNames45 = @([regex]::Matches($templateIndex45, '(?m)^\s+([^\r\n]+\.txt)\s*$') | ForEach-Object { $_.Groups[1].Value } | Sort-Object)
+
+    Assert "45m: 03 索引与模板目录集合完全一致" {
+        $promptNames45.Count -eq 8 -and
+        $indexedNames45.Count -eq 8 -and
+        @(Compare-Object $promptNames45 $indexedNames45).Count -eq 0
+    } "03 索引必须恰好引用目录中的 8 个模板，不多不少"
+
+    $allPromptContent45 = ($promptFiles45 | ForEach-Object { Get-Content $_.FullName -Raw -Encoding UTF8 }) -join "`n"
+    $allTxtContent45 = $allBuyerContent + "`n" + $allPromptContent45
+    Assert "45n: 12 个 TXT 无 emoji 和框线字符" {
+        $allTxtContent45 -notmatch '[\u2500-\u257F\u2580-\u259F\u2600-\u27BF\uD83C-\uDBFF\uDC00-\uDFFF]'
+    } "买家 TXT 不得包含 emoji、框线或终端高风险字符"
+
+    $gitPromptNames45 = @(
+        '00-先用这个-检查环境和项目.txt',
+        '01-接手已有代码项目.txt',
+        '02-补装开发环境和依赖.txt',
+        '06-安全修改代码.txt'
+    )
+    $gitScopeOk45 = $true
+    $gitSafetyOk45 = $true
+    foreach ($prompt45 in $promptFiles45) {
+        $content45 = Get-Content $prompt45.FullName -Raw -Encoding UTF8
+        if ($prompt45.Name -in $gitPromptNames45) {
+            if ($content45 -notmatch 'git --version' -or $content45 -notmatch 'git status' -or
+                $content45 -notmatch '不影响 Claude Code 基础启动' -or
+                $content45 -notmatch 'user\.name' -or $content45 -notmatch 'user\.email' -or
+                $content45 -notmatch 'git init' -or $content45 -notmatch 'git reset --hard' -or
+                $content45 -notmatch 'git clean' -or $content45 -notmatch '强制推送') {
+                $gitSafetyOk45 = $false
+            }
+        }
+        elseif ($content45 -match '(?i)\bgit\b') {
+            $gitScopeOk45 = $false
+        }
+    }
+    Assert "45o: Git 规则只出现在 00/01/02/06" { $gitScopeOk45 } "非指定模板不得加入 Git 规则"
+    Assert "45p: 四个 Git 模板包含完整安全边界" { $gitSafetyOk45 } "Git 模板必须检查版本/状态并禁止自动身份配置和危险操作"
+
+    $promptMap45 = @{}
+    foreach ($prompt45 in $promptFiles45) { $promptMap45[$prompt45.Name] = Get-Content $prompt45.FullName -Raw -Encoding UTF8 }
+    Assert "45q: 微信模板说明开发者工具边界" {
+        $promptMap45['03-微信小程序开发.txt'] -match '微信开发者工具' -and
+        $promptMap45['03-微信小程序开发.txt'] -match 'Claude Code 不能替代' -and
+        $promptMap45['03-微信小程序开发.txt'] -match '真机调试'
+    } "微信模板必须说明 Claude Code 不能替代微信开发者工具"
+    Assert "45r: 网页模板不强制大型框架" {
+        $promptMap45['04-网页前端项目.txt'] -match '不强制 React' -and
+        $promptMap45['04-网页前端项目.txt'] -match '不更换包管理器' -and
+        $promptMap45['04-网页前端项目.txt'] -match '不删除锁文件'
+    } "网页模板必须采用最小方案并尊重现有包管理器"
+    Assert "45s: Python 模板包含 venv 和 UTF-8" {
+        $promptMap45['05-Python脚本开发.txt'] -match 'venv' -and
+        $promptMap45['05-Python脚本开发.txt'] -match 'UTF-8' -and
+        $promptMap45['05-Python脚本开发.txt'] -match '全局 pip install'
+    } "Python 模板必须包含 venv、UTF-8 和非全局安装规则"
+    Assert "45t: 安全修改模板保护已有修改" {
+        $promptMap45['06-安全修改代码.txt'] -match '保护用户已有修改' -and
+        $promptMap45['06-安全修改代码.txt'] -match '不回退不属于本任务的改动' -and
+        $promptMap45['06-安全修改代码.txt'] -match '回归测试'
+    } "安全修改模板必须保护用户工作并要求回归测试"
+    Assert "45u: README 模板禁止编造功能" {
+        $promptMap45['07-生成README和使用说明.txt'] -match '不要编造功能' -and
+        $promptMap45['07-生成README和使用说明.txt'] -match '需要人工确认'
+    } "README 模板必须基于真实项目并标记无法验证内容"
+
+    $readmeTop45 = (($readmeText45 -split "`r?`n") | Select-Object -First 30) -join "`n"
+    Assert "45v: README 顶部包含完整买家入口和售后文件" {
+        @('01-先看我-安装说明.txt', '02-安装完成后怎么开始使用.txt', '03-常用提示词模板.txt',
+          '04-常见问题和售后.txt', 'support-feedback.txt') |
+            Where-Object { $readmeTop45 -notmatch [regex]::Escape($_) } |
+            Measure-Object | Select-Object -ExpandProperty Count | ForEach-Object { $_ -eq 0 }
+    } "README 前 30 行必须包含 01-04 和 support-feedback.txt"
+
+    Assert "45w: README 区分源码仓库与买家 ZIP" {
+        $readmeText45 -match '源码仓库' -and
+        $readmeText45 -match '不属于买家 ZIP' -and
+        $readmeText45 -notmatch 'QUICK_START\.md'
+    } "README 必须明确源码仓库内容不等于买家 ZIP，且不引用 QUICK_START.md"
 
     Write-Host ""
 
