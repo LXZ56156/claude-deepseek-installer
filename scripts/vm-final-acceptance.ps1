@@ -10,6 +10,7 @@ param(
     [string]$Version = "1.3.3",
     [string]$CredentialTarget = "CCDI_ACCEPTANCE_DEEPSEEK_API_KEY",
     [switch]$AcknowledgeRealInstall,
+    [switch]$AcknowledgeRestart,
     [switch]$Resume,
     [string]$ControlRoot = "C:\CCDI-Acceptance-Control"
 )
@@ -101,6 +102,22 @@ function Assert-VmLiveGate {
     if ("$($computer.Manufacturer) $($computer.Model)" -notmatch 'VMware') { throw "Live requires a VMware VM" }
     if (-not (([IO.Path]::GetFullPath((Get-Location).Path)).StartsWith([IO.Path]::GetFullPath($ProjectRoot), [StringComparison]::OrdinalIgnoreCase) -or
         (Test-Path -LiteralPath $ZipPath -PathType Leaf))) { throw "Live must run from this project or an existing final ZIP" }
+}
+
+function Test-VmAutomaticRestartAllowed {
+    param([string]$AcceptanceMode, [bool]$RealInstallAcknowledged, [bool]$RestartAcknowledged)
+    return $AcceptanceMode -eq 'Live' -and $RealInstallAcknowledged -and $RestartAcknowledged
+}
+
+function Invoke-VmAuthorizedRestart {
+    param($ResumeState)
+    if (-not (Test-VmAutomaticRestartAllowed -AcceptanceMode $Mode -RealInstallAcknowledged ([bool]$AcknowledgeRealInstall) -RestartAcknowledged ([bool]$AcknowledgeRestart))) {
+        throw 'Automatic restart is disabled. It requires -Mode Live, -AcknowledgeRealInstall, and -AcknowledgeRestart.'
+    }
+    Assert-VmLiveGate -ZipPath $zipPath
+    [void](Register-AcceptanceResume -Paths $paths -EntryScript $PSCommandPath -State $ResumeState)
+    Restart-Computer -Force
+    exit 194
 }
 
 function Get-ProtectedProcessIds {
@@ -293,12 +310,13 @@ function Get-VmScenarioOwnership {
 }
 
 function New-VmResumeState {
-    param([int]$ScenarioIndex, [string]$CurrentPhase, $PendingOwnership)
+    param([int]$NextScenarioIndex, [string]$CurrentPhase, $PendingOwnership)
     [ordered]@{
-        SchemaVersion = 2
+        SchemaVersion = 3
         RunId = $runId; Mode = $Mode; Version = $Version; CredentialTarget = $CredentialTarget
         AcknowledgeRealInstall = [bool]$AcknowledgeRealInstall
-        Phase = $CurrentPhase; NextScenarioIndex = $ScenarioIndex
+        AcknowledgeRestart = [bool]$AcknowledgeRestart
+        Phase = $CurrentPhase; NextScenarioIndex = $NextScenarioIndex
         StageResults = @($stageResults); ScenarioResults = @($allResults); CleanupReports = @($cleanupReports)
         PendingOwnership = $PendingOwnership; Error = $null; SavedAt = (Get-Date).ToString('o')
     }
@@ -311,6 +329,7 @@ if ($resumeBootstrapState) {
     $Mode = [string]$resumeBootstrapState.Mode; $Version = [string]$resumeBootstrapState.Version
     $CredentialTarget = [string]$resumeBootstrapState.CredentialTarget
     $AcknowledgeRealInstall = [bool]$resumeBootstrapState.AcknowledgeRealInstall
+    $AcknowledgeRestart = $resumeBootstrapState.PSObject.Properties.Name -contains 'AcknowledgeRestart' -and [bool]$resumeBootstrapState.AcknowledgeRestart
 }
 $runId = if ($Resume) { [string]$resumeBootstrapState.RunId } else { Get-Date -Format "yyyyMMdd-HHmmss-fff" }
 $instanceLock = Enter-AcceptanceInstanceLock -ControlRoot $ControlRoot
@@ -391,6 +410,31 @@ try {
     $testSafeScenarios = @($scenarioDocument.scenarioSets.TestSafe)
     $liveScenarios = if ($Mode -eq "Live") { @($scenarioDocument.scenarioSets.Live) } else { @() }
     $orderedScenarios = @($testSafeScenarios) + @($liveScenarios)
+    if ($Resume -and $phase -eq 'resume-cleanup-pending') {
+        Write-VmAcceptance "Completing cleanup before resuming at scenario index $nextScenarioIndex"
+        $protectedPids = Get-ProtectedProcessIds
+        $resumeCurrent = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
+        Assert-AcceptanceSnapshotUsable -Snapshot $resumeCurrent -Label 'Resume cleanup'
+        $resumeDelta = Compare-AcceptanceSnapshot -Before $baseline -After $resumeCurrent
+        $resumeCleanup = Reset-AcceptanceEnvironment -Baseline $baseline -Current $resumeCurrent -Delta $resumeDelta -SettingsBytes $settingsBytes `
+            -ProjectRoot $ProjectRoot -ControlRoot $paths.Root -ResultRoot $paths.Run `
+            -AllowedCleanupRoots @((Get-AcceptanceKnownRoots) + @($baseline.Files.Path)) -ProtectedProcessIds $protectedPids -Ownership $pendingOwnership
+        [void]$cleanupReports.Add([ordered]@{ Scenario = '__resume__'; Phase = 'resume-cleanup'; Report = $resumeCleanup })
+        if (-not $resumeCleanup.Success) {
+            $lockOnly = @($resumeCleanup.Errors | Where-Object { $_ -notmatch '^LOCKED_PATH:' }).Count -eq 0
+            if ($lockOnly -and (Test-VmAutomaticRestartAllowed -AcceptanceMode $Mode -RealInstallAcknowledged ([bool]$AcknowledgeRealInstall) -RestartAcknowledged ([bool]$AcknowledgeRestart))) {
+                $resume = New-VmResumeState -NextScenarioIndex $nextScenarioIndex -CurrentPhase 'resume-cleanup-pending' -PendingOwnership $pendingOwnership
+                $resume.Error = ($resumeCleanup.Errors -join '; ')
+                Invoke-VmAuthorizedRestart -ResumeState $resume
+            }
+            throw "Resume cleanup failed: $($resumeCleanup.Errors -join '; ')"
+        }
+        $resumeAfter = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
+        $resumeEquivalent = Test-AcceptanceBaselineEquivalent -Baseline $baseline -Candidate $resumeAfter -IgnoredProcessIds $protectedPids
+        if (-not $resumeEquivalent.Equivalent) { throw "Resume cleanup did not restore baseline: $($resumeEquivalent.Differences -join '; ')" }
+        $pendingOwnership = New-AcceptanceOwnership
+        $phase = 'scenario-loop'
+    }
     for ($index = $nextScenarioIndex; $index -lt $orderedScenarios.Count; $index++) {
         $scenario = $orderedScenarios[$index]
         $scenarioMode = if ($index -lt $testSafeScenarios.Count) { "TestSafe" } else { "Live" }
@@ -400,10 +444,11 @@ try {
         Write-VmAcceptance "Scenario $($index + 1)/$($orderedScenarios.Count): $scenarioId ($scenarioMode)"
 
         $phase = "scenario-pre-cleanup"
+        $protectedPids = Get-ProtectedProcessIds
         $pre = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
         Assert-AcceptanceSnapshotUsable -Snapshot $pre -Label "Pre-scenario $scenarioId"
         $preDelta = Compare-AcceptanceSnapshot -Before $baseline -After $pre
-        $preEquivalent = Test-AcceptanceBaselineEquivalent -Baseline $baseline -Candidate $pre
+        $preEquivalent = Test-AcceptanceBaselineEquivalent -Baseline $baseline -Candidate $pre -IgnoredProcessIds $protectedPids
         if (-not $preEquivalent.Equivalent) {
             $preReset = Reset-AcceptanceEnvironment -Baseline $baseline -Current $pre -Delta $preDelta -SettingsBytes $settingsBytes `
                 -ProjectRoot $ProjectRoot -ControlRoot $paths.Root -ResultRoot $paths.Run `
@@ -411,7 +456,7 @@ try {
             [void]$cleanupReports.Add([ordered]@{ Scenario = $scenarioId; Phase = "before"; Report = $preReset })
             if (-not $preReset.Success) { throw "Pre-scenario cleanup failed: $($preReset.Errors -join '; ')" }
             $pre = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
-            $preEquivalent = Test-AcceptanceBaselineEquivalent -Baseline $baseline -Candidate $pre
+            $preEquivalent = Test-AcceptanceBaselineEquivalent -Baseline $baseline -Candidate $pre -IgnoredProcessIds $protectedPids
             if (-not $preEquivalent.Equivalent) { throw "Environment differs from baseline before $scenarioId`: $($preEquivalent.Differences -join '; ')" }
         }
 
@@ -450,6 +495,7 @@ try {
         })
 
         $phase = "scenario-post-cleanup"
+        $protectedPids = Get-ProtectedProcessIds
         $post = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
         Assert-AcceptanceSnapshotUsable -Snapshot $post -Label "Post-scenario $scenarioId"
         $delta = Compare-AcceptanceSnapshot -Before $baseline -After $post
@@ -460,26 +506,25 @@ try {
         [void]$cleanupReports.Add([ordered]@{ Scenario = $scenarioId; Phase = "after"; Report = $cleanup })
         if (-not $cleanup.Success) {
             $lockOnly = @($cleanup.Errors | Where-Object { $_ -notmatch '^LOCKED_PATH:' }).Count -eq 0
-            if ($lockOnly) {
-                $resume = New-VmResumeState -ScenarioIndex $index -CurrentPhase $phase -PendingOwnership $currentScenarioOwnership
+            if ($lockOnly -and -not $scenarioFailure -and (Test-VmAutomaticRestartAllowed -AcceptanceMode $Mode -RealInstallAcknowledged ([bool]$AcknowledgeRealInstall) -RestartAcknowledged ([bool]$AcknowledgeRestart))) {
+                $resume = New-VmResumeState -NextScenarioIndex ($index + 1) -CurrentPhase 'resume-cleanup-pending' -PendingOwnership $currentScenarioOwnership
                 $resume.Error = ($cleanup.Errors -join '; ')
-                [void](Register-AcceptanceResume -Paths $paths -EntryScript $PSCommandPath -State $resume)
-                Restart-Computer -Force
-                exit 194
+                Invoke-VmAuthorizedRestart -ResumeState $resume
             }
             throw "Cleanup failed: $($cleanup.Errors -join '; ')"
         }
         $afterCleanup = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
-        $equivalence = Test-AcceptanceBaselineEquivalent -Baseline $baseline -Candidate $afterCleanup
+        $equivalence = Test-AcceptanceBaselineEquivalent -Baseline $baseline -Candidate $afterCleanup -IgnoredProcessIds $protectedPids
         if (-not $equivalence.Equivalent) { throw "Residual state after $scenarioId`: $($equivalence.Differences -join '; ')" }
         if ($scenarioFailure) { throw "Scenario $scenarioId failed after cleanup: $scenarioFailure" }
         $nextScenarioIndex = $index + 1
         $pendingOwnership = New-AcceptanceOwnership
     }
 
+    $protectedPids = Get-ProtectedProcessIds
     $baselineAfter = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
     Write-JsonFile -Path (Join-Path $paths.Run "baseline-after.json") -Value $baselineAfter
-    $finalCompare = Test-AcceptanceBaselineEquivalent -Baseline $baseline -Candidate $baselineAfter
+    $finalCompare = Test-AcceptanceBaselineEquivalent -Baseline $baseline -Candidate $baselineAfter -IgnoredProcessIds $protectedPids
     if (-not $finalCompare.Equivalent) { throw "Final environment differs from baseline: $($finalCompare.Differences -join '; ')" }
 
     $phase = "leak-scan"
@@ -505,6 +550,8 @@ try {
     $leakReport = [ordered]@{ ScannedFiles = $leakFiles.Count; SecretOccurrences = $leaks.Count; Files = @($leaks) }
     Write-JsonFile -Path (Join-Path $paths.Run "leak-scan-report.json") -Value $leakReport
     if ($leaks.Count -gt 0) { throw "API Key leaked into acceptance artifacts" }
+    $failedScenarioCount = @($allResults | Where-Object { $_.Status -ne 'PASS' }).Count
+    if ($failedScenarioCount -gt 0) { throw "$failedScenarioCount scenario result(s) failed" }
 
     $finalStatus = "PASS"
 }
@@ -512,6 +559,7 @@ catch {
     $errorMessage = $_.Exception.Message
     if ($baseline) {
         try {
+            $protectedPids = Get-ProtectedProcessIds
             $failureCurrent = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
             $failureDelta = Compare-AcceptanceSnapshot -Before $baseline -After $failureCurrent
             $failureCleanup = Reset-AcceptanceEnvironment -Baseline $baseline -Current $failureCurrent -Delta $failureDelta -SettingsBytes $settingsBytes `
@@ -520,19 +568,12 @@ catch {
             [void]$cleanupReports.Add([ordered]@{ Scenario = "__failure__"; Phase = $phase; Report = $failureCleanup })
             if (-not $failureCleanup.Success) {
                 $lockOnly = @($failureCleanup.Errors | Where-Object { $_ -notmatch '^LOCKED_PATH:' }).Count -eq 0
-                if ($lockOnly) {
-                    $resume = New-VmResumeState -ScenarioIndex $nextScenarioIndex -CurrentPhase $phase -PendingOwnership $currentScenarioOwnership
-                    $resume.Error = ($failureCleanup.Errors -join '; ')
-                    [void](Register-AcceptanceResume -Paths $paths -EntryScript $PSCommandPath -State $resume)
-                    Restart-Computer -Force
-                    exit 194
-                }
                 $errorMessage += "; failure cleanup failed: $($failureCleanup.Errors -join '; ')"
             }
             else {
                 $failureAfterCleanup = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
                 Write-JsonFile -Path (Join-Path $paths.Run "baseline-after.json") -Value $failureAfterCleanup
-                $failureEquivalent = Test-AcceptanceBaselineEquivalent -Baseline $baseline -Candidate $failureAfterCleanup
+                $failureEquivalent = Test-AcceptanceBaselineEquivalent -Baseline $baseline -Candidate $failureAfterCleanup -IgnoredProcessIds $protectedPids
                 if (-not $failureEquivalent.Equivalent) {
                     $errorMessage += "; residual state after failure cleanup: $($failureEquivalent.Differences -join '; ')"
                 }
@@ -551,16 +592,20 @@ Write-JsonFile -Path (Join-Path $paths.Run "scenario-results.json") -Value @($al
 Write-JsonFile -Path (Join-Path $paths.Run "cleanup-report.json") -Value @($cleanupReports)
 $summaryFullSha = try { (& git -C $ProjectRoot rev-parse HEAD) } catch { $null }
 $summaryZipSha = if (Test-Path -LiteralPath $zipPath) { (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash } else { $null }
+$passedScenarioCount = @($allResults | Where-Object { $_.Status -eq 'PASS' }).Count
+$failedScenarioCount = @($allResults | Where-Object { $_.Status -ne 'PASS' }).Count
 $summary = [ordered]@{
     SchemaVersion = 1; RunId = $runId; Status = $finalStatus; Mode = $Mode; Version = $Version
     FullSHA = $summaryFullSha
     Zip = $zipPath; ZipSHA256 = $summaryZipSha
-    Phase = $phase; StaticStages = @($stageResults); Scenarios = @($allResults); Error = $errorMessage; CompletedAt = (Get-Date).ToString("o")
+    Phase = $phase; StaticStages = @($stageResults); Scenarios = @($allResults)
+    ScenariosPassed = $passedScenarioCount; ScenariosFailed = $failedScenarioCount
+    Error = $errorMessage; CompletedAt = (Get-Date).ToString("o")
 }
 Write-JsonFile -Path (Join-Path $paths.Run "summary.json") -Value $summary
 @(
     "CCDI VM final acceptance", "Status: $finalStatus", "Mode: $Mode", "Version: $Version", "Full SHA: $($summary.FullSHA)",
-    "ZIP SHA256: $($summary.ZipSHA256)", "Scenarios passed: $(@($allResults).Count)", "Run directory: $($paths.Run)",
+    "ZIP SHA256: $($summary.ZipSHA256)", "Scenarios passed: $passedScenarioCount", "Scenarios failed: $failedScenarioCount", "Run directory: $($paths.Run)",
     $(if ($errorMessage) { "Error: $errorMessage" } else { "" })
 ) | Where-Object { $_ } | Set-Content -LiteralPath (Join-Path $paths.Run "summary.txt") -Encoding UTF8
 

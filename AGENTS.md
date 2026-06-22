@@ -7,9 +7,9 @@
 ## Active Work
 
 - **Branch**: `fix/v1.3.3-native-path-doctor-ux`
-- **Status**: Functional test sandboxed (injectable PATH adapter; no real User/Machine PATH / USERPROFILE / npm dependency). `check.ps1 -AcceptanceFunctional` gates behavioral tests (default Smoke static-only). Host: TestSafe functional 20/20 + restore-config-backup PASS + validate Full PASS + 16/16 TestSafe scenarios PASS. vm-final final-equivalence failed only due to host Claude session writing `.claude.json` (env noise, not a code bug; catch cleanup restored it, 3-layer PATH + settings.json byte-identical before/after).
+- **Status**: Resume/restart/process/PATH review fixes implemented. Host VM TestSafe summary PASS 16/16; successful no-resume task cleanup fixed and covered functionally. Dedicated VM Live and real reboot remain pending.
 - **Next**: 在专用 Win11 VMware 验收机执行 Live（8 场景）和真实重启续跑；在该机复验 vm-final final-equivalence（主机无其他 Claude 会话时不复现噪声）。Do not merge/tag/release until VM Live + real-reboot resume pass.
-- **Latest commit**: a9f9f6e feat(acceptance): single-user ConPTY VM interactive acceptance harness
+- **Latest commit**: run `git log -1 --oneline`; this file does not self-reference a commit SHA because that would change the commit itself.
 
 ---
 
@@ -19,8 +19,9 @@
 
 | 日期 | 内容 | Commit |
 |------|------|--------|
-| 2026-06-23 | Sandbox functional test PATH adapter (Real/Sandbox); check.ps1 -AcceptanceFunctional gate; vm-final TestSafe calls functional stage; bug-registry coverage index; host TestSafe functional 20/20 + restore-config-backup PASS + validate Full PASS + 16/16 scenarios PASS (vm-final final-equiv failed only on host Claude `.claude.json` noise) | working tree |
-| 2026-06-22 | Acceptance hardening — complete file rollback, explicit ownership, single-instance lock, resume merge, restore scenario, timeout evidence | working tree |
+| 2026-06-23 | Resume skips completed scenario; Live-only independently acknowledged restart; residual process blocker; zero-write PATH functional test; accurate summary counts | 本提交 |
+| 2026-06-23 | Sandbox functional test PATH adapter; check functional gate; host functional and TestSafe evidence captured; dedicated VM final-equivalence still pending | 931916e |
+| 2026-06-22 | Acceptance hardening — complete file rollback, explicit ownership, single-instance lock, resume merge, restore scenario, timeout evidence | 931916e |
 | 2026-06-22 | Single-user VM acceptance — ConPTY prompt state machine, atomic Job containment, baseline rollback, TestSafe/Live orchestration | a9f9f6e |
 | 2026-06-21 | Fix doc reference parser — replace greedy regex with structured inline-code + markdown-link extractors | cf3d17e |
 | 2026-06-21 | Buyer docs review — 01-04 TXT de-markdown, README buyer structure, security/admin/time language fix | f069b44 |

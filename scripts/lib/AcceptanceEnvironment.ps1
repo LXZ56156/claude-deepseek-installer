@@ -366,7 +366,10 @@ function Compare-AcceptanceSnapshot {
         ProcessPathChanged = $Before.ProcessPath -ne $After.ProcessPath
         RegistryChanged = (($Before.Registry | ConvertTo-Json -Depth 8 -Compress) -ne ($After.Registry | ConvertTo-Json -Depth 8 -Compress))
         SettingsChanged = (($Before.Settings | ConvertTo-Json -Compress) -ne ($After.Settings | ConvertTo-Json -Compress))
-        NewProcesses = @($After.Processes | Where-Object { $_.ProcessId -notin @($Before.Processes.ProcessId) })
+        NewProcesses = @($After.Processes | Where-Object {
+            $afterProcessId = [int]$_.ProcessId
+            $afterProcessId -notin @($Before.Processes | ForEach-Object { [int]$_.ProcessId })
+        })
         NewServices = @($After.Services | Where-Object { $_.Name -notin @($Before.Services.Name) })
         NewScheduledTasks = @($After.ScheduledTasks | Where-Object { "$($_.TaskPath)$($_.TaskName)" -notin @($Before.ScheduledTasks | ForEach-Object { "$($_.TaskPath)$($_.TaskName)" }) })
     }
@@ -499,7 +502,7 @@ function Reset-AcceptanceEnvironment {
 
     foreach ($process in @($Delta.NewProcesses)) {
         if ($process.ProcessId -in $ProtectedProcessIds) { continue }
-        if ($process.ProcessId -notin @($Ownership.ProcessIds)) { [void]$reports.Add("UNOWNED_PROCESS: $($process.ProcessId) $($process.Name)"); continue }
+        if ($process.ProcessId -notin @($Ownership.ProcessIds)) { [void]$errors.Add("UNOWNED_PROCESS: $($process.ProcessId) $($process.Name)"); continue }
         try { Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop; [void]$actions.Add("Stopped process $($process.ProcessId) $($process.Name)") }
         catch { [void]$errors.Add("Failed to stop process $($process.ProcessId): $($_.Exception.Message)") }
     }
@@ -575,7 +578,7 @@ function Reset-AcceptanceEnvironment {
 }
 
 function Test-AcceptanceBaselineEquivalent {
-    param($Baseline, $Candidate)
+    param($Baseline, $Candidate, [int[]]$IgnoredProcessIds = @())
     $differences = New-Object System.Collections.ArrayList
     if ($Baseline.UserPath -ne $Candidate.UserPath) { [void]$differences.Add("User PATH differs") }
     if ($Baseline.MachinePath -ne $Candidate.MachinePath) { [void]$differences.Add("Machine PATH differs") }
@@ -594,6 +597,9 @@ function Test-AcceptanceBaselineEquivalent {
     if (($baselineComparableFiles | ConvertTo-Json -Depth 8 -Compress) -ne ($candidateComparableFiles | ConvertTo-Json -Depth 8 -Compress)) { [void]$differences.Add("tracked files differ") }
     if (($Baseline.Services | ConvertTo-Json -Depth 8 -Compress) -ne ($Candidate.Services | ConvertTo-Json -Depth 8 -Compress)) { [void]$differences.Add("related services differ") }
     if (($Baseline.ScheduledTasks | ConvertTo-Json -Depth 8 -Compress) -ne ($Candidate.ScheduledTasks | ConvertTo-Json -Depth 8 -Compress)) { [void]$differences.Add("related scheduled tasks differ") }
+    $baselineProcesses = @($Baseline.Processes | Where-Object { [int]$_.ProcessId -notin $IgnoredProcessIds })
+    $candidateProcesses = @($Candidate.Processes | Where-Object { [int]$_.ProcessId -notin $IgnoredProcessIds })
+    if (($baselineProcesses | ConvertTo-Json -Depth 8 -Compress) -ne ($candidateProcesses | ConvertTo-Json -Depth 8 -Compress)) { [void]$differences.Add("related processes differ") }
     [PSCustomObject]@{ Equivalent = ($differences.Count -eq 0); Differences = @($differences) }
 }
 
@@ -620,6 +626,12 @@ function Get-AcceptanceResumeTaskSpec {
     param($Paths, [string]$EntryScript, $State)
     $resumeArguments = "-NoProfile -ExecutionPolicy Bypass -File `"$EntryScript`" -Resume -Mode $($State.Mode) -Version $($State.Version) -CredentialTarget `"$($State.CredentialTarget)`" -ControlRoot `"$($Paths.Root)`""
     if ([bool]$State.AcknowledgeRealInstall) { $resumeArguments += " -AcknowledgeRealInstall" }
+    $restartAcknowledged = $false
+    if ($State -is [Collections.IDictionary]) {
+        if ($State.Contains('AcknowledgeRestart')) { $restartAcknowledged = [bool]$State['AcknowledgeRestart'] }
+    }
+    elseif ($State.PSObject.Properties.Name -contains 'AcknowledgeRestart') { $restartAcknowledged = [bool]$State.AcknowledgeRestart }
+    if ($restartAcknowledged) { $resumeArguments += " -AcknowledgeRestart" }
     [PSCustomObject]@{ UserTaskName = $Paths.ResumeUserTask; SystemTaskName = $Paths.ResumeTask; Arguments = $resumeArguments; RunId = $State.RunId; NextScenarioIndex = $State.NextScenarioIndex }
 }
 
@@ -652,8 +664,13 @@ exit 1
 
 function Remove-AcceptanceResume {
     param($Paths, [switch]$KeepState)
-    & schtasks.exe /Delete /TN $Paths.ResumeTask /F 2>$null | Out-Null
-    & schtasks.exe /Delete /TN $Paths.ResumeUserTask /F 2>$null | Out-Null
+    $schtasks = Get-Command schtasks.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($schtasks) {
+        # Missing tasks are the normal no-resume case; capture the nonzero exit without
+        # allowing native stderr to become a terminating PowerShell error.
+        [void](Invoke-AcceptanceCapturedCommand -FilePath ([string]$schtasks.Source) -ArgumentList @('/Delete', '/TN', $Paths.ResumeTask, '/F') -TimeoutSec 30)
+        [void](Invoke-AcceptanceCapturedCommand -FilePath ([string]$schtasks.Source) -ArgumentList @('/Delete', '/TN', $Paths.ResumeUserTask, '/F') -TimeoutSec 30)
+    }
     if (-not $KeepState) { Remove-Item -LiteralPath $Paths.ResumeState -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath (Join-Path $Paths.Root "resume-bootstrap.ps1") -Force -ErrorAction SilentlyContinue
 }

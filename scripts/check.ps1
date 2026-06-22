@@ -5473,7 +5473,8 @@ $acceptanceOrchestratorText = Get-Content -LiteralPath $acceptancePaths.Orchestr
 $acceptanceEnvironmentText = Get-Content -LiteralPath $acceptancePaths.Environment -Raw -Encoding UTF8
 $acceptanceDriverText = Get-Content -LiteralPath $acceptancePaths.Driver -Raw -Encoding UTF8
 $acceptanceCredentialText = Get-Content -LiteralPath $acceptancePaths.Credential -Raw -Encoding UTF8
-$acceptanceAllText = @($acceptanceRunnerText, $acceptanceOrchestratorText, $acceptanceEnvironmentText, $acceptanceDriverText, $acceptanceCredentialText) -join "`n"
+$acceptanceFunctionalText = Get-Content -LiteralPath $acceptancePaths.Functional -Raw -Encoding UTF8
+$acceptanceAllText = @($acceptanceRunnerText, $acceptanceOrchestratorText, $acceptanceEnvironmentText, $acceptanceDriverText, $acceptanceCredentialText, $acceptanceFunctionalText) -join "`n"
 
 if ($acceptanceAllText -match '(?i)New-LocalUser|Remove-LocalUser|Windows\s*Sandbox|WindowsSandbox|\bVNC\b|SendKeys|VMware\s+snapshot|Checkpoint-VM') {
     throw "VM acceptance must remain single-user and must not depend on Sandbox, VNC, SendKeys, or VM snapshots"
@@ -5505,6 +5506,24 @@ foreach ($gate in @('C:\CCDI-ACCEPTANCE-VM.marker', 'AcknowledgeRealInstall', 'W
 }
 foreach ($term in @('Get-AcceptanceEnvironmentSnapshot', 'Compare-AcceptanceSnapshot', 'Reset-AcceptanceEnvironment', 'Test-AcceptanceBaselineEquivalent', 'ProtectedProcessIds', 'LOCKED_PATH', 'Register-AcceptanceResume', 'Restart-Computer')) {
     if ($acceptanceAllText -notmatch [regex]::Escape($term)) { throw "Single-user baseline/rollback control missing: $term" }
+}
+if ($acceptanceOrchestratorText -notmatch 'AcknowledgeRestart' -or
+    $acceptanceOrchestratorText -notmatch "AcceptanceMode -eq 'Live'" -or
+    ([regex]::Matches($acceptanceOrchestratorText, 'Restart-Computer\s+-Force')).Count -ne 1 -or
+    $acceptanceOrchestratorText -notmatch 'New-VmResumeState -NextScenarioIndex \(\$index \+ 1\)' -or
+    $acceptanceOrchestratorText -notmatch '\$phase -eq ''resume-cleanup-pending''' -or
+    $acceptanceOrchestratorText -notmatch 'Where-Object \{ \$_\.Status -eq ''PASS'' \}') {
+    throw "VM resume/restart/summary controls must skip completed scenarios, require Live restart acknowledgement, and count PASS results only"
+}
+if ($acceptanceEnvironmentText -notmatch '\$errors\.Add\("UNOWNED_PROCESS' -or
+    $acceptanceEnvironmentText -notmatch 'related processes differ' -or
+    $acceptanceOrchestratorText -notmatch 'IgnoredProcessIds \$protectedPids' -or
+    ([regex]::Matches($acceptanceOrchestratorText, '\$protectedPids = Get-ProtectedProcessIds')).Count -lt 4) {
+    throw "Residual acceptance processes must block cleanup and final baseline equivalence"
+}
+if ($acceptanceFunctionalText -match 'SetEnvironmentVariable\(''Path'',\$oldUserPath,''User''\)' -or
+    $acceptanceFunctionalText -notmatch 'TestSafe can never authorize automatic restart') {
+    throw "Functional acceptance must not write real user PATH and must prove TestSafe cannot restart"
 }
 foreach ($term in @('.codex', 'settings.json', 'UserPath', 'MachinePath', 'NpmGlobal', 'Winget', 'Registry', 'ScheduledTasks', 'Services', 'FullSHA', 'Invoke-AcceptanceCapturedCommand', 'TimedOut')) {
     if ($acceptanceEnvironmentText -notmatch [regex]::Escape($term)) { throw "Acceptance baseline or bounded probe missing: $term" }

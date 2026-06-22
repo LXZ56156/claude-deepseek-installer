@@ -25,11 +25,11 @@ function Assert-Test {
 }
 
 function New-TestSnapshot {
-    param([object[]]$Files, [object[]]$Npm = @(), [object[]]$Winget = @())
+    param([object[]]$Files, [object[]]$Npm = @(), [object[]]$Winget = @(), [object[]]$Processes = @())
     [PSCustomObject]@{
         UserPath = [Environment]::GetEnvironmentVariable('Path', 'User'); MachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine'); ProcessPath = $env:Path
         Settings = [PSCustomObject]@{ Path = (Join-Path $testRoot 'unused-settings.json'); Exists = $false; Length = 0; SHA256 = $null }
-        Commands = @(); NpmGlobal = @($Npm); Winget = @($Winget); Registry = @(); Files = @($Files); Processes = @(); Services = @(); ScheduledTasks = @()
+        Commands = @(); NpmGlobal = @($Npm); Winget = @($Winget); Registry = @(); Files = @($Files); Processes = @($Processes); Services = @(); ScheduledTasks = @()
     }
 }
 
@@ -99,6 +99,14 @@ try {
     $packageReset = Reset-AcceptanceEnvironment -Baseline $packageBefore -Current $packageAfter -Delta $packageDelta -ProjectRoot $ProjectRoot -ControlRoot (Join-Path $testRoot 'control-c') -ResultRoot (Join-Path $testRoot 'results-c') -AllowedCleanupRoots @($owned) -ProtectedProcessIds @($PID) -Ownership (New-AcceptanceOwnership)
     Assert-Test ($packageReset.Success -and (@($packageReset.Reports) -match 'UNOWNED_NPM_PACKAGE') -and -not (@($packageReset.Actions) -match 'Uninstalled npm')) 'unregistered package is reported and not uninstalled'
 
+    # An unregistered residual process is a blocking cleanup error and baseline difference.
+    $processBefore = New-TestSnapshot -Files @()
+    $processAfter = New-TestSnapshot -Files @() -Processes @([PSCustomObject]@{ ProcessId = 424242; Name = 'claude.exe'; CommandLine = 'test residual' })
+    $processDelta = Compare-AcceptanceSnapshot $processBefore $processAfter
+    $processReset = Reset-AcceptanceEnvironment -Baseline $processBefore -Current $processAfter -Delta $processDelta -ProjectRoot $ProjectRoot -ControlRoot (Join-Path $testRoot 'control-process') -ResultRoot (Join-Path $testRoot 'results-process') -AllowedCleanupRoots @($owned) -ProtectedProcessIds @($PID) -Ownership (New-AcceptanceOwnership)
+    $processEquivalent = Test-AcceptanceBaselineEquivalent -Baseline $processBefore -Candidate $processAfter
+    Assert-Test (-not $processReset.Success -and (@($processReset.Errors) -match 'UNOWNED_PROCESS') -and -not $processEquivalent.Equivalent) 'unregistered residual process blocks cleanup and equivalence'
+
     # Fault PATH is fully sandboxed: a fake npm.cmd and an in-memory PATH adapter ensure
     # no real User/Machine/Process PATH, real USERPROFILE, or real software is touched.
     # The fake USERPROFILE from the previous test stays in effect so nothing real is read.
@@ -131,12 +139,16 @@ try {
     # Resume state round-trip preserves parameters and all previous results without registering real tasks.
     $resumePaths = Get-AcceptanceControlPaths -ControlRoot (Join-Path $testRoot 'resume-control') -RunId 'roundtrip-run'
     New-Item -ItemType Directory -Path $resumePaths.Run -Force | Out-Null
-    $resumeState = [ordered]@{ SchemaVersion=2;RunId='roundtrip-run';Mode='Live';Version='1.3.3';CredentialTarget='TEST_TARGET';AcknowledgeRealInstall=$true;Phase='scenario-post-cleanup';NextScenarioIndex=4;StageResults=@(@{Name='stage-before'});ScenarioResults=@(@{Id='scenario-before'});CleanupReports=@(@{Scenario='cleanup-before'});PendingOwnership=(New-AcceptanceOwnership -PathRoots @($owned)) }
+    $resumeState = [ordered]@{ SchemaVersion=3;RunId='roundtrip-run';Mode='Live';Version='1.3.3';CredentialTarget='TEST_TARGET';AcknowledgeRealInstall=$true;AcknowledgeRestart=$true;Phase='resume-cleanup-pending';NextScenarioIndex=5;StageResults=@(@{Name='stage-before'});ScenarioResults=@(@{Id='scenario-before';Status='PASS'});CleanupReports=@(@{Scenario='cleanup-before'});PendingOwnership=(New-AcceptanceOwnership -PathRoots @($owned)) }
     $taskSpec = Register-AcceptanceResume -Paths $resumePaths -EntryScript (Join-Path $PSScriptRoot 'vm-final-acceptance.ps1') -State $resumeState -SkipTaskRegistration
     $roundTrip = Read-AcceptanceResumeState -ControlRoot $resumePaths.Root
     $sr=New-Object Collections.ArrayList;$cr=New-Object Collections.ArrayList;$rr=New-Object Collections.ArrayList
     Import-AcceptanceResumeResults -State $roundTrip -StageResults $sr -ScenarioResults $cr -CleanupReports $rr
-    Assert-Test ($roundTrip.CredentialTarget -eq 'TEST_TARGET' -and $roundTrip.NextScenarioIndex -eq 4 -and $taskSpec.Arguments -match 'CredentialTarget "TEST_TARGET"' -and $sr.Count -eq 1 -and $cr.Count -eq 1 -and $rr.Count -eq 1) 'resume state and prior results round-trip'
+    Assert-Test ($roundTrip.CredentialTarget -eq 'TEST_TARGET' -and $roundTrip.NextScenarioIndex -eq 5 -and $roundTrip.Phase -eq 'resume-cleanup-pending' -and $taskSpec.Arguments -match 'CredentialTarget "TEST_TARGET"' -and $taskSpec.Arguments -match '-AcknowledgeRestart' -and $sr.Count -eq 1 -and $cr.Count -eq 1 -and $rr.Count -eq 1) 'resume state starts after completed scenario and preserves prior results'
+    Assert-Test (-not (Test-VmAutomaticRestartAllowed -AcceptanceMode 'TestSafe' -RealInstallAcknowledged $true -RestartAcknowledged $true)) 'TestSafe can never authorize automatic restart'
+    Assert-Test (-not (Test-VmAutomaticRestartAllowed -AcceptanceMode 'Live' -RealInstallAcknowledged $true -RestartAcknowledged $false)) 'Live restart requires independent acknowledgement'
+    Remove-AcceptanceResume -Paths $resumePaths
+    Assert-Test (-not (Test-Path -LiteralPath $resumePaths.ResumeState)) 'missing resume tasks do not fail successful cleanup'
 
     # Locked owned path produces LOCKED_PATH evidence and resumable state, without rebooting.
     $lockedRoot = Join-Path $testRoot 'locked-root'; New-Item -ItemType Directory -Path $lockedRoot -Force | Out-Null
@@ -173,7 +185,6 @@ Start-Sleep -Seconds 30
 }
 finally {
     $env:USERPROFILE=$oldProfile;$env:APPDATA=$oldAppData;$env:LOCALAPPDATA=$oldLocalAppData;$env:Path=$oldProcessPath
-    [Environment]::SetEnvironmentVariable('Path',$oldUserPath,'User')
     if ($null -eq $oldTestDesktop) { Remove-Item Env:\CCDI_TEST_DESKTOP -ErrorAction SilentlyContinue } else { $env:CCDI_TEST_DESKTOP=$oldTestDesktop }
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

@@ -28,10 +28,21 @@
 
 ## 状态（截至 2026-06-22）
 
-- TestSafe 功能测试（`scripts/test-vm-acceptance.ps1`）：**20/20 通过**，在 host 实跑。沙盒化后不修改真实 User/Machine/Process PATH、真实 USERPROFILE、真实 settings.json；已用剥离 PATH（仅 System32 + WindowsPowerShell）验证不依赖真实 npm。
+- TestSafe 功能测试（`scripts/test-vm-acceptance.ps1`）：**24/24 通过**，在 host 实跑。沙盒化后不修改真实 User/Machine/Process PATH、真实 USERPROFILE、真实 settings.json；finally 不再写回真实 User PATH。
 - TestSafe `restore-config-backup` 场景：**通过**（host 实跑 6.87s），真实 settings.json 前后 SHA256 一致。
 - `check.ps1`：功能测试门控于 `-AcceptanceFunctional`；默认 Smoke 仅静态检查（ConPTY 驱动编译 + 场景定义校验 + synthetic 快照字段），无真实环境副作用。
 - `vm-final-acceptance.ps1 -Mode TestSafe`：静态校验阶段调用沙盒化功能测试作为首个 stage。
-- `vm-final` final-equivalence（所有场景后的最终基线等价检查）：**严格检查，保留不改**。该检查对被跟踪用户状态文件（如 `%USERPROFILE%\.claude.json`）的并发写入敏感——在运行其他 Claude/Codex 会话的主机上会因外部写入而失败（本轮 host 因自身 Claude 会话写 `.claude.json` 导致 final 检查未通过，但 16/16 场景与全部 cleanup 均 Success）。**必须在专用 VM、且运行期间无其他 Claude/Codex 会话写入用户状态文件时运行；检测到外部状态变化导致基线不等价时必须保持失败并报告差异，不得自动忽略或重试跳过**——这是有意的严格检查，用于暴露真实回滚缺陷。等待专用 Win11 VMware 复验。
+- `vm-final` final-equivalence（所有场景后的最终基线等价检查）：仍严格检查文件、包、服务、任务和相关进程。主机曾观察到 `.claude.json` 并发变化，但在专用 VM 复验前不预先判定为外部噪声或代码缺陷；必须保留失败证据并继续调查，不得自动忽略。
 - Live 场景（8 个）：**未运行**。仅定义 + 静态核对；需专用 Win11 VMware + 管理员 + `C:\CCDI-ACCEPTANCE-VM.marker` + `-AcknowledgeRealInstall`。
-- 真实重启续跑：**未运行**。仅 `resume-state.json` 序列化/反序列化 round-trip 已证（`-SkipTaskRegistration`，未注册真实计划任务、未执行 `Restart-Computer`）。**「产生 resume-state」不等于「真实重启续跑通过」**。
+- 真实重启续跑：**未运行**。自动重启还必须独立传入 `-AcknowledgeRestart`；TestSafe 永不允许重启。round-trip 已验证保存下一场景索引、`resume-cleanup-pending`、历史结果和任务参数，但真实重启仍须专用 VM 复验。
+
+## 2026-06-23 Resume and safety review fixes
+
+| ID | Problem | Root cause | Fix | Regression |
+|---|---|---|---|---|
+| ACC-009 | Resume repeated the completed scenario | Locked cleanup saved the current loop index and resume ignored phase | Save `index + 1`; resume phase completes pending cleanup before entering the next scenario | Resume round-trip and source gate |
+| ACC-010 | TestSafe could reach forced restart | Locked-path handling had no mode-specific restart authorization | Require Live plus real-install and independent restart acknowledgements; failure cleanup never auto-restarts | Two restart authorization tests |
+| ACC-011 | Residual processes could still pass | Unowned processes were reports and final equivalence omitted processes | Make unowned residual processes cleanup errors and compare process snapshots | Residual process behavioral test |
+| ACC-012 | Functional cleanup rewrote real User PATH | `finally` always persisted the captured string | Remove the persistent write; sandbox adapter remains the only PATH mutation | Real PATH unchanged assertions |
+| ACC-013 | Human summary overstated passed scenarios | Summary used total result count | Count PASS and non-PASS results separately in JSON and text | Static source gate |
+| ACC-014 | Successful TestSafe exited after all 16 scenarios | Deleting nonexistent resume tasks emitted native stderr under terminating error policy | Use bounded captured `schtasks.exe` deletion and accept missing tasks | Functional no-task cleanup test |
