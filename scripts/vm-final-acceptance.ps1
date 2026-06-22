@@ -50,6 +50,7 @@ function Invoke-VmStage {
     $safeName = $Name -replace '[^A-Za-z0-9_-]', '-'
     $stdout = Join-Path $EvidenceRoot "$safeName.stdout.txt"
     $stderr = Join-Path $EvidenceRoot "$safeName.stderr.txt"
+    $resultPath = Join-Path $EvidenceRoot "$safeName.result.json"
     $argumentLine = ($Arguments | ForEach-Object { ConvertTo-VmArgument $_ }) -join ' '
     $started = Get-Date
     $psi = New-Object Diagnostics.ProcessStartInfo
@@ -60,18 +61,29 @@ function Invoke-VmStage {
     $psi.CreateNoWindow = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
-    $process = [Diagnostics.Process]::Start($psi)
-    $outTask = $process.StandardOutput.ReadToEndAsync()
-    $errTask = $process.StandardError.ReadToEndAsync()
-    if (-not $process.WaitForExit($TimeoutSec * 1000)) {
-        try { & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null } catch { }
-        throw "$Name timed out after ${TimeoutSec}s"
+    $process = $null; $outTask = $null; $errTask = $null; $timedOut = $false; $exitCode = $null; $outText = ''; $errText = ''
+    try {
+        $process = [Diagnostics.Process]::Start($psi)
+        $outTask = $process.StandardOutput.ReadToEndAsync(); $errTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutSec * 1000)) {
+            $timedOut = $true
+            try { & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null } catch { }
+            [void]$process.WaitForExit(10000)
+        }
+        [void]$outTask.Wait(10000); [void]$errTask.Wait(10000)
+        if ($outTask.IsCompleted) { $outText = [string]$outTask.Result }
+        if ($errTask.IsCompleted) { $errText = [string]$errTask.Result }
+        if ($process.HasExited) { $exitCode = $process.ExitCode }
     }
-    [void]$outTask.Wait(5000); [void]$errTask.Wait(5000)
-    [IO.File]::WriteAllText($stdout, $outTask.Result, (New-Object Text.UTF8Encoding($false)))
-    [IO.File]::WriteAllText($stderr, $errTask.Result, (New-Object Text.UTF8Encoding($false)))
-    $result = [ordered]@{ Name = $Name; ExitCode = $process.ExitCode; DurationSec = [Math]::Round(((Get-Date) - $started).TotalSeconds, 2); Stdout = $stdout; Stderr = $stderr }
-    if ($process.ExitCode -ne 0) { throw "$Name failed with exit code $($process.ExitCode); stdout=$stdout stderr=$stderr" }
+    finally {
+        [IO.File]::WriteAllText($stdout, $outText, (New-Object Text.UTF8Encoding($false)))
+        [IO.File]::WriteAllText($stderr, $errText, (New-Object Text.UTF8Encoding($false)))
+        $result = [ordered]@{ Name = $Name; ExitCode = $exitCode; TimedOut = $timedOut; DurationSec = [Math]::Round(((Get-Date) - $started).TotalSeconds, 2); Stdout = $stdout; Stderr = $stderr; Result = $resultPath }
+        $result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $resultPath -Encoding UTF8
+        if ($process) { $process.Dispose() }
+    }
+    if ($timedOut) { throw "$Name timed out after ${TimeoutSec}s; stdout=$stdout stderr=$stderr result=$resultPath" }
+    if ($exitCode -ne 0) { throw "$Name failed with exit code $exitCode; stdout=$stdout stderr=$stderr result=$resultPath" }
     return $result
 }
 
@@ -111,9 +123,57 @@ function Write-JsonFile {
     $Value | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
+function New-VmPathAdapter {
+    # Real-environment adapter. Live scenarios use this so the three PATH layers and npm
+    # resolution touch actual machine state. Functional tests inject a sandbox adapter so
+    # no permanent User/Machine PATH, real USERPROFILE, or real software is touched.
+    [pscustomobject]@{ Mode = 'Real' }
+}
+
+function New-VmSandboxPathAdapter {
+    param($State, [string]$NpmSource)
+    [pscustomobject]@{ Mode = 'Sandbox'; State = $State; NpmSource = $NpmSource }
+}
+
+function Get-VmAdapterPath {
+    param($Adapter, [ValidateSet('Process', 'User', 'Machine')][string]$Layer)
+    if ($Adapter.Mode -eq 'Sandbox') { return [string]$Adapter.State[$Layer] }
+    switch ($Layer) {
+        'Process' { return [string]$env:Path }
+        'User' { return [string][Environment]::GetEnvironmentVariable('Path', 'User') }
+        'Machine' { return [string][Environment]::GetEnvironmentVariable('Path', 'Machine') }
+    }
+}
+
+function Set-VmAdapterPath {
+    param($Adapter, [ValidateSet('Process', 'User', 'Machine')][string]$Layer, [string]$Value)
+    if ($Adapter.Mode -eq 'Sandbox') { $Adapter.State[$Layer] = $Value; return }
+    switch ($Layer) {
+        'Process' { $env:Path = $Value }
+        'User' { [Environment]::SetEnvironmentVariable('Path', $Value, 'User') }
+        'Machine' { [Environment]::SetEnvironmentVariable('Path', $Value, 'Machine') }
+    }
+}
+
+function Resolve-VmAdapterNpm {
+    param($Adapter)
+    if ($Adapter.Mode -eq 'Sandbox') { return [pscustomobject]@{ Source = [string]$Adapter.NpmSource } }
+    $cmd = Get-Command npm.cmd -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) { return [pscustomobject]@{ Source = [string]$cmd.Source } }
+    return $null
+}
+
 function Start-LiveScenarioSetup {
-    param($Scenario, [string]$SceneDir)
-    $state = [ordered]@{ HostsBytes = $null; RenamedFiles = @(); AddedPath = $null; FaultBin = $null }
+    param($Scenario, [string]$SceneDir, $PathAdapter)
+    if (-not $PathAdapter) { $PathAdapter = New-VmPathAdapter }
+    $state = [ordered]@{
+        HostsBytes = $null; RenamedFiles = @(); AddedPath = $null; FaultBin = $null
+        ProcessPathBefore = Get-VmAdapterPath -Adapter $PathAdapter -Layer Process
+        UserPathBefore = Get-VmAdapterPath -Adapter $PathAdapter -Layer User
+        MachinePathBefore = Get-VmAdapterPath -Adapter $PathAdapter -Layer Machine
+        PathAdapter = $PathAdapter
+        OwnedWingetPackages = @(); OwnedNpmPackages = @(); OwnedPathRoots = @()
+    }
     if (-not ($Scenario.PSObject.Properties.Name -contains "setup")) { return $state }
     $setup = $Scenario.setup
     try {
@@ -130,7 +190,9 @@ function Start-LiveScenarioSetup {
             '--accept-package-agreements', '--accept-source-agreements'
         ) -TimeoutSec 300
         if ($probe.TimedOut -or $probe.ExitCode -ne 0) { throw "Scenario setup failed to install Node.js LTS within the controlled timeout" }
-        $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
+        $state.OwnedWingetPackages += 'OpenJS.NodeJS.LTS'
+        $state.OwnedPathRoots += (Join-Path $env:ProgramFiles 'nodejs')
+        Set-VmAdapterPath -Adapter $PathAdapter -Layer Process -Value ((Get-VmAdapterPath -Adapter $PathAdapter -Layer Machine) + ';' + (Get-VmAdapterPath -Adapter $PathAdapter -Layer User))
     }
     if ($setup.PSObject.Properties.Name -contains "hideNpm" -and $setup.hideNpm) {
         $npmCommands = @(Get-Command npm, npm.cmd, npm.ps1, npx, npx.cmd, npx.ps1 -All -ErrorAction SilentlyContinue | Where-Object Path | Select-Object -ExpandProperty Path -Unique)
@@ -141,7 +203,8 @@ function Start-LiveScenarioSetup {
         }
     }
     if ($setup.PSObject.Properties.Name -contains "installCommandFailsButClaudeAppears" -and $setup.installCommandFailsButClaudeAppears) {
-        $realNpm = (Get-Command npm.cmd -ErrorAction Stop | Select-Object -First 1).Source
+        $realNpm = Resolve-VmAdapterNpm -Adapter $PathAdapter
+        if (-not $realNpm) { throw "Scenario setup could not resolve npm.cmd to build the fault wrapper" }
         $faultBin = Join-Path $SceneDir "fault-bin"
         New-Item -ItemType Directory -Path $faultBin -Force | Out-Null
         $npmWrapper = Join-Path $faultBin "npm.cmd"
@@ -152,12 +215,13 @@ if /I "%1"=="install" (
   >>"%~dp0claude.cmd" echo echo 2.1.0 ^(Claude Code^)
   exit /b 7
 )
-"$realNpm" %*
+"$([string]$realNpm.Source)" %*
 "@ | Set-Content -LiteralPath $npmWrapper -Encoding ASCII
         $state.AddedPath = $faultBin
         $state.FaultBin = $faultBin
-        $env:Path = "$faultBin;$env:Path"
-        [Environment]::SetEnvironmentVariable("Path", "$faultBin;" + [Environment]::GetEnvironmentVariable("Path", "User"), "User")
+        $state.OwnedPathRoots += $faultBin
+        Set-VmAdapterPath -Adapter $PathAdapter -Layer Process -Value ("$faultBin;" + (Get-VmAdapterPath -Adapter $PathAdapter -Layer Process))
+        Set-VmAdapterPath -Adapter $PathAdapter -Layer User -Value ("$faultBin;" + (Get-VmAdapterPath -Adapter $PathAdapter -Layer User))
     }
     return $state
     }
@@ -169,22 +233,87 @@ if /I "%1"=="install" (
 
 function Stop-LiveScenarioSetup {
     param($State)
+    $errors = New-Object Collections.ArrayList
+    $adapter = if ($State.PathAdapter) { $State.PathAdapter } else { New-VmPathAdapter }
+    try { if ((Get-VmAdapterPath -Adapter $adapter -Layer Process) -ne [string]$State.ProcessPathBefore) { Set-VmAdapterPath -Adapter $adapter -Layer Process -Value ([string]$State.ProcessPathBefore) } } catch { [void]$errors.Add("process PATH: $($_.Exception.Message)") }
+    try { if ((Get-VmAdapterPath -Adapter $adapter -Layer User) -ne [string]$State.UserPathBefore) { Set-VmAdapterPath -Adapter $adapter -Layer User -Value ([string]$State.UserPathBefore) } } catch { [void]$errors.Add("user PATH: $($_.Exception.Message)") }
+    try { if ((Get-VmAdapterPath -Adapter $adapter -Layer Machine) -ne [string]$State.MachinePathBefore) { Set-VmAdapterPath -Adapter $adapter -Layer Machine -Value ([string]$State.MachinePathBefore) } } catch { [void]$errors.Add("machine PATH: $($_.Exception.Message)") }
     if ($State.HostsBytes) {
+        try {
         $hostsPath = Join-Path $env:SystemRoot "System32\drivers\etc\hosts"
         [IO.File]::WriteAllBytes($hostsPath, $State.HostsBytes)
         [Array]::Clear($State.HostsBytes, 0, $State.HostsBytes.Length)
         Clear-DnsClientCache
+        } catch { [void]$errors.Add("hosts: $($_.Exception.Message)") }
     }
     foreach ($rename in @($State.RenamedFiles)) {
-        if (Test-Path -LiteralPath $rename.Hidden) { Move-Item -LiteralPath $rename.Hidden -Destination $rename.Original -Force }
+        try { if (Test-Path -LiteralPath $rename.Hidden) { Move-Item -LiteralPath $rename.Hidden -Destination $rename.Original -Force } }
+        catch { [void]$errors.Add("restore $($rename.Original): $($_.Exception.Message)") }
+    }
+    try { if ($State.FaultBin -and (Test-Path -LiteralPath $State.FaultBin)) { Remove-Item -LiteralPath $State.FaultBin -Recurse -Force -ErrorAction Stop } }
+    catch { [void]$errors.Add("fault-bin: $($_.Exception.Message)") }
+    if ($errors.Count) { throw "Scenario setup restoration failed: $($errors -join '; ')" }
+}
+
+function Get-VmScenarioOwnership {
+    param($Scenario, $SetupState, [ValidateSet('TestSafe', 'Live')][string]$ScenarioMode)
+    $pathRoots = New-Object Collections.ArrayList
+    $pathPatterns = New-Object Collections.ArrayList
+    $npmPackages = New-Object Collections.ArrayList
+    $wingetPackages = New-Object Collections.ArrayList
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    # TestSafe invokes the real buyer launchers; Claude itself may update this state file.
+    if ($ScenarioMode -eq 'TestSafe') { [void]$pathRoots.Add((Join-Path $env:USERPROFILE '.claude.json')) }
+    $ownershipSpec = if ($Scenario.PSObject.Properties.Name -contains 'ownership') { $Scenario.ownership } else { $null }
+    foreach ($kind in @($(if ($ownershipSpec) { $ownershipSpec.pathKinds } else { @() }))) {
+        switch ([string]$kind) {
+            'claude-runtime' {
+                foreach ($path in @((Join-Path $env:USERPROFILE '.claude'), (Join-Path $env:USERPROFILE '.local\bin'), (Join-Path $env:USERPROFILE '.local\share\claude'), (Join-Path $env:LOCALAPPDATA 'Programs\claude'), (Join-Path $env:LOCALAPPDATA 'AnthropicClaude'))) { [void]$pathRoots.Add($path) }
+            }
+            'desktop-test' {
+                [void]$pathRoots.Add((Join-Path $desktop 'ClaudeCode-Test'))
+                [void]$pathPatterns.Add(('^' + [regex]::Escape(([IO.Path]::GetFullPath($desktop)).TrimEnd('\') + '\ClaudeCode-Test-') + '\d{8}-\d{6}(?:-\d+)?(?:\\|$)'))
+            }
+            'installer-state' { [void]$pathRoots.Add((Join-Path $env:USERPROFILE '.claude-deepseek-installer')) }
+            'claude-user-json' { [void]$pathRoots.Add((Join-Path $env:USERPROFILE '.claude.json')) }
+            'node-runtime' { [void]$pathRoots.Add((Join-Path $env:ProgramFiles 'nodejs')) }
+            'npm-runtime' { [void]$pathRoots.Add((Join-Path $env:APPDATA 'npm')) }
+        }
+    }
+    if ($ownershipSpec) {
+        foreach ($value in @($ownershipSpec.npmPackages)) { [void]$npmPackages.Add([string]$value) }
+        foreach ($value in @($ownershipSpec.wingetPackages)) { [void]$wingetPackages.Add([string]$value) }
+    }
+    if ($SetupState) {
+        foreach ($value in @($SetupState.OwnedPathRoots)) { [void]$pathRoots.Add([string]$value) }
+        foreach ($value in @($SetupState.OwnedNpmPackages)) { [void]$npmPackages.Add([string]$value) }
+        foreach ($value in @($SetupState.OwnedWingetPackages)) { [void]$wingetPackages.Add([string]$value) }
+    }
+    New-AcceptanceOwnership -PathRoots @($pathRoots) -PathPatterns @($pathPatterns) -NpmPackages @($npmPackages) -WingetPackages @($wingetPackages)
+}
+
+function New-VmResumeState {
+    param([int]$ScenarioIndex, [string]$CurrentPhase, $PendingOwnership)
+    [ordered]@{
+        SchemaVersion = 2
+        RunId = $runId; Mode = $Mode; Version = $Version; CredentialTarget = $CredentialTarget
+        AcknowledgeRealInstall = [bool]$AcknowledgeRealInstall
+        Phase = $CurrentPhase; NextScenarioIndex = $ScenarioIndex
+        StageResults = @($stageResults); ScenarioResults = @($allResults); CleanupReports = @($cleanupReports)
+        PendingOwnership = $PendingOwnership; Error = $null; SavedAt = (Get-Date).ToString('o')
     }
 }
 
-$runId = if ($Resume) {
-    $resumePath = Join-Path $ControlRoot "resume-state.json"
-    if (-not (Test-Path -LiteralPath $resumePath -PathType Leaf)) { throw "Resume state not found: $resumePath" }
-    [string]((Get-Content -LiteralPath $resumePath -Raw -Encoding UTF8 | ConvertFrom-Json).RunId)
-} else { Get-Date -Format "yyyyMMdd-HHmmss-fff" }
+if ($env:CCDI_ACCEPTANCE_IMPORT_ONLY -eq '1') { return }
+
+$resumeBootstrapState = if ($Resume) { Read-AcceptanceResumeState -ControlRoot $ControlRoot } else { $null }
+if ($resumeBootstrapState) {
+    $Mode = [string]$resumeBootstrapState.Mode; $Version = [string]$resumeBootstrapState.Version
+    $CredentialTarget = [string]$resumeBootstrapState.CredentialTarget
+    $AcknowledgeRealInstall = [bool]$resumeBootstrapState.AcknowledgeRealInstall
+}
+$runId = if ($Resume) { [string]$resumeBootstrapState.RunId } else { Get-Date -Format "yyyyMMdd-HHmmss-fff" }
+$instanceLock = Enter-AcceptanceInstanceLock -ControlRoot $ControlRoot
 $paths = Get-AcceptanceControlPaths -ControlRoot $ControlRoot -RunId $runId
 foreach ($directory in @($paths.Root, $paths.Baseline, $paths.Runs, $paths.Run)) { New-Item -ItemType Directory -Path $directory -Force | Out-Null }
 $scenarioRoot = Join-Path $paths.Run "scenarios"
@@ -204,35 +333,32 @@ $stageResults = New-Object System.Collections.ArrayList
 $finalStatus = "FAIL"
 $errorMessage = $null
 $protectedPids = Get-ProtectedProcessIds
+$pendingOwnership = New-AcceptanceOwnership
+$currentScenarioOwnership = New-AcceptanceOwnership
 
 try {
     if ($Resume) {
-        $resumeState = Get-Content -LiteralPath $paths.ResumeState -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ([string]$resumeState.Mode -ne $Mode) { throw "Resume mode mismatch" }
+        $resumeState = $resumeBootstrapState
         $nextScenarioIndex = [int]$resumeState.NextScenarioIndex
         $phase = [string]$resumeState.Phase
+        Import-AcceptanceResumeResults -State $resumeState -StageResults $stageResults -ScenarioResults $allResults -CleanupReports $cleanupReports
+        if ($resumeState.PendingOwnership) { $pendingOwnership = $resumeState.PendingOwnership }
         $baseline = Get-Content -LiteralPath (Join-Path $paths.Baseline "baseline-before.json") -Raw -Encoding UTF8 | ConvertFrom-Json
         $settingsBackup = Join-Path $paths.Baseline "settings.json.bytes"
         if ($baseline.Settings.Exists) { $settingsBytes = [IO.File]::ReadAllBytes($settingsBackup) }
-        Remove-AcceptanceResume -Paths $paths
+        Remove-AcceptanceResume -Paths $paths -KeepState
     }
     else {
-        Write-VmAcceptance "Capturing single-user baseline"
-        $baseline = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
         if ($Mode -eq "Live") {
-            $preexistingRequiredCleanCommands = @($baseline.Commands | Where-Object { $_.Name -in @("claude", "node", "npm") -and $_.Exists })
+            $preexistingRequiredCleanCommands = @("claude", "node", "npm") | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue }
             if ($preexistingRequiredCleanCommands.Count -gt 0) {
-                throw "Live baseline must start without claude/node/npm: $(@($preexistingRequiredCleanCommands.Name) -join ', ')"
+                throw "Live baseline must start without claude/node/npm: $($preexistingRequiredCleanCommands -join ', ')"
             }
         }
-        Write-JsonFile -Path (Join-Path $paths.Baseline "baseline-before.json") -Value $baseline
-        Write-JsonFile -Path (Join-Path $paths.Run "baseline-before.json") -Value $baseline
-        if ($baseline.Settings.Exists) {
-            $settingsBytes = [IO.File]::ReadAllBytes([string]$baseline.Settings.Path)
-            [IO.File]::WriteAllBytes((Join-Path $paths.Baseline "settings.json.bytes"), $settingsBytes)
-        }
-
         $phase = "static-validation"
+        [void]$stageResults.Add((Invoke-VmStage -Name "acceptance-functional" -FilePath "powershell.exe" -Arguments @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "test-vm-acceptance.ps1")
+        ) -TimeoutSec 300 -EvidenceRoot $paths.Run))
         [void]$stageResults.Add((Invoke-VmStage -Name "validate-full" -FilePath "powershell.exe" -Arguments @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "validate.ps1"), "-Mode", "Full", "-Version", $Version
         ) -TimeoutSec 900 -EvidenceRoot $paths.Run))
@@ -245,6 +371,17 @@ try {
         [void]$stageResults.Add((Invoke-VmStage -Name "build-release" -FilePath "powershell.exe" -Arguments @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "build-release.ps1"), "-Version", $Version
         ) -TimeoutSec 300 -EvidenceRoot $paths.Run))
+
+        Write-VmAcceptance "Capturing single-user scenario baseline"
+        $fileBackupRoot = Join-Path $paths.Baseline 'files'
+        $baseline = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp -CaptureFileBytes -FileBackupRoot $fileBackupRoot
+        Assert-AcceptanceSnapshotUsable -Snapshot $baseline -Label 'Scenario baseline'
+        Write-JsonFile -Path (Join-Path $paths.Baseline "baseline-before.json") -Value $baseline
+        Write-JsonFile -Path (Join-Path $paths.Run "baseline-before.json") -Value $baseline
+        if ($baseline.Settings.Exists) {
+            $settingsBytes = [IO.File]::ReadAllBytes([string]$baseline.Settings.Path)
+            [IO.File]::WriteAllBytes((Join-Path $paths.Baseline "settings.json.bytes"), $settingsBytes)
+        }
     }
 
     if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) { throw "Final ZIP missing: $zipPath" }
@@ -264,12 +401,13 @@ try {
 
         $phase = "scenario-pre-cleanup"
         $pre = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
+        Assert-AcceptanceSnapshotUsable -Snapshot $pre -Label "Pre-scenario $scenarioId"
         $preDelta = Compare-AcceptanceSnapshot -Before $baseline -After $pre
         $preEquivalent = Test-AcceptanceBaselineEquivalent -Baseline $baseline -Candidate $pre
         if (-not $preEquivalent.Equivalent) {
             $preReset = Reset-AcceptanceEnvironment -Baseline $baseline -Current $pre -Delta $preDelta -SettingsBytes $settingsBytes `
                 -ProjectRoot $ProjectRoot -ControlRoot $paths.Root -ResultRoot $paths.Run `
-                -AllowedCleanupRoots (Get-AcceptanceKnownRoots) -ProtectedProcessIds $protectedPids
+                -AllowedCleanupRoots @((Get-AcceptanceKnownRoots) + @($baseline.Files.Path)) -ProtectedProcessIds $protectedPids -Ownership $pendingOwnership
             [void]$cleanupReports.Add([ordered]@{ Scenario = $scenarioId; Phase = "before"; Report = $preReset })
             if (-not $preReset.Success) { throw "Pre-scenario cleanup failed: $($preReset.Errors -join '; ')" }
             $pre = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
@@ -297,8 +435,12 @@ try {
             $scenarioFailure = $_.Exception.Message
         }
         finally {
-            if ($setupState) { Stop-LiveScenarioSetup -State $setupState }
+            if ($setupState) {
+                try { Stop-LiveScenarioSetup -State $setupState }
+                catch { $scenarioFailure = if ($scenarioFailure) { "$scenarioFailure; $($_.Exception.Message)" } else { $_.Exception.Message } }
+            }
         }
+        $currentScenarioOwnership = Get-VmScenarioOwnership -Scenario $scenario -SetupState $setupState -ScenarioMode $scenarioMode
         [void]$allResults.Add([ordered]@{
             Id = $scenarioId
             Mode = $scenarioMode
@@ -309,17 +451,19 @@ try {
 
         $phase = "scenario-post-cleanup"
         $post = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
+        Assert-AcceptanceSnapshotUsable -Snapshot $post -Label "Post-scenario $scenarioId"
         $delta = Compare-AcceptanceSnapshot -Before $baseline -After $post
         Write-JsonFile -Path (Join-Path $sceneDir "ownership-delta.json") -Value $delta
         $cleanup = Reset-AcceptanceEnvironment -Baseline $baseline -Current $post -Delta $delta -SettingsBytes $settingsBytes `
             -ProjectRoot $ProjectRoot -ControlRoot $paths.Root -ResultRoot $paths.Run `
-            -AllowedCleanupRoots (Get-AcceptanceKnownRoots) -ProtectedProcessIds $protectedPids
+            -AllowedCleanupRoots @((Get-AcceptanceKnownRoots) + @($baseline.Files.Path)) -ProtectedProcessIds $protectedPids -Ownership $currentScenarioOwnership
         [void]$cleanupReports.Add([ordered]@{ Scenario = $scenarioId; Phase = "after"; Report = $cleanup })
         if (-not $cleanup.Success) {
             $lockOnly = @($cleanup.Errors | Where-Object { $_ -notmatch '^LOCKED_PATH:' }).Count -eq 0
             if ($lockOnly) {
-                $resume = [ordered]@{ RunId = $runId; Mode = $Mode; Version = $Version; Phase = $phase; NextScenarioIndex = $index; Error = ($cleanup.Errors -join '; ') }
-                Register-AcceptanceResume -Paths $paths -EntryScript $PSCommandPath -State $resume
+                $resume = New-VmResumeState -ScenarioIndex $index -CurrentPhase $phase -PendingOwnership $currentScenarioOwnership
+                $resume.Error = ($cleanup.Errors -join '; ')
+                [void](Register-AcceptanceResume -Paths $paths -EntryScript $PSCommandPath -State $resume)
                 Restart-Computer -Force
                 exit 194
             }
@@ -330,6 +474,7 @@ try {
         if (-not $equivalence.Equivalent) { throw "Residual state after $scenarioId`: $($equivalence.Differences -join '; ')" }
         if ($scenarioFailure) { throw "Scenario $scenarioId failed after cleanup: $scenarioFailure" }
         $nextScenarioIndex = $index + 1
+        $pendingOwnership = New-AcceptanceOwnership
     }
 
     $baselineAfter = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
@@ -371,13 +516,14 @@ catch {
             $failureDelta = Compare-AcceptanceSnapshot -Before $baseline -After $failureCurrent
             $failureCleanup = Reset-AcceptanceEnvironment -Baseline $baseline -Current $failureCurrent -Delta $failureDelta -SettingsBytes $settingsBytes `
                 -ProjectRoot $ProjectRoot -ControlRoot $paths.Root -ResultRoot $paths.Run `
-                -AllowedCleanupRoots (Get-AcceptanceKnownRoots) -ProtectedProcessIds $protectedPids
+                -AllowedCleanupRoots @((Get-AcceptanceKnownRoots) + @($baseline.Files.Path)) -ProtectedProcessIds $protectedPids -Ownership $currentScenarioOwnership
             [void]$cleanupReports.Add([ordered]@{ Scenario = "__failure__"; Phase = $phase; Report = $failureCleanup })
             if (-not $failureCleanup.Success) {
                 $lockOnly = @($failureCleanup.Errors | Where-Object { $_ -notmatch '^LOCKED_PATH:' }).Count -eq 0
                 if ($lockOnly) {
-                    $resume = [ordered]@{ RunId = $runId; Mode = $Mode; Version = $Version; Phase = $phase; NextScenarioIndex = $nextScenarioIndex; Error = ($failureCleanup.Errors -join '; ') }
-                    Register-AcceptanceResume -Paths $paths -EntryScript $PSCommandPath -State $resume
+                    $resume = New-VmResumeState -ScenarioIndex $nextScenarioIndex -CurrentPhase $phase -PendingOwnership $currentScenarioOwnership
+                    $resume.Error = ($failureCleanup.Errors -join '; ')
+                    [void](Register-AcceptanceResume -Paths $paths -EntryScript $PSCommandPath -State $resume)
                     Restart-Computer -Force
                     exit 194
                 }
@@ -419,7 +565,8 @@ Write-JsonFile -Path (Join-Path $paths.Run "summary.json") -Value $summary
 ) | Where-Object { $_ } | Set-Content -LiteralPath (Join-Path $paths.Run "summary.txt") -Encoding UTF8
 
 Write-VmAcceptance "Summary: $(Join-Path $paths.Run 'summary.txt')"
-if ($finalStatus -ne "PASS") { Write-VmAcceptance "FAIL: $errorMessage" Red; exit 1 }
+if ($finalStatus -ne "PASS") { Write-VmAcceptance "FAIL: $errorMessage" Red; Exit-AcceptanceInstanceLock -Lock $instanceLock; exit 1 }
 Remove-AcceptanceResume -Paths $paths
+Exit-AcceptanceInstanceLock -Lock $instanceLock
 Write-VmAcceptance "PASS" Green
 exit 0

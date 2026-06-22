@@ -131,7 +131,12 @@ function Invoke-SimCommand {
 
     # 调用方传入的 Environment 可以覆盖默认值
     foreach ($key in $Environment.Keys) {
-        $psi.EnvironmentVariables[$key] = [string]$Environment[$key]
+        if ($null -eq $Environment[$key]) {
+            [void]$psi.EnvironmentVariables.Remove($key)
+        }
+        else {
+            $psi.EnvironmentVariables[$key] = [string]$Environment[$key]
+        }
     }
 
     $proc = New-Object System.Diagnostics.Process
@@ -359,6 +364,8 @@ function New-SimEnvironment {
         CCDI_TEST_USERPROFILE = $ProfileDir
         CCDI_TEST_DESKTOP = $DesktopDir
         CCDI_API_KEY = $DummyKey
+        # 外层验收可能设置该变量；本模拟器按解压目录断言买家产物位置。
+        CCDI_TEST_ARTIFACT_ROOT = $null
     }
 
     if (-not [string]::IsNullOrWhiteSpace($ApiStatus)) {

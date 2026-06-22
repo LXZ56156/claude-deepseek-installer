@@ -13,7 +13,7 @@ $RootDir = Split-Path -Parent $PSScriptRoot
 Set-Location $RootDir
 
 $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$ReportDir = Join-Path $RootDir "reports"
+$ReportDir = if ($env:CCDI_TEST_ARTIFACT_ROOT) { Join-Path $env:CCDI_TEST_ARTIFACT_ROOT "reports" } else { Join-Path $RootDir "reports" }
 if (-not (Test-Path $ReportDir)) { New-Item -ItemType Directory -Path $ReportDir -Force | Out-Null }
 $ReportPath = Join-Path $ReportDir "doctor-repair-matrix-report-$Timestamp.txt"
 

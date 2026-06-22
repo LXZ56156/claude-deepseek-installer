@@ -7,8 +7,8 @@
 ## Active Work
 
 - **Branch**: `fix/v1.3.3-native-path-doctor-ux`
-- **Status**: Single-user ConPTY VM acceptance implemented; host TestSafe and Full validation passed.
-- **Next**: 在专用 Win11 VMware 验收机执行 Live 链路。Do not merge/tag/release until all review batches pass.
+- **Status**: Functional test sandboxed (injectable PATH adapter; no real User/Machine PATH / USERPROFILE / npm dependency). `check.ps1 -AcceptanceFunctional` gates behavioral tests (default Smoke static-only). Host: TestSafe functional 20/20 + restore-config-backup PASS + validate Full PASS + 16/16 TestSafe scenarios PASS. vm-final final-equivalence failed only due to host Claude session writing `.claude.json` (env noise, not a code bug; catch cleanup restored it, 3-layer PATH + settings.json byte-identical before/after).
+- **Next**: 在专用 Win11 VMware 验收机执行 Live（8 场景）和真实重启续跑；在该机复验 vm-final final-equivalence（主机无其他 Claude 会话时不复现噪声）。Do not merge/tag/release until VM Live + real-reboot resume pass.
 - **Latest commit**: a9f9f6e feat(acceptance): single-user ConPTY VM interactive acceptance harness
 
 ---
@@ -19,6 +19,8 @@
 
 | 日期 | 内容 | Commit |
 |------|------|--------|
+| 2026-06-23 | Sandbox functional test PATH adapter (Real/Sandbox); check.ps1 -AcceptanceFunctional gate; vm-final TestSafe calls functional stage; bug-registry coverage index; host TestSafe functional 20/20 + restore-config-backup PASS + validate Full PASS + 16/16 scenarios PASS (vm-final final-equiv failed only on host Claude `.claude.json` noise) | working tree |
+| 2026-06-22 | Acceptance hardening — complete file rollback, explicit ownership, single-instance lock, resume merge, restore scenario, timeout evidence | working tree |
 | 2026-06-22 | Single-user VM acceptance — ConPTY prompt state machine, atomic Job containment, baseline rollback, TestSafe/Live orchestration | a9f9f6e |
 | 2026-06-21 | Fix doc reference parser — replace greedy regex with structured inline-code + markdown-link extractors | cf3d17e |
 | 2026-06-21 | Buyer docs review — 01-04 TXT de-markdown, README buyer structure, security/admin/time language fix | f069b44 |

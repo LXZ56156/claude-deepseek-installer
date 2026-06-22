@@ -18,10 +18,11 @@ Set-Location $RootDir
 
 $ScriptDir = $RootDir
 $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$ReportPath = Join-Path $ScriptDir "reports\windows-scenario-matrix-report-$Timestamp.txt"
+$ReportRoot = if ($env:CCDI_TEST_ARTIFACT_ROOT) { Join-Path $env:CCDI_TEST_ARTIFACT_ROOT "reports" } else { Join-Path $ScriptDir "reports" }
+$ReportPath = Join-Path $ReportRoot "windows-scenario-matrix-report-$Timestamp.txt"
 
-if (-not (Test-Path (Join-Path $ScriptDir "reports"))) {
-    New-Item -ItemType Directory -Path (Join-Path $ScriptDir "reports") -Force | Out-Null
+if (-not (Test-Path $ReportRoot)) {
+    New-Item -ItemType Directory -Path $ReportRoot -Force | Out-Null
 }
 
 # Scenario definitions

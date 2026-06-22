@@ -67,33 +67,86 @@ function Get-AcceptanceControlPaths {
     if (-not $RunId) { $RunId = Get-Date -Format "yyyyMMdd-HHmmss-fff" }
     [PSCustomObject]@{
         Root = [IO.Path]::GetFullPath($ControlRoot)
-        Baseline = [IO.Path]::GetFullPath((Join-Path $ControlRoot "baseline"))
+        Baseline = [IO.Path]::GetFullPath((Join-Path $ControlRoot "runs\$RunId\baseline"))
         Runs = [IO.Path]::GetFullPath((Join-Path $ControlRoot "runs"))
         Run = [IO.Path]::GetFullPath((Join-Path $ControlRoot "runs\$RunId"))
         ResumeState = [IO.Path]::GetFullPath((Join-Path $ControlRoot "resume-state.json"))
+        LockFile = [IO.Path]::GetFullPath((Join-Path $ControlRoot ".acceptance.lock"))
         ResumeTask = "CCDI-Acceptance-Resume"
         ResumeUserTask = "CCDI-Acceptance-Resume-User"
     }
 }
 
+function Enter-AcceptanceInstanceLock {
+    param([string]$ControlRoot = "C:\CCDI-Acceptance-Control")
+    $root = [IO.Path]::GetFullPath($ControlRoot)
+    if (-not (Test-Path -LiteralPath $root)) { New-Item -ItemType Directory -Path $root -Force | Out-Null }
+    $lockPath = Join-Path $root ".acceptance.lock"
+    try {
+        $stream = New-Object IO.FileStream($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+        $payload = [Text.Encoding]::UTF8.GetBytes("PID=$PID`r`nUSER=$([Security.Principal.WindowsIdentity]::GetCurrent().Name)`r`nSTARTED=$((Get-Date).ToString('o'))`r`n")
+        $stream.SetLength(0); $stream.Write($payload, 0, $payload.Length); $stream.Flush($true)
+        return [PSCustomObject]@{ Path = $lockPath; Stream = $stream }
+    }
+    catch {
+        throw "Another acceptance instance already owns ControlRoot $root"
+    }
+}
+
+function Exit-AcceptanceInstanceLock {
+    param($Lock)
+    if (-not $Lock) { return }
+    try { if ($Lock.Stream) { $Lock.Stream.Dispose() } } catch { }
+    try { Remove-Item -LiteralPath $Lock.Path -Force -ErrorAction SilentlyContinue } catch { }
+}
+
+function Get-AcceptancePathKey {
+    param([string]$Path)
+    $bytes = [Text.Encoding]::UTF8.GetBytes(([IO.Path]::GetFullPath($Path)).ToUpperInvariant())
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '') }
+    finally { $sha.Dispose() }
+}
+
+function ConvertTo-AcceptanceFileComparable {
+    param($Item)
+    [ordered]@{ Path = [string]$Item.Path; Type = [string]$Item.Type; Exists = [bool]$Item.Exists; Length = [long]$Item.Length; SHA256 = [string]$Item.SHA256 }
+}
+
 function Get-AcceptanceFileState {
-    param([string[]]$Roots)
+    param([string[]]$Roots, [switch]$CaptureBytes, [string]$BackupRoot)
     $result = New-Object System.Collections.ArrayList
+    if ($CaptureBytes -and -not $BackupRoot) { throw "BackupRoot is required when CaptureBytes is enabled" }
+    if ($CaptureBytes -and -not (Test-Path -LiteralPath $BackupRoot)) { New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null }
+    $addFile = {
+        param($Item, [string]$Type)
+        $backupPath = $null
+        if ($CaptureBytes -and $Type -eq 'File') {
+            $backupPath = Join-Path $BackupRoot ((Get-AcceptancePathKey -Path $Item.FullName) + '.bin')
+            [IO.File]::Copy($Item.FullName, $backupPath, $true)
+        }
+        $hash = if ($Type -eq 'File') { try { (Get-FileHash -LiteralPath $Item.FullName -Algorithm SHA256 -ErrorAction Stop).Hash } catch { $null } } else { $null }
+        [void]$result.Add([ordered]@{ Path = $Item.FullName; Type = $Type; Exists = $true; Length = if ($Type -eq 'File') { $Item.Length } else { 0 }; SHA256 = $hash; BackupPath = $backupPath })
+    }
     foreach ($root in @($Roots | Where-Object { $_ } | Select-Object -Unique)) {
         $fullRoot = [IO.Path]::GetFullPath($root)
         $exists = Test-Path -LiteralPath $fullRoot
-        [void]$result.Add([ordered]@{ Path = $fullRoot; Type = "Root"; Exists = $exists; Length = 0; SHA256 = $null })
+        if ($exists -and (Test-Path -LiteralPath $fullRoot -PathType Leaf)) {
+            & $addFile (Get-Item -LiteralPath $fullRoot -Force) 'File'
+            continue
+        }
+        [void]$result.Add([ordered]@{ Path = $fullRoot; Type = "Directory"; Exists = $exists; Length = 0; SHA256 = $null; BackupPath = $null })
         if (-not $exists) { continue }
+        $claudeConfigRoot = [IO.Path]::GetFullPath((Join-Path $env:USERPROFILE '.claude')).TrimEnd('\')
+        if ($fullRoot.TrimEnd('\') -eq $claudeConfigRoot) {
+            $settingsItem = Join-Path $fullRoot 'settings.json'
+            if (Test-Path -LiteralPath $settingsItem -PathType Leaf) { & $addFile (Get-Item -LiteralPath $settingsItem -Force) 'File' }
+            continue
+        }
         foreach ($item in Get-ChildItem -LiteralPath $fullRoot -Force -Recurse -ErrorAction SilentlyContinue) {
             if ($item.FullName -match '\\.codex(?:\\|$)') { continue }
             if ($item.FullName -match '\\.claude\\_git_cache\.json$') { continue }
-            if ($item.PSIsContainer) {
-                [void]$result.Add([ordered]@{ Path = $item.FullName; Type = "Directory"; Exists = $true; Length = 0; SHA256 = $null })
-            }
-            else {
-                $hash = try { (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256 -ErrorAction Stop).Hash } catch { $null }
-                [void]$result.Add([ordered]@{ Path = $item.FullName; Type = "File"; Exists = $true; Length = $item.Length; SHA256 = $hash })
-            }
+            & $addFile $item $(if ($item.PSIsContainer) { 'Directory' } else { 'File' })
         }
     }
     return @($result | Sort-Object Path)
@@ -140,21 +193,31 @@ function Get-AcceptanceWingetPackages {
     param([string]$TempRoot)
     $winget = Get-Command winget.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $winget) { return @() }
-    $export = Join-Path $TempRoot ("winget-" + [guid]::NewGuid().ToString("N") + ".json")
-    try {
-        $probe = Invoke-AcceptanceCapturedCommand -FilePath ([string]$winget.Source) -ArgumentList @(
-            'export', '--output', $export, '--include-versions', '--accept-source-agreements', '--disable-interactivity'
-        ) -TimeoutSec 45
-        if ($probe.TimedOut) { return @([ordered]@{ Id = '__UNAVAILABLE__'; Version = 'timeout' }) }
-        if ($null -eq $probe.ExitCode) { return @([ordered]@{ Id = '__UNAVAILABLE__'; Version = 'start-error' }) }
-        if (-not (Test-Path -LiteralPath $export)) { return @([ordered]@{ Id = '__UNAVAILABLE__'; Version = 'no-export' }) }
-        $data = Get-Content -LiteralPath $export -Raw -Encoding UTF8 | ConvertFrom-Json
-        return @($data.Sources.Packages | ForEach-Object {
-            [ordered]@{ Id = [string]$_.PackageIdentifier; Version = [string]$_.Version }
-        } | Sort-Object Id)
+    $lastFailure = 'unknown'
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        $export = Join-Path $TempRoot ("winget-" + [guid]::NewGuid().ToString("N") + ".json")
+        try {
+            $probe = Invoke-AcceptanceCapturedCommand -FilePath ([string]$winget.Source) -ArgumentList @(
+                'export', '--output', $export, '--include-versions', '--accept-source-agreements', '--disable-interactivity'
+            ) -TimeoutSec 60
+            if ($probe.TimedOut) { $lastFailure = 'timeout'; continue }
+            if ($null -eq $probe.ExitCode) { $lastFailure = 'start-error'; continue }
+            if (-not (Test-Path -LiteralPath $export)) { $lastFailure = 'no-export'; continue }
+            $data = Get-Content -LiteralPath $export -Raw -Encoding UTF8 | ConvertFrom-Json
+            return @($data.Sources.Packages | ForEach-Object {
+                [ordered]@{ Id = [string]$_.PackageIdentifier; Version = [string]$_.Version }
+            } | Sort-Object Id)
+        }
+        catch { $lastFailure = 'invalid-output' }
+        finally { Remove-Item -LiteralPath $export -Force -ErrorAction SilentlyContinue }
     }
-    catch { return @([ordered]@{ Id = '__UNAVAILABLE__'; Version = 'invalid-output' }) }
-    finally { Remove-Item -LiteralPath $export -Force -ErrorAction SilentlyContinue }
+    return @([ordered]@{ Id = '__UNAVAILABLE__'; Version = $lastFailure })
+}
+
+function Assert-AcceptanceSnapshotUsable {
+    param($Snapshot, [string]$Label)
+    $unavailable = @($Snapshot.Winget | Where-Object { $_.Id -eq '__UNAVAILABLE__' })
+    if ($unavailable.Count -gt 0) { throw "$Label winget inventory unavailable after retries: $($unavailable[0].Version)" }
 }
 
 function Get-AcceptanceRegistryState {
@@ -207,8 +270,16 @@ function Get-AcceptanceRelevantTasks {
 
 function Get-AcceptanceKnownRoots {
     param([string[]]$AdditionalRoots)
+    $desktop = if ($env:CCDI_TEST_DESKTOP) { $env:CCDI_TEST_DESKTOP } else { [Environment]::GetFolderPath("Desktop") }
+    $desktopProjects = @()
+    if ($desktop -and (Test-Path -LiteralPath $desktop -PathType Container)) {
+        $desktopProjects = @(Get-ChildItem -LiteralPath $desktop -Directory -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq 'ClaudeCode-Test' -or $_.Name -match '^ClaudeCode-Test-\d{8}-\d{6}(?:-\d+)?$' } | Select-Object -ExpandProperty FullName)
+    }
     $roots = @(
         (Join-Path $env:USERPROFILE ".claude"),
+        (Join-Path $env:USERPROFILE ".claude-deepseek-installer"),
+        (Join-Path $env:USERPROFILE ".claude.json"),
         (Join-Path $env:USERPROFILE ".local\bin"),
         (Join-Path $env:USERPROFILE ".local\share\claude"),
         (Join-Path $env:APPDATA "npm"),
@@ -216,8 +287,9 @@ function Get-AcceptanceKnownRoots {
         (Join-Path $env:LOCALAPPDATA "AnthropicClaude"),
         (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\claude.exe"),
         (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\claude.cmd"),
-        (Join-Path $env:ProgramFiles "nodejs")
-    ) + @($AdditionalRoots)
+        (Join-Path $env:ProgramFiles "nodejs"),
+        $(if ($desktop) { Join-Path $desktop "ClaudeCode-Test" })
+    ) + @($desktopProjects) + @($AdditionalRoots)
     @($roots | Where-Object { $_ -and ([IO.Path]::GetFullPath($_) -notmatch '\\.codex(?:\\|$)') } | Select-Object -Unique)
 }
 
@@ -225,7 +297,10 @@ function Get-AcceptanceEnvironmentSnapshot {
     param(
         [string]$ProjectRoot,
         [string]$TempRoot,
-        [string[]]$AdditionalRoots = @()
+        [string[]]$AdditionalRoots = @(),
+        [string[]]$KnownRootsOverride,
+        [switch]$CaptureFileBytes,
+        [string]$FileBackupRoot
     )
     if (-not (Test-Path -LiteralPath $TempRoot)) { New-Item -ItemType Directory -Path $TempRoot -Force | Out-Null }
     $settingsPath = Join-Path $env:USERPROFILE ".claude\settings.json"
@@ -248,11 +323,12 @@ function Get-AcceptanceEnvironmentSnapshot {
         }
         UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
         MachinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+        ProcessPath = $env:Path
         Commands = @("claude", "node", "npm", "winget") | ForEach-Object { Get-AcceptanceCommandState $_ }
         NpmGlobal = @(Get-AcceptanceNpmPackages)
         Winget = @(Get-AcceptanceWingetPackages -TempRoot $TempRoot)
         Registry = @(Get-AcceptanceRegistryState)
-        Files = @(Get-AcceptanceFileState -Roots (Get-AcceptanceKnownRoots -AdditionalRoots $AdditionalRoots))
+        Files = @(Get-AcceptanceFileState -Roots $(if ($KnownRootsOverride) { $KnownRootsOverride } else { Get-AcceptanceKnownRoots -AdditionalRoots $AdditionalRoots }) -CaptureBytes:$CaptureFileBytes -BackupRoot $FileBackupRoot)
         Processes = @(Get-AcceptanceRelevantProcesses)
         Services = @(Get-AcceptanceRelevantServices)
         ScheduledTasks = @(Get-AcceptanceRelevantTasks)
@@ -271,7 +347,7 @@ function Compare-AcceptanceSnapshot {
     } | Sort-Object)
     $modified = @($beforeFiles.Keys | Where-Object {
         $afterFiles.ContainsKey($_) -and [bool]$beforeFiles[$_].Exists -and [bool]$afterFiles[$_].Exists -and
-        (($beforeFiles[$_] | ConvertTo-Json -Compress) -ne ($afterFiles[$_] | ConvertTo-Json -Compress))
+        (((ConvertTo-AcceptanceFileComparable $beforeFiles[$_]) | ConvertTo-Json -Compress) -ne ((ConvertTo-AcceptanceFileComparable $afterFiles[$_]) | ConvertTo-Json -Compress))
     } | Sort-Object)
 
     $beforeNpm = @{}; foreach ($item in @($Before.NpmGlobal)) { $beforeNpm[[string]$item.Id] = [string]$item.Version }
@@ -287,6 +363,7 @@ function Compare-AcceptanceSnapshot {
         NewWingetPackages = @($afterWinget.Keys | Where-Object { $_ -notmatch '^__' -and -not $beforeWinget.ContainsKey($_) } | Sort-Object)
         UserPathChanged = $Before.UserPath -ne $After.UserPath
         MachinePathChanged = $Before.MachinePath -ne $After.MachinePath
+        ProcessPathChanged = $Before.ProcessPath -ne $After.ProcessPath
         RegistryChanged = (($Before.Registry | ConvertTo-Json -Depth 8 -Compress) -ne ($After.Registry | ConvertTo-Json -Depth 8 -Compress))
         SettingsChanged = (($Before.Settings | ConvertTo-Json -Compress) -ne ($After.Settings | ConvertTo-Json -Compress))
         NewProcesses = @($After.Processes | Where-Object { $_.ProcessId -notin @($Before.Processes.ProcessId) })
@@ -343,6 +420,66 @@ function Restore-AcceptanceRegistry {
     }
 }
 
+function New-AcceptanceOwnership {
+    param(
+        [string[]]$PathRoots = @(), [string[]]$PathPatterns = @(),
+        [string[]]$NpmPackages = @(), [string[]]$WingetPackages = @(),
+        [string[]]$Services = @(), [string[]]$ScheduledTasks = @(), [int[]]$ProcessIds = @()
+    )
+    [PSCustomObject]@{
+        PathRoots = @($PathRoots | Where-Object { $_ } | ForEach-Object { [IO.Path]::GetFullPath($_).TrimEnd('\') } | Select-Object -Unique)
+        PathPatterns = @($PathPatterns | Where-Object { $_ } | Select-Object -Unique)
+        NpmPackages = @($NpmPackages | Where-Object { $_ } | Select-Object -Unique)
+        WingetPackages = @($WingetPackages | Where-Object { $_ } | Select-Object -Unique)
+        Services = @($Services | Where-Object { $_ } | Select-Object -Unique)
+        ScheduledTasks = @($ScheduledTasks | Where-Object { $_ } | Select-Object -Unique)
+        ProcessIds = @($ProcessIds | Where-Object { $_ } | Select-Object -Unique)
+    }
+}
+
+function Test-AcceptanceOwnedPath {
+    param([string]$Path, $Ownership)
+    if (-not $Ownership) { return $false }
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    foreach ($root in @($Ownership.PathRoots)) {
+        if ($full -eq $root -or $full.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    foreach ($pattern in @($Ownership.PathPatterns)) { if ($full -match [string]$pattern) { return $true } }
+    return $false
+}
+
+function Test-AcceptanceAllowedPath {
+    param([string]$Path, [string[]]$AllowedRoots)
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    foreach ($rootValue in @($AllowedRoots)) {
+        $root = [IO.Path]::GetFullPath($rootValue).TrimEnd('\')
+        if ($full -eq $root -or $full.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
+
+function Restore-AcceptanceTrackedPath {
+    param($BaselineItem, $Ownership, [string[]]$AllowedRoots, [string]$ProjectRoot, [string]$ControlRoot, [string]$ResultRoot)
+    $path = [string]$BaselineItem.Path
+    if (-not (Test-AcceptanceOwnedPath -Path $path -Ownership $Ownership)) { throw "UNOWNED_PATH: $path" }
+    if (-not (Test-AcceptanceAllowedPath -Path $path -AllowedRoots $AllowedRoots)) { throw "OUTSIDE_CONTROLLED_ROOT: $path" }
+    if (Test-AcceptanceProtectedPath -Path $path -ProjectRoot $ProjectRoot -ControlRoot $ControlRoot -ResultRoot $ResultRoot) { throw "PROTECTED_PATH: $path" }
+    if ([string]$BaselineItem.Type -eq 'Directory') {
+        if (Test-Path -LiteralPath $path -PathType Leaf) { Remove-Item -LiteralPath $path -Force -ErrorAction Stop }
+        if (-not (Test-Path -LiteralPath $path -PathType Container)) { New-Item -ItemType Directory -Path $path -Force | Out-Null }
+        return
+    }
+    if (-not $BaselineItem.BackupPath -or -not (Test-Path -LiteralPath $BaselineItem.BackupPath -PathType Leaf)) {
+        throw "MISSING_BASELINE_BYTES: $path"
+    }
+    if (Test-Path -LiteralPath $path -PathType Container) { Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop }
+    $parent = Split-Path -Parent $path
+    if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+    [IO.File]::Copy([string]$BaselineItem.BackupPath, $path, $true)
+    $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256 -ErrorAction Stop).Hash
+    if ($hash -ne [string]$BaselineItem.SHA256) { throw "RESTORE_HASH_MISMATCH: $path" }
+}
+
 function Reset-AcceptanceEnvironment {
     param(
         $Baseline,
@@ -353,19 +490,22 @@ function Reset-AcceptanceEnvironment {
         [string]$ControlRoot,
         [string]$ResultRoot,
         [string[]]$AllowedCleanupRoots,
-        [int[]]$ProtectedProcessIds
+        [int[]]$ProtectedProcessIds,
+        $Ownership = (New-AcceptanceOwnership)
     )
     $actions = New-Object System.Collections.ArrayList
     $errors = New-Object System.Collections.ArrayList
+    $reports = New-Object System.Collections.ArrayList
 
     foreach ($process in @($Delta.NewProcesses)) {
         if ($process.ProcessId -in $ProtectedProcessIds) { continue }
-        if ($process.Name -notmatch 'claude|node|npm|winget' -and $process.CommandLine -notmatch 'ClaudeCode|Anthropic|nodejs|@anthropic-ai') { continue }
+        if ($process.ProcessId -notin @($Ownership.ProcessIds)) { [void]$reports.Add("UNOWNED_PROCESS: $($process.ProcessId) $($process.Name)"); continue }
         try { Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop; [void]$actions.Add("Stopped process $($process.ProcessId) $($process.Name)") }
         catch { [void]$errors.Add("Failed to stop process $($process.ProcessId): $($_.Exception.Message)") }
     }
 
     foreach ($package in @($Delta.NewNpmPackages | Where-Object { $_ -and $_ -notmatch '^__' })) {
+        if ($package -notin @($Ownership.NpmPackages)) { [void]$reports.Add("UNOWNED_NPM_PACKAGE: $package"); continue }
         try {
             $npmCommand = Get-Command npm.cmd -ErrorAction Stop | Select-Object -First 1
             $probe = Invoke-AcceptanceCapturedCommand -FilePath ([string]$npmCommand.Source) -ArgumentList @('uninstall', '-g', $package) -TimeoutSec 180
@@ -375,6 +515,7 @@ function Reset-AcceptanceEnvironment {
         catch { [void]$errors.Add("Failed to uninstall npm package ${package}: $($_.Exception.Message)") }
     }
     foreach ($package in @($Delta.NewWingetPackages | Where-Object { $_ -and $_ -notmatch '^__' })) {
+        if ($package -notin @($Ownership.WingetPackages)) { [void]$reports.Add("UNOWNED_WINGET_PACKAGE: $package"); continue }
         try {
             $wingetCommand = Get-Command winget.exe -ErrorAction Stop | Select-Object -First 1
             $probe = Invoke-AcceptanceCapturedCommand -FilePath ([string]$wingetCommand.Source) -ArgumentList @(
@@ -386,31 +527,37 @@ function Reset-AcceptanceEnvironment {
         catch { [void]$errors.Add("Failed to uninstall winget package ${package}: $($_.Exception.Message)") }
     }
     foreach ($service in @($Delta.NewServices)) {
+        if ($service.Name -notin @($Ownership.Services)) { [void]$reports.Add("UNOWNED_SERVICE: $($service.Name)"); continue }
         try { & sc.exe stop $service.Name 2>&1 | Out-Null; & sc.exe delete $service.Name 2>&1 | Out-Null; [void]$actions.Add("Removed service $($service.Name)") }
         catch { [void]$errors.Add("Failed to remove service $($service.Name): $($_.Exception.Message)") }
     }
     foreach ($task in @($Delta.NewScheduledTasks | Where-Object { $_.TaskName -notmatch '^CCDI-Acceptance-Resume' })) {
+        $taskKey = "$($task.TaskPath)$($task.TaskName)"
+        if ($taskKey -notin @($Ownership.ScheduledTasks)) { [void]$reports.Add("UNOWNED_TASK: $taskKey"); continue }
         try { Unregister-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -Confirm:$false -ErrorAction Stop; [void]$actions.Add("Removed task $($task.TaskPath)$($task.TaskName)") }
         catch { [void]$errors.Add("Failed to remove task $($task.TaskPath)$($task.TaskName): $($_.Exception.Message)") }
     }
 
-    try { [Environment]::SetEnvironmentVariable("Path", [string]$Baseline.UserPath, "User"); [void]$actions.Add("Restored user PATH") }
-    catch { [void]$errors.Add("Failed to restore user PATH: $($_.Exception.Message)") }
-    try { [Environment]::SetEnvironmentVariable("Path", [string]$Baseline.MachinePath, "Machine"); [void]$actions.Add("Restored machine PATH") }
-    catch { [void]$errors.Add("Failed to restore machine PATH: $($_.Exception.Message)") }
-    try { Restore-AcceptanceRegistry -BaselineRegistry $Baseline.Registry; [void]$actions.Add("Restored tracked registry values") }
-    catch { [void]$errors.Add("Failed to restore registry: $($_.Exception.Message)") }
-    try { Restore-AcceptanceSettings -Baseline $Baseline -SettingsBytes $SettingsBytes; [void]$actions.Add("Restored settings.json") }
-    catch { [void]$errors.Add("Failed to restore settings.json: $($_.Exception.Message)") }
+    if ($Delta.UserPathChanged) { try { [Environment]::SetEnvironmentVariable("Path", [string]$Baseline.UserPath, "User"); [void]$actions.Add("Restored user PATH") } catch { [void]$errors.Add("Failed to restore user PATH: $($_.Exception.Message)") } }
+    if ($Delta.MachinePathChanged) { try { [Environment]::SetEnvironmentVariable("Path", [string]$Baseline.MachinePath, "Machine"); [void]$actions.Add("Restored machine PATH") } catch { [void]$errors.Add("Failed to restore machine PATH: $($_.Exception.Message)") } }
+    if ($Delta.ProcessPathChanged) { try { $env:Path = [string]$Baseline.ProcessPath; [void]$actions.Add("Restored process PATH") } catch { [void]$errors.Add("Failed to restore process PATH: $($_.Exception.Message)") } }
+    if ($Delta.RegistryChanged) { try { Restore-AcceptanceRegistry -BaselineRegistry $Baseline.Registry; [void]$actions.Add("Restored tracked registry values") } catch { [void]$errors.Add("Failed to restore registry: $($_.Exception.Message)") } }
+    if ($Delta.SettingsChanged) { try { Restore-AcceptanceSettings -Baseline $Baseline -SettingsBytes $SettingsBytes; [void]$actions.Add("Restored settings.json") } catch { [void]$errors.Add("Failed to restore settings.json: $($_.Exception.Message)") } }
 
     $allowed = @($AllowedCleanupRoots | ForEach-Object { [IO.Path]::GetFullPath($_).TrimEnd('\') })
+    $baselineFiles = @{}; foreach ($item in @($Baseline.Files)) { $baselineFiles[[string]$item.Path] = $item }
+    $restorePaths = @(@($Delta.RemovedPaths) + @($Delta.ModifiedPaths) | Select-Object -Unique | Sort-Object { $_.Length })
+    foreach ($path in $restorePaths) {
+        if (-not $baselineFiles.ContainsKey([string]$path)) { [void]$errors.Add("NO_BASELINE_ENTRY: $path"); continue }
+        try { Restore-AcceptanceTrackedPath -BaselineItem $baselineFiles[[string]$path] -Ownership $Ownership -AllowedRoots $allowed -ProjectRoot $ProjectRoot -ControlRoot $ControlRoot -ResultRoot $ResultRoot; [void]$actions.Add("Restored tracked path $path") }
+        catch { [void]$errors.Add($_.Exception.Message) }
+    }
     foreach ($path in @($Delta.CreatedPaths | Sort-Object Length -Descending)) {
         if (-not (Test-Path -LiteralPath $path)) { continue }
         if (Test-AcceptanceProtectedPath -Path $path -ProjectRoot $ProjectRoot -ControlRoot $ControlRoot -ResultRoot $ResultRoot) { continue }
         $full = [IO.Path]::GetFullPath($path)
-        $withinAllowed = $false
-        foreach ($root in $allowed) { if ($full -eq $root -or $full.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) { $withinAllowed = $true; break } }
-        if (-not $withinAllowed) { [void]$errors.Add("Refused unowned path deletion: $full"); continue }
+        if (-not (Test-AcceptanceAllowedPath -Path $full -AllowedRoots $allowed)) { [void]$errors.Add("OUTSIDE_CONTROLLED_ROOT: $full"); continue }
+        if (-not (Test-AcceptanceOwnedPath -Path $full -Ownership $Ownership)) { [void]$reports.Add("UNOWNED_PATH: $full"); continue }
         $removed = $false
         $lastRemoveError = $null
         for ($attempt = 1; $attempt -le 3 -and -not $removed; $attempt++) {
@@ -424,7 +571,7 @@ function Reset-AcceptanceEnvironment {
         [Environment]::SetEnvironmentVariable($name, $null, "Process")
     }
 
-    [ordered]@{ Success = ($errors.Count -eq 0); Actions = @($actions); Errors = @($errors) }
+    [ordered]@{ Success = ($errors.Count -eq 0); Actions = @($actions); Errors = @($errors); Reports = @($reports); Ownership = $Ownership }
 }
 
 function Test-AcceptanceBaselineEquivalent {
@@ -432,6 +579,7 @@ function Test-AcceptanceBaselineEquivalent {
     $differences = New-Object System.Collections.ArrayList
     if ($Baseline.UserPath -ne $Candidate.UserPath) { [void]$differences.Add("User PATH differs") }
     if ($Baseline.MachinePath -ne $Candidate.MachinePath) { [void]$differences.Add("Machine PATH differs") }
+    if ($Baseline.ProcessPath -ne $Candidate.ProcessPath) { [void]$differences.Add("Process PATH differs") }
     if (($Baseline.Settings | ConvertTo-Json -Compress) -ne ($Candidate.Settings | ConvertTo-Json -Compress)) { [void]$differences.Add("settings.json differs") }
     foreach ($name in @("claude", "node", "npm")) {
         $before = $Baseline.Commands | Where-Object Name -eq $name | Select-Object -First 1
@@ -441,17 +589,46 @@ function Test-AcceptanceBaselineEquivalent {
     if (($Baseline.NpmGlobal | ConvertTo-Json -Depth 8 -Compress) -ne ($Candidate.NpmGlobal | ConvertTo-Json -Depth 8 -Compress)) { [void]$differences.Add("npm global package list differs") }
     if (($Baseline.Winget | ConvertTo-Json -Depth 8 -Compress) -ne ($Candidate.Winget | ConvertTo-Json -Depth 8 -Compress)) { [void]$differences.Add("winget package list differs") }
     if (($Baseline.Registry | ConvertTo-Json -Depth 8 -Compress) -ne ($Candidate.Registry | ConvertTo-Json -Depth 8 -Compress)) { [void]$differences.Add("tracked registry differs") }
-    if (($Baseline.Files | ConvertTo-Json -Depth 8 -Compress) -ne ($Candidate.Files | ConvertTo-Json -Depth 8 -Compress)) { [void]$differences.Add("tracked files differ") }
+    $baselineComparableFiles = @($Baseline.Files | ForEach-Object { ConvertTo-AcceptanceFileComparable $_ })
+    $candidateComparableFiles = @($Candidate.Files | ForEach-Object { ConvertTo-AcceptanceFileComparable $_ })
+    if (($baselineComparableFiles | ConvertTo-Json -Depth 8 -Compress) -ne ($candidateComparableFiles | ConvertTo-Json -Depth 8 -Compress)) { [void]$differences.Add("tracked files differ") }
     if (($Baseline.Services | ConvertTo-Json -Depth 8 -Compress) -ne ($Candidate.Services | ConvertTo-Json -Depth 8 -Compress)) { [void]$differences.Add("related services differ") }
     if (($Baseline.ScheduledTasks | ConvertTo-Json -Depth 8 -Compress) -ne ($Candidate.ScheduledTasks | ConvertTo-Json -Depth 8 -Compress)) { [void]$differences.Add("related scheduled tasks differ") }
     [PSCustomObject]@{ Equivalent = ($differences.Count -eq 0); Differences = @($differences) }
 }
 
+function Write-AcceptanceResumeState {
+    param($Paths, $State)
+    $State | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $Paths.ResumeState -Encoding UTF8
+}
+
+function Read-AcceptanceResumeState {
+    param([string]$ControlRoot)
+    $path = Join-Path ([IO.Path]::GetFullPath($ControlRoot)) "resume-state.json"
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Resume state not found: $path" }
+    Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+
+function Import-AcceptanceResumeResults {
+    param($State, [Collections.ArrayList]$StageResults, [Collections.ArrayList]$ScenarioResults, [Collections.ArrayList]$CleanupReports)
+    foreach ($item in @($State.StageResults)) { [void]$StageResults.Add($item) }
+    foreach ($item in @($State.ScenarioResults)) { [void]$ScenarioResults.Add($item) }
+    foreach ($item in @($State.CleanupReports)) { [void]$CleanupReports.Add($item) }
+}
+
+function Get-AcceptanceResumeTaskSpec {
+    param($Paths, [string]$EntryScript, $State)
+    $resumeArguments = "-NoProfile -ExecutionPolicy Bypass -File `"$EntryScript`" -Resume -Mode $($State.Mode) -Version $($State.Version) -CredentialTarget `"$($State.CredentialTarget)`" -ControlRoot `"$($Paths.Root)`""
+    if ([bool]$State.AcknowledgeRealInstall) { $resumeArguments += " -AcknowledgeRealInstall" }
+    [PSCustomObject]@{ UserTaskName = $Paths.ResumeUserTask; SystemTaskName = $Paths.ResumeTask; Arguments = $resumeArguments; RunId = $State.RunId; NextScenarioIndex = $State.NextScenarioIndex }
+}
+
 function Register-AcceptanceResume {
-    param($Paths, [string]$EntryScript, [hashtable]$State)
-    $State | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $Paths.ResumeState -Encoding UTF8
-    $resumeArguments = "-NoProfile -ExecutionPolicy Bypass -File `"$EntryScript`" -Resume -Mode $($State.Mode) -Version $($State.Version) -ControlRoot `"$($Paths.Root)`""
-    if ($State.Mode -eq "Live") { $resumeArguments += " -AcknowledgeRealInstall" }
+    param($Paths, [string]$EntryScript, $State, [switch]$SkipTaskRegistration)
+    Write-AcceptanceResumeState -Paths $Paths -State $State
+    $spec = Get-AcceptanceResumeTaskSpec -Paths $Paths -EntryScript $EntryScript -State $State
+    if ($SkipTaskRegistration) { return $spec }
+    $resumeArguments = $spec.Arguments
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $resumeArguments
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User ([Security.Principal.WindowsIdentity]::GetCurrent().Name)
     $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Highest
@@ -470,12 +647,13 @@ exit 1
     $taskCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$bootstrap`""
     & schtasks.exe /Create /TN $Paths.ResumeTask /SC ONSTART /RU SYSTEM /RL HIGHEST /TR $taskCommand /F | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Failed to create SYSTEM resume bootstrap task" }
+    return $spec
 }
 
 function Remove-AcceptanceResume {
-    param($Paths)
+    param($Paths, [switch]$KeepState)
     & schtasks.exe /Delete /TN $Paths.ResumeTask /F 2>$null | Out-Null
     & schtasks.exe /Delete /TN $Paths.ResumeUserTask /F 2>$null | Out-Null
-    Remove-Item -LiteralPath $Paths.ResumeState -Force -ErrorAction SilentlyContinue
+    if (-not $KeepState) { Remove-Item -LiteralPath $Paths.ResumeState -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath (Join-Path $Paths.Root "resume-bootstrap.ps1") -Force -ErrorAction SilentlyContinue
 }

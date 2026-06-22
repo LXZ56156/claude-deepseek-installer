@@ -537,6 +537,7 @@ try {
 
     foreach ($scenario in $scenarios) {
         Write-AcceptanceInfo "Scenario: $($scenario.id)"
+        $restoreExpectedHash = $null
         if ($scenario.PSObject.Properties.Name -contains "setupDummyConfig" -and $scenario.setupDummyConfig) {
             $dummyProfile = if ($Mode -eq "TestSafe") { $TestProfile } else { $env:USERPROFILE }
             $dummyConfigDir = Join-Path $dummyProfile ".claude"
@@ -544,8 +545,27 @@ try {
             $dummyConfig = [ordered]@{ env = [ordered]@{ ANTHROPIC_AUTH_TOKEN = $DummyApiKey; ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic" } }
             $dummyConfig | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $dummyConfigDir "settings.json") -Encoding UTF8
         }
+        if ($scenario.PSObject.Properties.Name -contains "setupRestoreConfig" -and $scenario.setupRestoreConfig) {
+            $restoreProfile = if ($Mode -eq "TestSafe") { $TestProfile } else { $env:USERPROFILE }
+            $restoreConfigDir = Join-Path $restoreProfile ".claude"
+            $restoreConfigPath = Join-Path $restoreConfigDir "settings.json"
+            $restoreBackupDir = if ($Mode -eq "TestSafe") { Join-Path $ArtifactRoot "backup" } else { Join-Path $ExtractRoot "backup" }
+            New-Item -ItemType Directory -Path $restoreConfigDir, $restoreBackupDir -Force | Out-Null
+            [IO.File]::WriteAllText($restoreConfigPath, '{"restoreMarker":"current"}', (New-Object Text.UTF8Encoding($false)))
+            $restoreBackupPath = Join-Path $restoreBackupDir "settings.json.99999999999999999.bak"
+            [IO.File]::WriteAllText($restoreBackupPath, '{"restoreMarker":"expected"}', (New-Object Text.UTF8Encoding($false)))
+            $restoreExpectedHash = (Get-FileHash -LiteralPath $restoreBackupPath -Algorithm SHA256).Hash
+        }
         $scenarioDir = Join-Path $EvidenceDir ([string]$scenario.id)
         $result = Invoke-ConPtyScenario -Scenario $scenario -ReleaseRoot $ExtractRoot -Secret $secret -Environment $environment -ScenarioEvidenceDir $scenarioDir
+        if ($result.Status -eq "PASS" -and $restoreExpectedHash) {
+            $restoredProfile = if ($Mode -eq "TestSafe") { $TestProfile } else { $env:USERPROFILE }
+            $restoredPath = Join-Path $restoredProfile ".claude\settings.json"
+            $restoredHash = if (Test-Path -LiteralPath $restoredPath -PathType Leaf) { (Get-FileHash -LiteralPath $restoredPath -Algorithm SHA256).Hash } else { $null }
+            if ($restoredHash -ne $restoreExpectedHash) {
+                $result.Status = "FAIL"; $result.Error = "Configuration restore hash mismatch"
+            }
+        }
         [void]$results.Add($result)
         Write-AcceptanceInfo "$($result.Id): $($result.Status) ($($result.DurationSec)s)"
         if ($result.Status -ne "PASS" -and $Mode -eq "Live") { break }

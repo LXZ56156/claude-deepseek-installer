@@ -138,7 +138,12 @@ function Invoke-SandboxProcess {
         $psi.EnvironmentVariables[$k] = [string]$parentEnv[$k]
     }
     foreach ($k in $Environment.Keys) {
-        $psi.EnvironmentVariables[$k] = [string]$Environment[$k]
+        if ($null -eq $Environment[$k]) {
+            [void]$psi.EnvironmentVariables.Remove($k)
+        }
+        else {
+            $psi.EnvironmentVariables[$k] = [string]$Environment[$k]
+        }
     }
 
     $proc = New-Object System.Diagnostics.Process
@@ -265,6 +270,8 @@ $baseEnv = @{
     CCDI_TEST_DESKTOP     = $desktopDir
     CCDI_API_KEY          = $DummyApiKey
     CCDI_TEST_API_STATUS  = "200"
+    # 外层验收可能设置该变量；沙箱按解压目录断言买家产物位置。
+    CCDI_TEST_ARTIFACT_ROOT = $null
 }
 
 try {

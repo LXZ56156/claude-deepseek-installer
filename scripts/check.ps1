@@ -5,7 +5,8 @@
 param(
     [switch]$Network,
     [switch]$StrictNetwork,
-    [switch]$ReleaseCheck
+    [switch]$ReleaseCheck,
+    [switch]$AcceptanceFunctional
 )
 
 Set-StrictMode -Version Latest
@@ -5462,6 +5463,7 @@ $acceptancePaths = [ordered]@{
     Driver = Join-Path $RootDir "scripts\lib\ConPtyAcceptanceHost.cs"
     Scenarios = Join-Path $RootDir "scripts\data\interactive-acceptance-scenarios.json"
     Credential = Join-Path $RootDir "scripts\set-acceptance-credential.ps1"
+    Functional = Join-Path $RootDir "scripts\test-vm-acceptance.ps1"
 }
 foreach ($entry in $acceptancePaths.GetEnumerator()) {
     if (-not (Test-Path -LiteralPath $entry.Value -PathType Leaf)) { throw "Acceptance component missing: $($entry.Value)" }
@@ -5523,12 +5525,12 @@ if ($acceptanceOrchestratorText -match '&\s*winget\.exe\s+install' -or
 . $acceptancePaths.Environment
 $syntheticBefore = [PSCustomObject]@{
     Files = @([PSCustomObject]@{ Path = 'C:\ccdi-synthetic'; Type = 'Root'; Exists = $false; Length = 0; SHA256 = $null })
-    NpmGlobal = @(); Winget = @(); UserPath = 'U'; MachinePath = 'M'; Registry = @(); Settings = [PSCustomObject]@{ Exists = $false }
+    NpmGlobal = @(); Winget = @(); UserPath = 'U'; MachinePath = 'M'; ProcessPath = 'P'; Registry = @(); Settings = [PSCustomObject]@{ Exists = $false }
     Processes = @(); Services = @(); ScheduledTasks = @()
 }
 $syntheticAfter = [PSCustomObject]@{
     Files = @([PSCustomObject]@{ Path = 'C:\ccdi-synthetic'; Type = 'Root'; Exists = $true; Length = 0; SHA256 = $null })
-    NpmGlobal = @(); Winget = @(); UserPath = 'U'; MachinePath = 'M'; Registry = @(); Settings = [PSCustomObject]@{ Exists = $false }
+    NpmGlobal = @(); Winget = @(); UserPath = 'U'; MachinePath = 'M'; ProcessPath = 'P'; Registry = @(); Settings = [PSCustomObject]@{ Exists = $false }
     Processes = @(); Services = @(); ScheduledTasks = @()
 }
 $syntheticDelta = Compare-AcceptanceSnapshot -Before $syntheticBefore -After $syntheticAfter
@@ -5559,17 +5561,17 @@ $requiredTestSafeIds = @(
     'disclaimer-reject', 'invalid-menu-then-exit', 'install-skip-key', 'configure-secret-input',
     'doctor-mock-200', 'doctor-mock-401', 'doctor-mock-402', 'doctor-mock-429', 'doctor-mock-503',
     'doctor-mock-timeout', 'doctor-mock-dns', 'repair-launcher', 'uninstall-menu-exit',
-    'diagnostic-launcher', 'missing-package-pause'
+    'restore-config-backup', 'diagnostic-launcher', 'missing-package-pause'
 )
 $requiredLiveIds = @(
     'live-official-success', 'live-official-fallback-success', 'live-node-missing', 'live-npm-missing',
-    'live-install-command-anomaly-postcheck-usable', 'live-real-api-and-diagnostic', 'live-remove-deepseek-config'
+    'live-install-command-anomaly-postcheck-usable', 'live-real-api-and-diagnostic', 'live-remove-deepseek-config', 'live-restore-deepseek-config'
 )
-if (@($testSafeScenarioIds).Count -ne 15 -or @($requiredTestSafeIds | Where-Object { $_ -notin $testSafeScenarioIds }).Count -gt 0) {
-    throw "TestSafe interactive scenario set is incomplete or no longer exactly 15 scenarios"
+if (@($testSafeScenarioIds).Count -ne 16 -or @($requiredTestSafeIds | Where-Object { $_ -notin $testSafeScenarioIds }).Count -gt 0) {
+    throw "TestSafe interactive scenario set is incomplete or no longer exactly 16 scenarios"
 }
-if (@($liveScenarioIds).Count -ne 7 -or @($requiredLiveIds | Where-Object { $_ -notin $liveScenarioIds }).Count -gt 0) {
-    throw "Live interactive scenario set is incomplete or no longer exactly 7 scenarios"
+if (@($liveScenarioIds).Count -ne 8 -or @($requiredLiveIds | Where-Object { $_ -notin $liveScenarioIds }).Count -gt 0) {
+    throw "Live interactive scenario set is incomplete or no longer exactly 8 scenarios"
 }
 foreach ($scenario in @($acceptanceScenarioDocument.scenarioSets.TestSafe) + @($acceptanceScenarioDocument.scenarioSets.Live)) {
     if (-not $scenario.id -or -not $scenario.entry -or [int]$scenario.timeoutSec -le 0 -or @($scenario.steps).Count -eq 0) {
@@ -5583,7 +5585,13 @@ if (-not ('Ccdi.Acceptance.ConPtyProcess' -as [type])) {
     try { Add-Type -Path $acceptancePaths.Driver -ErrorAction Stop }
     catch { throw "ConPTY C# driver failed to compile: $($_.Exception.Message)" }
 }
-Write-Host "[check] Single-user ConPTY VM acceptance anti-regression OK"
+if ($AcceptanceFunctional) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $acceptancePaths.Functional
+    if ($LASTEXITCODE -ne 0) { throw "VM acceptance functional tests failed with exit code $LASTEXITCODE" }
+    Write-Host "[check] Single-user ConPTY VM acceptance anti-regression OK (functional)"
+} else {
+    Write-Host "[check] Single-user ConPTY VM acceptance anti-regression OK (static only; pass -AcceptanceFunctional to run behavioral tests)"
+}
 
 # ============================================================
 Write-Host ""
