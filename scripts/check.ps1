@@ -5453,6 +5453,140 @@ Write-Host "[check] v1.3.3 buyer documentation safety OK"
 
 # ============================================================
 Write-Host ""
+Write-Host "[check] Single-user ConPTY VM acceptance anti-regression"
+
+$acceptancePaths = [ordered]@{
+    Runner = Join-Path $RootDir "scripts\interactive-user-acceptance.ps1"
+    Orchestrator = Join-Path $RootDir "scripts\vm-final-acceptance.ps1"
+    Environment = Join-Path $RootDir "scripts\lib\AcceptanceEnvironment.ps1"
+    Driver = Join-Path $RootDir "scripts\lib\ConPtyAcceptanceHost.cs"
+    Scenarios = Join-Path $RootDir "scripts\data\interactive-acceptance-scenarios.json"
+    Credential = Join-Path $RootDir "scripts\set-acceptance-credential.ps1"
+}
+foreach ($entry in $acceptancePaths.GetEnumerator()) {
+    if (-not (Test-Path -LiteralPath $entry.Value -PathType Leaf)) { throw "Acceptance component missing: $($entry.Value)" }
+}
+$acceptanceRunnerText = Get-Content -LiteralPath $acceptancePaths.Runner -Raw -Encoding UTF8
+$acceptanceOrchestratorText = Get-Content -LiteralPath $acceptancePaths.Orchestrator -Raw -Encoding UTF8
+$acceptanceEnvironmentText = Get-Content -LiteralPath $acceptancePaths.Environment -Raw -Encoding UTF8
+$acceptanceDriverText = Get-Content -LiteralPath $acceptancePaths.Driver -Raw -Encoding UTF8
+$acceptanceCredentialText = Get-Content -LiteralPath $acceptancePaths.Credential -Raw -Encoding UTF8
+$acceptanceAllText = @($acceptanceRunnerText, $acceptanceOrchestratorText, $acceptanceEnvironmentText, $acceptanceDriverText, $acceptanceCredentialText) -join "`n"
+
+if ($acceptanceAllText -match '(?i)New-LocalUser|Remove-LocalUser|Windows\s*Sandbox|WindowsSandbox|\bVNC\b|SendKeys|VMware\s+snapshot|Checkpoint-VM') {
+    throw "VM acceptance must remain single-user and must not depend on Sandbox, VNC, SendKeys, or VM snapshots"
+}
+foreach ($term in @('CreatePseudoConsole', 'PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE', 'PROC_THREAD_ATTRIBUTE_JOB_LIST', 'JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE', 'TerminateJobObject')) {
+    if ($acceptanceDriverText -notmatch [regex]::Escape($term)) { throw "ConPTY driver missing process-control primitive: $term" }
+}
+if ($acceptanceRunnerText -match 'RedirectStandardInput|StandardInput\.Write' -or
+    $acceptanceRunnerText -notmatch '\[regex\]::Match\(' -or
+    $acceptanceRunnerText -notmatch '\[SECRET SENT\]' -or
+    $acceptanceRunnerText -notmatch 'JobAssigned=True' -or
+    $acceptanceRunnerText -notmatch 'Step timeout' -or
+    $acceptanceRunnerText -notmatch 'terminate the child process tree') {
+    throw "Interactive acceptance must use prompt-driven ConPTY input, secret redaction, Job Object, and real failure-path tests"
+}
+if ($acceptanceRunnerText -notmatch '(?s)\$Mode -eq "Live".*?sendSecret' -or
+    $acceptanceRunnerText -notmatch 'WindowsCredential\]::ReadGeneric' -or
+    $acceptanceRunnerText -match '(?i)SetEnvironmentVariable\([^\r\n]*(secret|api.?key)') {
+    throw "Real credential must be loaded only for selected Live secret scenarios and never placed in environment variables"
+}
+if ($acceptanceRunnerText -notmatch 'settingsAfter' -or
+    $acceptanceRunnerText -notmatch 'settings\.json final comparison failed') {
+    throw "Interactive acceptance summary must record and enforce the final settings.json comparison"
+}
+foreach ($gate in @('C:\CCDI-ACCEPTANCE-VM.marker', 'AcknowledgeRealInstall', 'Win32_ComputerSystem', 'VMware', 'Win32_OperatingSystem', 'Administrator')) {
+    if ($acceptanceOrchestratorText -notmatch [regex]::Escape($gate) -or $acceptanceRunnerText -notmatch [regex]::Escape($gate)) {
+        throw "Live hard gate missing from runner or orchestrator: $gate"
+    }
+}
+foreach ($term in @('Get-AcceptanceEnvironmentSnapshot', 'Compare-AcceptanceSnapshot', 'Reset-AcceptanceEnvironment', 'Test-AcceptanceBaselineEquivalent', 'ProtectedProcessIds', 'LOCKED_PATH', 'Register-AcceptanceResume', 'Restart-Computer')) {
+    if ($acceptanceAllText -notmatch [regex]::Escape($term)) { throw "Single-user baseline/rollback control missing: $term" }
+}
+foreach ($term in @('.codex', 'settings.json', 'UserPath', 'MachinePath', 'NpmGlobal', 'Winget', 'Registry', 'ScheduledTasks', 'Services', 'FullSHA', 'Invoke-AcceptanceCapturedCommand', 'TimedOut')) {
+    if ($acceptanceEnvironmentText -notmatch [regex]::Escape($term)) { throw "Acceptance baseline or bounded probe missing: $term" }
+}
+if (-not $acceptanceEnvironmentText.Contains('_git_cache\.json') -or
+    -not $acceptanceEnvironmentText.Contains('(-not [bool]$beforeFiles[$_].Exists -and [bool]$afterFiles[$_].Exists)')) {
+    throw "Acceptance baseline must ignore Claude volatile git cache and classify Exists false-to-true as a created path"
+}
+if ($acceptanceEnvironmentText -notmatch "NewWingetPackages.*\^__" -or
+    $acceptanceEnvironmentText -notmatch "NewNpmPackages.*\^__" -or
+    $acceptanceEnvironmentText -match "process\.Name -notmatch 'claude\|node\|npm\|winget\|msiexec\|setup\|install\|update'") {
+    throw "Acceptance ownership must ignore unavailable package sentinels and must not claim generic setup/update processes"
+}
+if ($acceptanceOrchestratorText -match '&\s*winget\.exe\s+install' -or
+    $acceptanceOrchestratorText -notmatch "(?s)Invoke-AcceptanceCapturedCommand.*?install.*?TimeoutSec 300") {
+    throw "Live Node setup must use the bounded captured-command helper"
+}
+. $acceptancePaths.Environment
+$syntheticBefore = [PSCustomObject]@{
+    Files = @([PSCustomObject]@{ Path = 'C:\ccdi-synthetic'; Type = 'Root'; Exists = $false; Length = 0; SHA256 = $null })
+    NpmGlobal = @(); Winget = @(); UserPath = 'U'; MachinePath = 'M'; Registry = @(); Settings = [PSCustomObject]@{ Exists = $false }
+    Processes = @(); Services = @(); ScheduledTasks = @()
+}
+$syntheticAfter = [PSCustomObject]@{
+    Files = @([PSCustomObject]@{ Path = 'C:\ccdi-synthetic'; Type = 'Root'; Exists = $true; Length = 0; SHA256 = $null })
+    NpmGlobal = @(); Winget = @(); UserPath = 'U'; MachinePath = 'M'; Registry = @(); Settings = [PSCustomObject]@{ Exists = $false }
+    Processes = @(); Services = @(); ScheduledTasks = @()
+}
+$syntheticDelta = Compare-AcceptanceSnapshot -Before $syntheticBefore -After $syntheticAfter
+if (@($syntheticDelta.CreatedPaths) -notcontains 'C:\ccdi-synthetic' -or @($syntheticDelta.ModifiedPaths).Count -ne 0) {
+    throw "Acceptance ownership delta does not classify a newly existing tracked root as created"
+}
+foreach ($mode in @('Full', 'Release', 'Hardcore')) {
+    if ($acceptanceOrchestratorText -notmatch ('"validate-' + $mode.ToLowerInvariant() + '"')) { throw "VM entry must run validate.ps1 mode $mode" }
+}
+foreach ($output in @('summary.json', 'summary.txt', 'baseline-before.json', 'baseline-after.json', 'scenario-results.json', 'cleanup-report.json', 'ownership-delta.json', 'leak-scan-report.json', 'sanitized-transcript.txt')) {
+    if ($acceptanceOrchestratorText -notmatch [regex]::Escape($output)) { throw "VM acceptance output missing: $output" }
+}
+if ($acceptanceOrchestratorText -match "Name -match 'report\|log\|transcript" -or
+    $acceptanceOrchestratorText -notmatch "Extension -in @\('\.txt', '\.json', '\.log'" -or
+    $acceptanceOrchestratorText.IndexOf('sanitized-transcript.txt') -gt $acceptanceOrchestratorText.IndexOf('$leakFiles =')) {
+    throw "Live secret scan must cover all text evidence after creating the sanitized transcript"
+}
+if ($acceptanceCredentialText -notmatch 'Read-Host.*AsSecureString' -or
+    $acceptanceCredentialText -notmatch 'WindowsCredential\]::WriteGeneric' -or
+    $acceptanceCredentialText -match 'Write-(Host|Output).*\$secret') {
+    throw "Credential provisioning must use secure interactive input without printing the secret"
+}
+
+$acceptanceScenarioDocument = Get-Content -LiteralPath $acceptancePaths.Scenarios -Raw -Encoding UTF8 | ConvertFrom-Json
+$testSafeScenarioIds = @($acceptanceScenarioDocument.scenarioSets.TestSafe.id)
+$liveScenarioIds = @($acceptanceScenarioDocument.scenarioSets.Live.id)
+$requiredTestSafeIds = @(
+    'disclaimer-reject', 'invalid-menu-then-exit', 'install-skip-key', 'configure-secret-input',
+    'doctor-mock-200', 'doctor-mock-401', 'doctor-mock-402', 'doctor-mock-429', 'doctor-mock-503',
+    'doctor-mock-timeout', 'doctor-mock-dns', 'repair-launcher', 'uninstall-menu-exit',
+    'diagnostic-launcher', 'missing-package-pause'
+)
+$requiredLiveIds = @(
+    'live-official-success', 'live-official-fallback-success', 'live-node-missing', 'live-npm-missing',
+    'live-install-command-anomaly-postcheck-usable', 'live-real-api-and-diagnostic', 'live-remove-deepseek-config'
+)
+if (@($testSafeScenarioIds).Count -ne 15 -or @($requiredTestSafeIds | Where-Object { $_ -notin $testSafeScenarioIds }).Count -gt 0) {
+    throw "TestSafe interactive scenario set is incomplete or no longer exactly 15 scenarios"
+}
+if (@($liveScenarioIds).Count -ne 7 -or @($requiredLiveIds | Where-Object { $_ -notin $liveScenarioIds }).Count -gt 0) {
+    throw "Live interactive scenario set is incomplete or no longer exactly 7 scenarios"
+}
+foreach ($scenario in @($acceptanceScenarioDocument.scenarioSets.TestSafe) + @($acceptanceScenarioDocument.scenarioSets.Live)) {
+    if (-not $scenario.id -or -not $scenario.entry -or [int]$scenario.timeoutSec -le 0 -or @($scenario.steps).Count -eq 0) {
+        throw "Invalid interactive scenario definition: $($scenario.id)"
+    }
+    foreach ($step in @($scenario.steps)) {
+        if (-not $step.expect -or [int]$step.timeoutSec -le 0) { throw "Scenario $($scenario.id) contains a step without expect/timeout" }
+    }
+}
+if (-not ('Ccdi.Acceptance.ConPtyProcess' -as [type])) {
+    try { Add-Type -Path $acceptancePaths.Driver -ErrorAction Stop }
+    catch { throw "ConPTY C# driver failed to compile: $($_.Exception.Message)" }
+}
+Write-Host "[check] Single-user ConPTY VM acceptance anti-regression OK"
+
+# ============================================================
+Write-Host ""
 Write-Host "[check] v1.3.3 release ZIP content check"
 
 $releaseZip = Join-Path $RootDir "release\ClaudeCode-DeepSeek-本地配置助手-v1.3.3.zip"

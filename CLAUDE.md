@@ -65,6 +65,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate.ps1 -Mode
 
 验证层级：**Smoke（每次 commit）→ Full（每次 push）→ Release（发布前）→ Hardcore（专项验证）**
 
+VM 验收层（独立于 `validate.ps1`，面向发布前真机/VM 全链路人工交互验收）：`scripts/vm-final-acceptance.ps1` 在专用 Win11 VMware 验收机内编排 Full→Release→Hardcore→ZIP 构建→从解压目录真实 `.cmd` 启动 ConPTY 提示驱动场景（15 TestSafe + 7 Live）。TestSafe 在 host 即可跑；Live 需管理员 + `C:\CCDI-ACCEPTANCE-VM.marker` + `-AcknowledgeRealInstall` + 首装无 claude/node/npm。详见 `docs/验收与交接体系.md` 第 11 章。AGENTS.md 显示 Live 尚未执行，未纳入发布门禁前不阻塞 release。
+
 Release ZIP 打包：
 ```powershell
 # 直接打包（build-release.ps1）
@@ -176,6 +178,12 @@ bootstrap.ps1
 | `scripts/check.sh` | Bash 语法/JSON 模板一致性/报告标记/敏感输出守卫/函数存在性/风险字符扫描 |
 | `scripts/ux-check.ps1` / `scripts/ux-check.sh` | UX 文案一致性检查（标记、措辞、PATH 0 容忍等） |
 | `scripts/simulate-user-release.ps1` | Release ZIP 用户路径模拟验收（解压→双击 .cmd→ShellExecute→完成页） |
+| `scripts/vm-final-acceptance.ps1` | VM 内全链路人工交互验收入口（Full→Release→Hardcore→ZIP→ConPTY 场景）。TestSafe host 可跑；Live 需管理员 + `CCDI-ACCEPTANCE-VM.marker` + `-AcknowledgeRealInstall` |
+| `scripts/interactive-user-acceptance.ps1` | ConPTY 提示驱动交互运行器：状态机匹配当前提示后逐步发送输入，`[SECRET SENT]` 脱敏，Job Object 原子绑定进程树终止 |
+| `scripts/lib/AcceptanceEnvironment.ps1` | 验收环境基线快照 / ownership delta / 原子回滚（PATH+注册表+`settings.json` 原始字节），`_git_cache.json` 等易变路径忽略 |
+| `scripts/lib/ConPtyAcceptanceHost.cs` | C# ConPTY 驱动：`CreatePseudoConsole` + `PROC_THREAD_ATTRIBUTE_JOB_LIST` 创建时原子加入 kill-on-close Job |
+| `scripts/data/interactive-acceptance-scenarios.json` | 22 个交互场景定义（15 TestSafe + 7 Live），每场景含 entry/timeoutSec/step.expect |
+| `scripts/set-acceptance-credential.ps1` | 交互式保存/删除虚拟机专用 Key 到 Windows Credential Manager（`CCDI_ACCEPTANCE_DEEPSEEK_API_KEY`），不经参数/环境变量/日志 |
 
 ## DeepSeek Configuration Format
 

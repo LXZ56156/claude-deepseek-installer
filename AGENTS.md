@@ -7,9 +7,9 @@
 ## Active Work
 
 - **Branch**: `fix/v1.3.3-native-path-doctor-ux`
-- **Status**: Batches 1-3 passed. Buyer documentation review in progress.
-- **Next**: 买家文档 → 提示词模板 → 最终全量验收。Do not merge/tag/release until all review batches pass.
-- **Latest commit**: cf3d17e test: fix structured documentation reference parsing
+- **Status**: Single-user ConPTY VM acceptance implemented; host TestSafe and Full validation passed.
+- **Next**: 在专用 Win11 VMware 验收机执行 Live 链路。Do not merge/tag/release until all review batches pass.
+- **Latest commit**: 61bd533 docs: clarify support paths and config privacy
 
 ---
 
@@ -19,6 +19,7 @@
 
 | 日期 | 内容 | Commit |
 |------|------|--------|
+| 2026-06-22 | Single-user VM acceptance — ConPTY prompt state machine, atomic Job containment, baseline rollback, TestSafe/Live orchestration | working tree |
 | 2026-06-21 | Fix doc reference parser — replace greedy regex with structured inline-code + markdown-link extractors | cf3d17e |
 | 2026-06-21 | Buyer docs review — 01-04 TXT de-markdown, README buyer structure, security/admin/time language fix | f069b44 |
 | 2026-06-21 | validate.ps1 preflight cleanup — git 检查/快照移入 try、cleanup try/catch、TestForcePreflightFailure、防回归检查 | 29a6c9a |
@@ -96,4 +97,3 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\doctor.ps1 -ShareSafe -Ski
 - `23c7249` P0-UX 第二批文案收口三次修正 — PATH/ExternalScript 清零 + 双文件 0 容忍扫描
 - `9d6e59c` narrow compressed regex to TEMP-only
 - `53c632b` allow desktop and common extract paths
-

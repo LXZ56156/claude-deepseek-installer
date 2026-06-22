@@ -1,0 +1,328 @@
+{
+  "schemaVersion": 1,
+  "scenarioSets": {
+    "TestSafe": [
+      {
+        "id": "disclaimer-reject",
+        "entry": "00-点我开始安装.cmd",
+        "timeoutSec": 90,
+        "steps": [
+          { "expect": "请输入 Y 确认已阅读并同意", "send": "N\r", "timeoutSec": 30 },
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 30 }
+        ],
+        "required": ["已取消。感谢您的关注"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "invalid-menu-then-exit",
+        "entry": "00-点我开始安装.cmd",
+        "timeoutSec": 120,
+        "steps": [
+          { "expect": "请输入 Y 确认已阅读并同意", "send": "Y\r", "timeoutSec": 30 },
+          { "expect": "请输入选项编号 \\(1-6，直接回车默认选 1\\)", "send": "9\r", "timeoutSec": 30 },
+          { "expect": "无效选项，请输入 1-6", "send": null, "timeoutSec": 30 },
+          { "expect": "请输入选项编号 \\(1-6，直接回车默认选 1\\)", "send": "6\r", "timeoutSec": 30 },
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 30 }
+        ],
+        "required": ["无效选项，请输入 1-6", "感谢使用"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "install-skip-key",
+        "entry": "00-点我开始安装.cmd",
+        "timeoutSec": 300,
+        "responders": [
+          { "expect": "按回车键继续", "send": "\r", "maxMatches": 4 }
+        ],
+        "steps": [
+          { "expect": "请输入 Y 确认已阅读并同意", "send": "Y\r", "timeoutSec": 30 },
+          { "expect": "请输入选项编号 \\(1-6，直接回车默认选 1\\)", "send": "\r", "timeoutSec": 30 },
+          { "expect": "请输入选项编号（直接回车默认 1）", "send": "3\r", "timeoutSec": 180 },
+          { "expect": "请输入选项编号 \\(1-5\\)", "send": "5\r", "timeoutSec": 60 },
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 30 }
+        ],
+        "required": ["测试安全模式", "未配置 API Key", "感谢使用"],
+        "forbidden": ["DeepSeek API Anthropic Format smoke test 通过"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "configure-secret-input",
+        "entry": "00-点我开始安装.cmd",
+        "timeoutSec": 180,
+        "responders": [
+          { "expect": "是否继续配置？", "send": "Y\r", "maxMatches": 1 },
+          { "expect": "是否更新现有配置？", "send": "Y\r", "maxMatches": 1 }
+        ],
+        "steps": [
+          { "expect": "请输入 Y 确认已阅读并同意", "send": "Y\r", "timeoutSec": 30 },
+          { "expect": "请输入选项编号 \\(1-6，直接回车默认选 1\\)", "send": "5\r", "timeoutSec": 30 },
+          { "expect": "请输入选项编号 \\(1-3\\)", "send": "1\r", "timeoutSec": 30 },
+          { "expect": "API Key", "sendSecret": "dummy", "timeoutSec": 60 },
+          { "expect": "按回车继续，输入 R 重新粘贴，输入 Q 取消", "send": "\r", "timeoutSec": 30 },
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 90 }
+        ],
+        "required": ["DeepSeek 配置已成功写入", "smoke test 通过"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "doctor-mock-200",
+        "entry": "一键诊断.cmd",
+        "setupDummyConfig": true,
+        "timeoutSec": 240,
+        "environment": { "CCDI_TEST_API_STATUS": "200" },
+        "steps": [
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 210 }
+        ],
+        "required": ["200 OK"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "doctor-mock-401",
+        "entry": "一键诊断.cmd",
+        "setupDummyConfig": true,
+        "timeoutSec": 240,
+        "environment": { "CCDI_TEST_API_STATUS": "401" },
+        "steps": [
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 210 }
+        ],
+        "required": ["API Key 验证失败"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "doctor-mock-402",
+        "entry": "一键诊断.cmd",
+        "setupDummyConfig": true,
+        "timeoutSec": 240,
+        "environment": { "CCDI_TEST_API_STATUS": "402" },
+        "steps": [
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 210 }
+        ],
+        "required": ["余额"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "doctor-mock-429",
+        "entry": "一键诊断.cmd",
+        "setupDummyConfig": true,
+        "timeoutSec": 240,
+        "environment": { "CCDI_TEST_API_STATUS": "429" },
+        "steps": [
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 210 }
+        ],
+        "required": ["HTTP 429", "API 请求频率限制"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "doctor-mock-503",
+        "entry": "一键诊断.cmd",
+        "setupDummyConfig": true,
+        "timeoutSec": 240,
+        "environment": { "CCDI_TEST_API_STATUS": "503" },
+        "steps": [
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 210 }
+        ],
+        "required": ["HTTP 503", "DeepSeek 服务暂不可用"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "doctor-mock-timeout",
+        "entry": "一键诊断.cmd",
+        "setupDummyConfig": true,
+        "timeoutSec": 240,
+        "environment": { "CCDI_TEST_API_STATUS": "timeout" },
+        "steps": [
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 210 }
+        ],
+        "required": ["连接超时"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "doctor-mock-dns",
+        "entry": "一键诊断.cmd",
+        "setupDummyConfig": true,
+        "timeoutSec": 240,
+        "environment": { "CCDI_TEST_API_STATUS": "dns" },
+        "steps": [
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 210 }
+        ],
+        "required": ["DNS 解析失败"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "repair-launcher",
+        "entry": "一键修复依赖.cmd",
+        "timeoutSec": 180,
+        "steps": [
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 150 }
+        ],
+        "required": ["测试安全模式"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "uninstall-menu-exit",
+        "entry": "恢复或卸载配置.cmd",
+        "timeoutSec": 120,
+        "steps": [
+          { "expect": "请输入选项 \\(1-4\\)", "send": "4\r", "timeoutSec": 60 },
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 30 }
+        ],
+        "required": ["已退出"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "diagnostic-launcher",
+        "entry": "一键诊断.cmd",
+        "timeoutSec": 240,
+        "steps": [
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 210 }
+        ],
+        "required": ["诊断"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "missing-package-pause",
+        "entry": "00-点我开始安装.cmd",
+        "isolatedCopy": true,
+        "removeBefore": ["Start-Here.ps1"],
+        "timeoutSec": 90,
+        "steps": [
+          { "expect": "Please extract the complete ZIP package first", "send": null, "timeoutSec": 30 },
+          { "expect": "请按任意键继续", "send": " \r", "delayMs": 300, "timeoutSec": 30 }
+        ],
+        "required": ["Missing Start-Here.ps1"],
+        "expectedExitCodes": [1]
+      }
+    ],
+    "Live": [
+      {
+        "id": "live-official-success",
+        "entry": "00-点我开始安装.cmd",
+        "timeoutSec": 1800,
+        "responders": [
+          { "expect": "按回车键继续", "send": "\r", "maxMatches": 6 },
+          { "expect": "是否现在安装 Claude Code", "send": "Y\r", "maxMatches": 2 },
+          { "expect": "是否现在安装 Node.js LTS", "send": "Y\r", "maxMatches": 2 }
+        ],
+        "steps": [
+          { "expect": "请输入 Y 确认已阅读并同意", "send": "Y\r", "timeoutSec": 60 },
+          { "expect": "请输入选项编号 \\(1-6，直接回车默认选 1\\)", "send": "\r", "timeoutSec": 60 },
+          { "expect": "请输入选项编号（直接回车默认 1）", "send": "1\r", "timeoutSec": 1200 },
+          { "expect": "请粘贴您的 DeepSeek API Key", "sendSecret": "credential", "timeoutSec": 60 },
+          { "expect": "按回车继续，输入 R 重新粘贴，输入 Q 取消", "send": "\r", "timeoutSec": 60 },
+          { "expect": "请输入选项编号 \\(1-5\\)", "send": "4\r", "timeoutSec": 180 },
+          { "expect": "按回车键返回", "send": "\r", "timeoutSec": 300 },
+          { "expect": "请输入选项编号 \\(1-5\\)", "send": "5\r", "timeoutSec": 60 },
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 60 }
+        ],
+        "required": ["Claude Code 已安装", "DeepSeek 配置已成功写入", "smoke test 通过", "感谢使用"],
+        "forbidden": ["安装未完成", "API 测试未通过"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "live-official-fallback-success",
+        "entry": "00-点我开始安装.cmd",
+        "timeoutSec": 2400,
+        "setup": { "blockOfficialEndpoints": true },
+        "responders": [
+          { "expect": "按回车键继续", "send": "\r", "maxMatches": 8 },
+          { "expect": "是否现在安装 Node.js LTS", "send": "Y\r", "maxMatches": 2 }
+        ],
+        "steps": [
+          { "expect": "请输入 Y 确认已阅读并同意", "send": "Y\r", "timeoutSec": 60 },
+          { "expect": "请输入选项编号 \\(1-6，直接回车默认选 1\\)", "send": "\r", "timeoutSec": 60 },
+          { "expect": "请输入选项编号（直接回车默认 1）", "send": "1\r", "timeoutSec": 1800 },
+          { "expect": "请粘贴您的 DeepSeek API Key", "sendSecret": "credential", "timeoutSec": 60 },
+          { "expect": "按回车继续，输入 R 重新粘贴，输入 Q 取消", "send": "\r", "timeoutSec": 60 },
+          { "expect": "请输入选项编号 \\(1-5\\)", "send": "5\r", "timeoutSec": 180 },
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 60 }
+        ],
+        "required": ["备用下载方式", "Claude Code 已安装", "smoke test 通过"],
+        "forbidden": ["安装未完成", "API 测试未通过"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "live-node-missing",
+        "entry": "00-点我开始安装.cmd",
+        "timeoutSec": 900,
+        "setup": { "blockOfficialEndpoints": true },
+        "steps": [
+          { "expect": "请输入 Y 确认已阅读并同意", "send": "Y\r", "timeoutSec": 60 },
+          { "expect": "请输入选项编号 \\(1-6，直接回车默认选 1\\)", "send": "\r", "timeoutSec": 60 },
+          { "expect": "是否现在安装 Node.js LTS", "send": "N\r", "timeoutSec": 600 },
+          { "expect": "请输入选项编号 \\(1-5\\)", "send": "5\r", "timeoutSec": 120 },
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 60 }
+        ],
+        "required": ["请手动安装 Node.js", "Claude Code 暂未确认安装成功"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "live-npm-missing",
+        "entry": "00-点我开始安装.cmd",
+        "timeoutSec": 1200,
+        "setup": { "blockOfficialEndpoints": true, "installNodeForFault": true, "hideNpm": true },
+        "steps": [
+          { "expect": "请输入 Y 确认已阅读并同意", "send": "Y\r", "timeoutSec": 60 },
+          { "expect": "请输入选项编号 \\(1-6，直接回车默认选 1\\)", "send": "\r", "timeoutSec": 60 },
+          { "expect": "请输入选项编号 \\(1-5\\)", "send": "5\r", "timeoutSec": 900 },
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 60 }
+        ],
+        "required": ["必要运行环境不可用", "备用方式需要 npm"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "live-install-command-anomaly-postcheck-usable",
+        "entry": "00-点我开始安装.cmd",
+        "timeoutSec": 1800,
+        "setup": { "blockOfficialEndpoints": true, "installNodeForFault": true, "installCommandFailsButClaudeAppears": true },
+        "responders": [
+          { "expect": "按回车键继续", "send": "\r", "maxMatches": 8 }
+        ],
+        "steps": [
+          { "expect": "请输入 Y 确认已阅读并同意", "send": "Y\r", "timeoutSec": 60 },
+          { "expect": "请输入选项编号 \\(1-6，直接回车默认选 1\\)", "send": "\r", "timeoutSec": 60 },
+          { "expect": "请输入选项编号（直接回车默认 1）", "send": "3\r", "timeoutSec": 1200 },
+          { "expect": "请输入选项编号 \\(1-5\\)", "send": "5\r", "timeoutSec": 120 },
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 60 }
+        ],
+        "required": ["Claude Code 已安装并确认可用", "安装命令返回异常"],
+        "forbidden": ["安装未完成"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "live-real-api-and-diagnostic",
+        "entry": "00-点我开始安装.cmd",
+        "timeoutSec": 1800,
+        "responders": [
+          { "expect": "按回车键继续", "send": "\r", "maxMatches": 6 }
+        ],
+        "steps": [
+          { "expect": "请输入 Y 确认已阅读并同意", "send": "Y\r", "timeoutSec": 60 },
+          { "expect": "请输入选项编号 \\(1-6，直接回车默认选 1\\)", "send": "\r", "timeoutSec": 60 },
+          { "expect": "请输入选项编号（直接回车默认 1）", "send": "1\r", "timeoutSec": 1200 },
+          { "expect": "请粘贴您的 DeepSeek API Key", "sendSecret": "credential", "timeoutSec": 60 },
+          { "expect": "按回车继续，输入 R 重新粘贴，输入 Q 取消", "send": "\r", "timeoutSec": 60 },
+          { "expect": "请输入选项编号 \\(1-5\\)", "send": "4\r", "timeoutSec": 180 },
+          { "expect": "按回车键返回", "send": "\r", "timeoutSec": 300 },
+          { "expect": "请输入选项编号 \\(1-5\\)", "send": "5\r", "timeoutSec": 60 },
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 60 }
+        ],
+        "required": ["smoke test 通过", "正在运行一键诊断", "感谢使用"],
+        "forbidden": ["API 测试未通过"],
+        "expectedExitCodes": [0]
+      },
+      {
+        "id": "live-remove-deepseek-config",
+        "entry": "恢复或卸载配置.cmd",
+        "setupDummyConfig": true,
+        "timeoutSec": 180,
+        "steps": [
+          { "expect": "请输入选项 \\(1-4\\)", "send": "2\r", "timeoutSec": 60 },
+          { "expect": "确认移除？", "send": "Y\r", "timeoutSec": 30 },
+          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 60 }
+        ],
+        "required": ["已移除", "其他 env 和配置项已保留"],
+        "expectedExitCodes": [0]
+      }
+    ]
+  }
+}
