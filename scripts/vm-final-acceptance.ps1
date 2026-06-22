@@ -322,6 +322,16 @@ function New-VmResumeState {
     }
 }
 
+function Invoke-VmResumeControlFlow {
+    param($State, [int]$ScenarioCount, [scriptblock]$PendingCleanup)
+    if ([string]$State.Phase -ne 'resume-cleanup-pending') { throw "Unsupported resume phase '$($State.Phase)'" }
+    $startIndex = [int]$State.NextScenarioIndex
+    if ($startIndex -lt 0 -or $startIndex -gt $ScenarioCount) { throw "Resume scenario index $startIndex is outside 0..$ScenarioCount" }
+    $cleanupResult = & $PendingCleanup
+    if (-not $cleanupResult -or -not [bool]$cleanupResult.Success) { throw 'Pending resume cleanup did not complete successfully' }
+    return [PSCustomObject]@{ NextScenarioIndex = $startIndex; CleanupCompleted = $true }
+}
+
 if ($env:CCDI_ACCEPTANCE_IMPORT_ONLY -eq '1') { return }
 
 $resumeBootstrapState = if ($Resume) { Read-AcceptanceResumeState -ControlRoot $ControlRoot } else { $null }
@@ -365,7 +375,7 @@ try {
         $baseline = Get-Content -LiteralPath (Join-Path $paths.Baseline "baseline-before.json") -Raw -Encoding UTF8 | ConvertFrom-Json
         $settingsBackup = Join-Path $paths.Baseline "settings.json.bytes"
         if ($baseline.Settings.Exists) { $settingsBytes = [IO.File]::ReadAllBytes($settingsBackup) }
-        Remove-AcceptanceResume -Paths $paths -KeepState
+        [void](Remove-AcceptanceResume -Paths $paths -KeepState)
     }
     else {
         if ($Mode -eq "Live") {
@@ -410,28 +420,33 @@ try {
     $testSafeScenarios = @($scenarioDocument.scenarioSets.TestSafe)
     $liveScenarios = if ($Mode -eq "Live") { @($scenarioDocument.scenarioSets.Live) } else { @() }
     $orderedScenarios = @($testSafeScenarios) + @($liveScenarios)
-    if ($Resume -and $phase -eq 'resume-cleanup-pending') {
-        Write-VmAcceptance "Completing cleanup before resuming at scenario index $nextScenarioIndex"
-        $protectedPids = Get-ProtectedProcessIds
-        $resumeCurrent = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
-        Assert-AcceptanceSnapshotUsable -Snapshot $resumeCurrent -Label 'Resume cleanup'
-        $resumeDelta = Compare-AcceptanceSnapshot -Before $baseline -After $resumeCurrent
-        $resumeCleanup = Reset-AcceptanceEnvironment -Baseline $baseline -Current $resumeCurrent -Delta $resumeDelta -SettingsBytes $settingsBytes `
-            -ProjectRoot $ProjectRoot -ControlRoot $paths.Root -ResultRoot $paths.Run `
-            -AllowedCleanupRoots @((Get-AcceptanceKnownRoots) + @($baseline.Files.Path)) -ProtectedProcessIds $protectedPids -Ownership $pendingOwnership
-        [void]$cleanupReports.Add([ordered]@{ Scenario = '__resume__'; Phase = 'resume-cleanup'; Report = $resumeCleanup })
-        if (-not $resumeCleanup.Success) {
-            $lockOnly = @($resumeCleanup.Errors | Where-Object { $_ -notmatch '^LOCKED_PATH:' }).Count -eq 0
-            if ($lockOnly -and (Test-VmAutomaticRestartAllowed -AcceptanceMode $Mode -RealInstallAcknowledged ([bool]$AcknowledgeRealInstall) -RestartAcknowledged ([bool]$AcknowledgeRestart))) {
-                $resume = New-VmResumeState -NextScenarioIndex $nextScenarioIndex -CurrentPhase 'resume-cleanup-pending' -PendingOwnership $pendingOwnership
-                $resume.Error = ($resumeCleanup.Errors -join '; ')
-                Invoke-VmAuthorizedRestart -ResumeState $resume
+    if ($Resume) {
+        $resumeFlow = Invoke-VmResumeControlFlow -State $resumeState -ScenarioCount $orderedScenarios.Count -PendingCleanup {
+            Write-VmAcceptance "Completing cleanup before resuming at scenario index $nextScenarioIndex"
+            $protectedPids = Get-ProtectedProcessIds
+            $resumeCurrent = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
+            Assert-AcceptanceSnapshotUsable -Snapshot $resumeCurrent -Label 'Resume cleanup'
+            $resumeDelta = Compare-AcceptanceSnapshot -Before $baseline -After $resumeCurrent
+            $resumeCleanup = Reset-AcceptanceEnvironment -Baseline $baseline -Current $resumeCurrent -Delta $resumeDelta -SettingsBytes $settingsBytes `
+                -ProjectRoot $ProjectRoot -ControlRoot $paths.Root -ResultRoot $paths.Run `
+                -AllowedCleanupRoots @((Get-AcceptanceKnownRoots) + @($baseline.Files.Path)) -ProtectedProcessIds $protectedPids -Ownership $pendingOwnership
+            [void]$cleanupReports.Add([ordered]@{ Scenario = '__resume__'; Phase = 'resume-cleanup'; Report = $resumeCleanup })
+            if (-not $resumeCleanup.Success) {
+                $lockOnly = @($resumeCleanup.Errors | Where-Object { $_ -notmatch '^LOCKED_PATH:' }).Count -eq 0
+                if ($lockOnly -and (Test-VmAutomaticRestartAllowed -AcceptanceMode $Mode -RealInstallAcknowledged ([bool]$AcknowledgeRealInstall) -RestartAcknowledged ([bool]$AcknowledgeRestart))) {
+                    $resume = New-VmResumeState -NextScenarioIndex $nextScenarioIndex -CurrentPhase 'resume-cleanup-pending' -PendingOwnership $pendingOwnership
+                    $resume.Error = ($resumeCleanup.Errors -join '; ')
+                    Invoke-VmAuthorizedRestart -ResumeState $resume
+                }
+                throw "Resume cleanup failed: $($resumeCleanup.Errors -join '; ')"
             }
-            throw "Resume cleanup failed: $($resumeCleanup.Errors -join '; ')"
+            $resumeAfter = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
+            $resumeEquivalent = Test-AcceptanceBaselineEquivalent -Baseline $baseline -Candidate $resumeAfter -IgnoredProcessIds $protectedPids
+            if (-not $resumeEquivalent.Equivalent) { throw "Resume cleanup did not restore baseline: $($resumeEquivalent.Differences -join '; ')" }
+            [void](Remove-AcceptanceResume -Paths $paths)
+            return [PSCustomObject]@{ Success = $true }
         }
-        $resumeAfter = Get-AcceptanceEnvironmentSnapshot -ProjectRoot $ProjectRoot -TempRoot $snapshotTemp
-        $resumeEquivalent = Test-AcceptanceBaselineEquivalent -Baseline $baseline -Candidate $resumeAfter -IgnoredProcessIds $protectedPids
-        if (-not $resumeEquivalent.Equivalent) { throw "Resume cleanup did not restore baseline: $($resumeEquivalent.Differences -join '; ')" }
+        $nextScenarioIndex = [int]$resumeFlow.NextScenarioIndex
         $pendingOwnership = New-AcceptanceOwnership
         $phase = 'scenario-loop'
     }

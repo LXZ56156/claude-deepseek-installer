@@ -28,7 +28,7 @@
 
 ## 状态（截至 2026-06-22）
 
-- TestSafe 功能测试（`scripts/test-vm-acceptance.ps1`）：**24/24 通过**，在 host 实跑。沙盒化后不修改真实 User/Machine/Process PATH、真实 USERPROFILE、真实 settings.json；finally 不再写回真实 User PATH。
+- TestSafe 功能测试（`scripts/test-vm-acceptance.ps1`）：**26/26 通过**，在 host 实跑。沙盒化后不修改真实 User/Machine/Process PATH、真实 USERPROFILE、真实 settings.json；包含 resume pending cleanup、checkpoint 删除、下一场景执行、旧 schema 拒绝和任务删除失败测试。
 - TestSafe `restore-config-backup` 场景：**通过**（host 实跑 6.87s），真实 settings.json 前后 SHA256 一致。
 - `check.ps1`：功能测试门控于 `-AcceptanceFunctional`；默认 Smoke 仅静态检查（ConPTY 驱动编译 + 场景定义校验 + synthetic 快照字段），无真实环境副作用。
 - `vm-final-acceptance.ps1 -Mode TestSafe`：静态校验阶段调用沙盒化功能测试作为首个 stage。
@@ -46,3 +46,7 @@
 | ACC-012 | Functional cleanup rewrote real User PATH | `finally` always persisted the captured string | Remove the persistent write; sandbox adapter remains the only PATH mutation | Real PATH unchanged assertions |
 | ACC-013 | Human summary overstated passed scenarios | Summary used total result count | Count PASS and non-PASS results separately in JSON and text | Static source gate |
 | ACC-014 | Successful TestSafe exited after all 16 scenarios | Deleting nonexistent resume tasks emitted native stderr under terminating error policy | Use bounded captured `schtasks.exe` deletion and accept missing tasks | Functional no-task cleanup test |
+| ACC-015 | Resume task deletion failures were ignored | Every nonzero `schtasks.exe` result was treated as a missing task | Use Task Scheduler COM existence checks; only HRESULT `0x80070002` is missing, while timeout, permission, or delete failure preserves state/report and blocks | Real missing-task probe + injected access-denied deletion test |
+| ACC-016 | Old resume schemas could execute new control flow | State reader did not validate `SchemaVersion` | Accept only SchemaVersion 3 with an explicit clean-and-restart message | Legacy schema rejection test |
+| ACC-017 | Completed pending cleanup left a stale checkpoint | Resume startup kept state and never removed it after equivalence | Delete the old checkpoint only after cleanup and task verification succeed | Resume control-flow gate |
+| ACC-018 | Resume tests did not execute control flow | Tests covered serialization only | Production helper now drives pending cleanup and next-index selection; test executes only scenarios after the saved index | Pending-cleanup control-flow test |

@@ -5511,7 +5511,8 @@ if ($acceptanceOrchestratorText -notmatch 'AcknowledgeRestart' -or
     $acceptanceOrchestratorText -notmatch "AcceptanceMode -eq 'Live'" -or
     ([regex]::Matches($acceptanceOrchestratorText, 'Restart-Computer\s+-Force')).Count -ne 1 -or
     $acceptanceOrchestratorText -notmatch 'New-VmResumeState -NextScenarioIndex \(\$index \+ 1\)' -or
-    $acceptanceOrchestratorText -notmatch '\$phase -eq ''resume-cleanup-pending''' -or
+    $acceptanceOrchestratorText -notmatch 'Invoke-VmResumeControlFlow' -or
+    $acceptanceOrchestratorText -notmatch 'Remove-AcceptanceResume -Paths \$paths' -or
     $acceptanceOrchestratorText -notmatch 'Where-Object \{ \$_\.Status -eq ''PASS'' \}') {
     throw "VM resume/restart/summary controls must skip completed scenarios, require Live restart acknowledgement, and count PASS results only"
 }
@@ -5522,8 +5523,17 @@ if ($acceptanceEnvironmentText -notmatch '\$errors\.Add\("UNOWNED_PROCESS' -or
     throw "Residual acceptance processes must block cleanup and final baseline equivalence"
 }
 if ($acceptanceFunctionalText -match 'SetEnvironmentVariable\(''Path'',\$oldUserPath,''User''\)' -or
-    $acceptanceFunctionalText -notmatch 'TestSafe can never authorize automatic restart') {
+    $acceptanceFunctionalText -notmatch 'TestSafe can never authorize automatic restart' -or
+    $acceptanceFunctionalText -notmatch 'resume control flow removes checkpoint and executes only following scenarios' -or
+    $acceptanceFunctionalText -notmatch 'task deletion failure preserves resume state and evidence') {
     throw "Functional acceptance must not write real user PATH and must prove TestSafe cannot restart"
+}
+if ($acceptanceEnvironmentText -notmatch 'Only SchemaVersion 3 is accepted' -or
+    $acceptanceEnvironmentText -notmatch 'Test-AcceptanceScheduledTaskExists' -or
+    $acceptanceEnvironmentText -notmatch '0x80070002' -or
+    $acceptanceEnvironmentText -notmatch 'ResumeCleanupReport' -or
+    $acceptanceEnvironmentText -notmatch "Status = 'Deleted'") {
+    throw "Resume state version and scheduled-task cleanup must fail closed with persistent evidence"
 }
 foreach ($term in @('.codex', 'settings.json', 'UserPath', 'MachinePath', 'NpmGlobal', 'Winget', 'Registry', 'ScheduledTasks', 'Services', 'FullSHA', 'Invoke-AcceptanceCapturedCommand', 'TimedOut')) {
     if ($acceptanceEnvironmentText -notmatch [regex]::Escape($term)) { throw "Acceptance baseline or bounded probe missing: $term" }

@@ -71,6 +71,7 @@ function Get-AcceptanceControlPaths {
         Runs = [IO.Path]::GetFullPath((Join-Path $ControlRoot "runs"))
         Run = [IO.Path]::GetFullPath((Join-Path $ControlRoot "runs\$RunId"))
         ResumeState = [IO.Path]::GetFullPath((Join-Path $ControlRoot "resume-state.json"))
+        ResumeCleanupReport = [IO.Path]::GetFullPath((Join-Path $ControlRoot "resume-task-cleanup.json"))
         LockFile = [IO.Path]::GetFullPath((Join-Path $ControlRoot ".acceptance.lock"))
         ResumeTask = "CCDI-Acceptance-Resume"
         ResumeUserTask = "CCDI-Acceptance-Resume-User"
@@ -612,7 +613,12 @@ function Read-AcceptanceResumeState {
     param([string]$ControlRoot)
     $path = Join-Path ([IO.Path]::GetFullPath($ControlRoot)) "resume-state.json"
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Resume state not found: $path" }
-    Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $state = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($state.PSObject.Properties.Name -notcontains 'SchemaVersion' -or [int]$state.SchemaVersion -ne 3) {
+        $actual = if ($state.PSObject.Properties.Name -contains 'SchemaVersion') { [string]$state.SchemaVersion } else { '<missing>' }
+        throw "Unsupported resume state SchemaVersion '$actual'. Only SchemaVersion 3 is accepted. Review and clean the recorded environment, remove '$path', then start a new acceptance run."
+    }
+    return $state
 }
 
 function Import-AcceptanceResumeResults {
@@ -662,15 +668,67 @@ exit 1
     return $spec
 }
 
-function Remove-AcceptanceResume {
-    param($Paths, [switch]$KeepState)
-    $schtasks = Get-Command schtasks.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($schtasks) {
-        # Missing tasks are the normal no-resume case; capture the nonzero exit without
-        # allowing native stderr to become a terminating PowerShell error.
-        [void](Invoke-AcceptanceCapturedCommand -FilePath ([string]$schtasks.Source) -ArgumentList @('/Delete', '/TN', $Paths.ResumeTask, '/F') -TimeoutSec 30)
-        [void](Invoke-AcceptanceCapturedCommand -FilePath ([string]$schtasks.Source) -ArgumentList @('/Delete', '/TN', $Paths.ResumeUserTask, '/F') -TimeoutSec 30)
+function Test-AcceptanceScheduledTaskExists {
+    param([string]$TaskName)
+    $service = New-Object -ComObject 'Schedule.Service'
+    $folder = $null
+    try {
+        $service.Connect()
+        $folder = $service.GetFolder('\')
+        try { [void]$folder.GetTask($TaskName); return $true }
+        catch {
+            # HRESULT 0x80070002 is ERROR_FILE_NOT_FOUND. Permission and RPC
+            # failures have different HRESULTs and must remain terminating.
+            if ([int]$_.Exception.HResult -eq -2147024894) { return $false } # 0x80070002
+            throw
+        }
     }
+    finally {
+        if ($folder) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($folder) }
+        if ($service) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($service) }
+    }
+}
+
+function Remove-AcceptanceResume {
+    param($Paths, [switch]$KeepState, [scriptblock]$TaskCommandInvoker, [scriptblock]$TaskExistenceProbe)
+    $entries = New-Object Collections.ArrayList
+    $report = [ordered]@{ StartedAt = (Get-Date).ToString('o'); Success = $false; KeepState = [bool]$KeepState; Tasks = @(); Error = $null }
+    $schtasks = Get-Command schtasks.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $TaskCommandInvoker) {
+        $TaskCommandInvoker = {
+            param([string]$FilePath, [string[]]$Arguments)
+            Invoke-AcceptanceCapturedCommand -FilePath $FilePath -ArgumentList $Arguments -TimeoutSec 30
+        }
+    }
+    if (-not $TaskExistenceProbe) { $TaskExistenceProbe = { param([string]$TaskName) Test-AcceptanceScheduledTaskExists -TaskName $TaskName } }
+    try {
+        if (-not $schtasks) { throw 'schtasks.exe is required to verify resume task cleanup' }
+        foreach ($taskName in @($Paths.ResumeTask, $Paths.ResumeUserTask)) {
+            if (-not [bool](& $TaskExistenceProbe $taskName)) {
+                [void]$entries.Add([ordered]@{ TaskName = $taskName; Status = 'Missing' })
+                continue
+            }
+            $delete = & $TaskCommandInvoker ([string]$schtasks.Source) @('/Delete', '/TN', $taskName, '/F')
+            if ($delete.TimedOut) { throw "Timed out deleting resume task '$taskName'" }
+            if ($null -eq $delete.ExitCode -or [int]$delete.ExitCode -ne 0) {
+                throw "Failed to delete resume task '$taskName' (exit $($delete.ExitCode)): $([string]$delete.StdErr)"
+            }
+            if ([bool](& $TaskExistenceProbe $taskName)) { throw "Resume task '$taskName' still exists after schtasks.exe reported success" }
+            [void]$entries.Add([ordered]@{ TaskName = $taskName; Status = 'Deleted'; DeleteExitCode = [int]$delete.ExitCode })
+        }
+        $report.Success = $true
+    }
+    catch {
+        $report.Error = $_.Exception.Message
+        throw
+    }
+    finally {
+        $report.Tasks = @($entries)
+        $report.CompletedAt = (Get-Date).ToString('o')
+        $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Paths.ResumeCleanupReport -Encoding UTF8
+    }
+    # State and bootstrap are removed only after every task is confirmed absent or deleted.
     if (-not $KeepState) { Remove-Item -LiteralPath $Paths.ResumeState -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath (Join-Path $Paths.Root "resume-bootstrap.ps1") -Force -ErrorAction SilentlyContinue
+    return [PSCustomObject]$report
 }

@@ -145,10 +145,40 @@ try {
     $sr=New-Object Collections.ArrayList;$cr=New-Object Collections.ArrayList;$rr=New-Object Collections.ArrayList
     Import-AcceptanceResumeResults -State $roundTrip -StageResults $sr -ScenarioResults $cr -CleanupReports $rr
     Assert-Test ($roundTrip.CredentialTarget -eq 'TEST_TARGET' -and $roundTrip.NextScenarioIndex -eq 5 -and $roundTrip.Phase -eq 'resume-cleanup-pending' -and $taskSpec.Arguments -match 'CredentialTarget "TEST_TARGET"' -and $taskSpec.Arguments -match '-AcknowledgeRestart' -and $sr.Count -eq 1 -and $cr.Count -eq 1 -and $rr.Count -eq 1) 'resume state starts after completed scenario and preserves prior results'
+    $cleanupEvents = New-Object Collections.ArrayList; $executedScenarios = New-Object Collections.ArrayList
+    $missingTaskProbe = { param($TaskName) return $false }
+    $resumeFlow = Invoke-VmResumeControlFlow -State $roundTrip -ScenarioCount 7 -PendingCleanup {
+        [void]$cleanupEvents.Add('cleanup')
+        [void](Remove-AcceptanceResume -Paths $resumePaths -TaskExistenceProbe $missingTaskProbe)
+        [PSCustomObject]@{ Success = $true }
+    }
+    $scenarioNames = @('completed-0', 'completed-1', 'completed-2', 'completed-3', 'completed-4', 'next-5', 'next-6')
+    for ($resumeIndex = $resumeFlow.NextScenarioIndex; $resumeIndex -lt $scenarioNames.Count; $resumeIndex++) { [void]$executedScenarios.Add($scenarioNames[$resumeIndex]) }
+    Assert-Test ($cleanupEvents.Count -eq 1 -and -not (Test-Path -LiteralPath $resumePaths.ResumeState) -and ((@($executedScenarios) -join ',') -eq 'next-5,next-6')) 'resume control flow removes checkpoint and executes only following scenarios'
     Assert-Test (-not (Test-VmAutomaticRestartAllowed -AcceptanceMode 'TestSafe' -RealInstallAcknowledged $true -RestartAcknowledged $true)) 'TestSafe can never authorize automatic restart'
     Assert-Test (-not (Test-VmAutomaticRestartAllowed -AcceptanceMode 'Live' -RealInstallAcknowledged $true -RestartAcknowledged $false)) 'Live restart requires independent acknowledgement'
-    Remove-AcceptanceResume -Paths $resumePaths
-    Assert-Test (-not (Test-Path -LiteralPath $resumePaths.ResumeState)) 'missing resume tasks do not fail successful cleanup'
+
+    $legacyPaths = Get-AcceptanceControlPaths -ControlRoot (Join-Path $testRoot 'legacy-resume-control') -RunId 'legacy-run'
+    New-Item -ItemType Directory -Path $legacyPaths.Root -Force | Out-Null
+    ([ordered]@{ SchemaVersion=2;RunId='legacy-run';Phase='scenario-post-cleanup';NextScenarioIndex=4 } | ConvertTo-Json) | Set-Content -LiteralPath $legacyPaths.ResumeState -Encoding UTF8
+    $legacyRejected = $false
+    try { [void](Read-AcceptanceResumeState -ControlRoot $legacyPaths.Root) } catch { $legacyRejected = $_.Exception.Message -match 'Only SchemaVersion 3 is accepted' }
+    Assert-Test $legacyRejected 'legacy resume schema is rejected before control flow'
+
+    $failedDeletePaths = Get-AcceptanceControlPaths -ControlRoot (Join-Path $testRoot 'failed-delete-control') -RunId 'failed-delete-run'
+    New-Item -ItemType Directory -Path $failedDeletePaths.Root -Force | Out-Null
+    'state-must-remain' | Set-Content -LiteralPath $failedDeletePaths.ResumeState -Encoding UTF8
+    $deleteEvents = New-Object Collections.ArrayList
+    $failedDeleteInvoker = {
+        param($FilePath, $Arguments)
+        [void]$deleteEvents.Add([string]$Arguments[0])
+        return [PSCustomObject]@{ TimedOut=$false;ExitCode=5;StdOut='';StdErr='ERROR: Access is denied.' }
+    }
+    $existingTaskProbe = { param($TaskName) return $true }
+    $deleteFailureBlocked = $false
+    try { [void](Remove-AcceptanceResume -Paths $failedDeletePaths -TaskCommandInvoker $failedDeleteInvoker -TaskExistenceProbe $existingTaskProbe) } catch { $deleteFailureBlocked = $_.Exception.Message -match 'Failed to delete resume task' }
+    $deleteEvidence = Get-Content -LiteralPath $failedDeletePaths.ResumeCleanupReport -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-Test ($deleteFailureBlocked -and (Test-Path -LiteralPath $failedDeletePaths.ResumeState) -and -not $deleteEvidence.Success -and $deleteEvents.Count -eq 1) 'task deletion failure preserves resume state and evidence'
 
     # Locked owned path produces LOCKED_PATH evidence and resumable state, without rebooting.
     $lockedRoot = Join-Path $testRoot 'locked-root'; New-Item -ItemType Directory -Path $lockedRoot -Force | Out-Null
