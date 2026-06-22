@@ -9,7 +9,7 @@
 - **Branch**: `fix/v1.3.3-native-path-doctor-ux`
 - **Status**: Single-user ConPTY VM acceptance implemented; host TestSafe and Full validation passed.
 - **Next**: 在专用 Win11 VMware 验收机执行 Live 链路。Do not merge/tag/release until all review batches pass.
-- **Latest commit**: 61bd533 docs: clarify support paths and config privacy
+- **Latest commit**: a9f9f6e feat(acceptance): single-user ConPTY VM interactive acceptance harness
 
 ---
 
@@ -19,7 +19,7 @@
 
 | 日期 | 内容 | Commit |
 |------|------|--------|
-| 2026-06-22 | Single-user VM acceptance — ConPTY prompt state machine, atomic Job containment, baseline rollback, TestSafe/Live orchestration | working tree |
+| 2026-06-22 | Single-user VM acceptance — ConPTY prompt state machine, atomic Job containment, baseline rollback, TestSafe/Live orchestration | a9f9f6e |
 | 2026-06-21 | Fix doc reference parser — replace greedy regex with structured inline-code + markdown-link extractors | cf3d17e |
 | 2026-06-21 | Buyer docs review — 01-04 TXT de-markdown, README buyer structure, security/admin/time language fix | f069b44 |
 | 2026-06-21 | validate.ps1 preflight cleanup — git 检查/快照移入 try、cleanup try/catch、TestForcePreflightFailure、防回归检查 | 29a6c9a |
