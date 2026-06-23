@@ -7,7 +7,7 @@
 ## Active Work
 
 - **Branch**: `fix/v1.3.3-native-path-doctor-ux`
-- **Status**: VM acceptance final closure implemented on host: transactional resume registration/cleanup, strict SchemaVersion 3 prefix validation, UTF-8 ConPTY driver, static machine-state guard, transactional final summary, isolated TestSafe release output, redacted release API-key scan diagnostics, scenario/step final failureText scan, evidence-gated resume cleanup, release and Live command-collection StrictMode scalar Count fixes, Release Scenario B isolated mock Claude TestSafe fix, TestSafe API Key browser-open guard, 119 functional checks pass, and Full/Release/Hardcore validations pass. Current non-dedicated host `vm-final -Mode TestSafe` is blocked before scenarios by active `.claude`/node noise; previous isolated TestSafe interactive scenarios pass. Dedicated VM Live and real reboot remain pending.
+- **Status**: VM acceptance final closure implemented on host: transactional resume registration/cleanup, strict SchemaVersion 3 prefix validation, UTF-8 ConPTY driver, static machine-state guard, transactional final summary, isolated TestSafe release output, redacted release API-key scan diagnostics, scenario/step final failureText scan, evidence-gated resume cleanup, release and Live command-collection StrictMode scalar Count fixes, Release Scenario B isolated mock Claude TestSafe fix, TestSafe API Key browser-open guard, ConPTY responder-count PowerShell 5.1 fix, 119 functional checks pass, and Full/Release/Hardcore validations pass. Current non-dedicated host `vm-final -Mode TestSafe` is blocked before scenarios by active `.claude`/node noise; previous isolated TestSafe interactive scenarios pass. Dedicated VM Live and real reboot remain pending.
 - **Next**: 在专用 Win11 VMware 验收机执行 TestSafe final-equivalence、Live（8 场景）和真实重启续跑；在该机复验 vm-final final-equivalence（主机无其他 Claude 会话时不复现噪声）。Do not merge/tag/release until VM Live + real-reboot resume pass.
 - **Latest commit**: run `git log -1 --oneline`; this file does not self-reference a commit SHA because that would change the commit itself.
 
@@ -19,6 +19,7 @@
 
 | 日期 | 内容 | Commit |
 |------|------|--------|
+| 2026-06-24 | ConPTY responder-count PS5.1 closure — Scenario 3 runner no longer uses parenthesized if assignment | 本提交 |
 | 2026-06-24 | TestSafe API Key browser-open guard — Step 3 no longer starts real URL under ConPTY TestSafe | 本提交 |
 | 2026-06-23 | Release Scenario B TestSafe mock Claude closure — WCCR no longer depends on host claude/node/npm | 本提交 |
 | 2026-06-23 | Live StrictMode scalar command-count closure — safe 0/1/N helper, same-class scan fixes, 119 functional checks | 本提交 |

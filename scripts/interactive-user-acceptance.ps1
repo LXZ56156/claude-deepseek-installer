@@ -394,7 +394,12 @@ function Invoke-ConPtyScenario {
                     Send-ScenarioInput -Process $process -Rule $candidate.Rule -Secret $Secret -Events $events
                     if ($candidate.Type -eq "responder") {
                         $responderKey = [string]$candidate.Rule.expect
-                        $responderCounts[$responderKey] = (if ($responderCounts.ContainsKey($responderKey)) { [int]$responderCounts[$responderKey] + 1 } else { 1 })
+                        if ($responderCounts.ContainsKey($responderKey)) {
+                            $responderCounts[$responderKey] = [int]$responderCounts[$responderKey] + 1
+                        }
+                        else {
+                            $responderCounts[$responderKey] = 1
+                        }
                     }
                     else {
                         $matched = $true

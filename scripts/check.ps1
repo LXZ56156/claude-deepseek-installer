@@ -5519,6 +5519,15 @@ $acceptanceCredentialText = Get-Content -LiteralPath $acceptancePaths.Credential
 $acceptanceFunctionalText = Get-Content -LiteralPath $acceptancePaths.Functional -Raw -Encoding UTF8
 $acceptanceAllText = @($acceptanceRunnerText, $acceptanceOrchestratorText, $acceptanceEnvironmentText, $acceptanceDriverText, $acceptanceCredentialText, $acceptanceFunctionalText) -join "`n"
 
+$parenthesizedStatementAssignmentPattern = '=\s*\(\s*(?:' + 'if|switch' + ')\b'
+$responderCountParenthesizedIfPattern = '\$responderCounts\[[^\]]+\]\s*=\s*\(\s*' + 'if\b'
+if ($acceptanceRunnerText -match $parenthesizedStatementAssignmentPattern) {
+    throw "interactive-user-acceptance.ps1 must not assign from parenthesized if/switch statements; use plain if/else before assignment"
+}
+if ($acceptanceRunnerText -match $responderCountParenthesizedIfPattern) {
+    throw "interactive-user-acceptance.ps1 responder counts must use plain if/else assignment"
+}
+
 if ($acceptanceAllText -match '(?i)New-LocalUser|Remove-LocalUser|Windows\s*Sandbox|WindowsSandbox|\bVNC\b|SendKeys|VMware\s+snapshot|Checkpoint-VM') {
     throw "VM acceptance must remain single-user and must not depend on Sandbox, VNC, SendKeys, or VM snapshots"
 }
