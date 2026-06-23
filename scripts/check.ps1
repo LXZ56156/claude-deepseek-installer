@@ -93,6 +93,25 @@ finally {
     }
 }
 
+Write-Host "[check] PowerShell parenthesized statement-expression guard"
+$parenthesizedStatementAssignmentPattern = '=\s*\(\s*(?:' + 'if|switch' + ')\b'
+$trackedPowerShellFiles = @(& git -C $RootDir ls-files -- "*.ps1" "*.psm1" "*.psd1")
+if ($LASTEXITCODE -ne 0) {
+    throw "Unable to enumerate tracked PowerShell source files for statement-expression guard"
+}
+$parenthesizedStatementHits = New-Object System.Collections.ArrayList
+foreach ($relativePath in $trackedPowerShellFiles) {
+    if ([string]::IsNullOrWhiteSpace($relativePath)) { continue }
+    $fullPath = Join-Path $RootDir $relativePath
+    $hits = @(Select-String -LiteralPath $fullPath -Pattern $parenthesizedStatementAssignmentPattern -AllMatches)
+    foreach ($hit in $hits) {
+        [void]$parenthesizedStatementHits.Add(("{0}:{1}: {2}" -f $relativePath, $hit.LineNumber, $hit.Line.Trim()))
+    }
+}
+if ($parenthesizedStatementHits.Count -gt 0) {
+    throw "PowerShell source must not assign from parenthesized if/switch statements:`n$($parenthesizedStatementHits -join "`n")"
+}
+
 Write-Host "[check] load libraries"
 . (Join-Path $RootDir "lib\bootstrap.ps1")
 $null = Initialize-CcdiScript -ScriptName "check"
@@ -5519,7 +5538,6 @@ $acceptanceCredentialText = Get-Content -LiteralPath $acceptancePaths.Credential
 $acceptanceFunctionalText = Get-Content -LiteralPath $acceptancePaths.Functional -Raw -Encoding UTF8
 $acceptanceAllText = @($acceptanceRunnerText, $acceptanceOrchestratorText, $acceptanceEnvironmentText, $acceptanceDriverText, $acceptanceCredentialText, $acceptanceFunctionalText) -join "`n"
 
-$parenthesizedStatementAssignmentPattern = '=\s*\(\s*(?:' + 'if|switch' + ')\b'
 $responderCountParenthesizedIfPattern = '\$responderCounts\[[^\]]+\]\s*=\s*\(\s*' + 'if\b'
 if ($acceptanceRunnerText -match $parenthesizedStatementAssignmentPattern) {
     throw "interactive-user-acceptance.ps1 must not assign from parenthesized if/switch statements; use plain if/else before assignment"
