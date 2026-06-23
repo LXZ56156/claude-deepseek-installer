@@ -5493,6 +5493,16 @@ if ($acceptanceDriverText -notmatch 'ClosePseudoConsoleHandles\(\)' -or
     $acceptanceRunnerText -notmatch 'OutputCompleted') {
     throw "ConPTY final output scan must close the pseudo console and wait for the reader before accepting final output"
 }
+if ($acceptanceRunnerText -notmatch 'function Get-ScenarioFailurePatterns' -or
+    $acceptanceRunnerText -notmatch 'Scenario\.failureText' -or
+    $acceptanceRunnerText -notmatch 'step\.failureText' -or
+    $acceptanceRunnerText -notmatch 'Get-ScenarioFailurePatterns -Scenario \$Scenario' -or
+    $acceptanceRunnerText -notmatch 'Failure text detected after final interaction' -or
+    $acceptanceRunnerText -notmatch 'driver-step-final-failure-self-test' -or
+    $acceptanceRunnerText -notmatch 'driver-scenario-final-failure-self-test' -or
+    $acceptanceRunnerText -notmatch 'driver-final-clean-self-test') {
+    throw "ConPTY final output scan must include global, scenario, and step failureText with behavior self-tests"
+}
 if ($acceptanceDriverText -notmatch 'new UTF8Encoding\(false,\s*false\)' -or
     $acceptanceDriverText -notmatch '\.GetDecoder\(\)' -or
     $acceptanceDriverText -notmatch 'GetMaxCharCount' -or
@@ -5559,6 +5569,8 @@ if ($acceptanceEnvironmentText -notmatch 'Assert-AcceptanceResumeState' -or
 if ($acceptanceOrchestratorText -notmatch 'Complete-VmAcceptanceLifecycle' -or
     $acceptanceOrchestratorText -notmatch 'Write-VmSummaryArtifactsTransactional' -or
     $acceptanceOrchestratorText -notmatch 'final resume cleanup failed' -or
+    $acceptanceOrchestratorText -notmatch '\$evidenceWritten' -or
+    $acceptanceFunctionalText -notmatch 'final evidence failure preserves resume state by skipping cleanup' -or
     $acceptanceFunctionalText -notmatch 'PASS summary write failure retries only as FAIL') {
     throw "Final acceptance PASS must remain gated by evidence, strict resume cleanup, transactional summaries, and failure injection"
 }
@@ -5568,6 +5580,7 @@ if ($validateAcceptanceText -notmatch 'scripts/test-vm-acceptance\.ps1 \(functio
     throw "Full validation must execute acceptance functional tests and Release must not assume a failed simulation passed"
 }
 $buildAcceptanceText = Get-Content -LiteralPath (Join-Path $RootDir 'scripts\build-release.ps1') -Raw -Encoding UTF8
+$releaseSafetyText = Get-Content -LiteralPath (Join-Path $RootDir 'scripts\lib\ReleaseSafety.ps1') -Raw -Encoding UTF8
 if ($buildAcceptanceText -notmatch 'Expected exactly 36 files' -or
     $buildAcceptanceText -notmatch 'Expected exactly 8 prompt files' -or
     $buildAcceptanceText -notmatch 'Compare-Object -ReferenceObject \$expectedEntries') {
@@ -5575,6 +5588,33 @@ if ($buildAcceptanceText -notmatch 'Expected exactly 36 files' -or
 }
 if ($buildAcceptanceText -match 'Remove-Item\s+-Path\s+\$OutputDir\s+-Recurse') {
     throw "Release build must never recursively delete the caller-provided OutputDir"
+}
+if ($buildAcceptanceText -match '\$hit\.Match' -or
+    $buildAcceptanceText -notmatch 'ReleaseSafety\.ps1' -or
+    $buildAcceptanceText -notmatch '脱敏片段: \$\(\$hit\.Redacted\)' -or
+    $buildAcceptanceText -notmatch '行号: \$\(\$hit\.Line\)' -or
+    $buildAcceptanceText -notmatch '命中类型: \$\(\$hit\.Type\)' -or
+    $releaseSafetyText -notmatch 'function Redact-SensitiveMatch' -or
+    $releaseSafetyText -notmatch '<redacted-api-key: suffix=' -or
+    $releaseSafetyText -match 'settings\.json.*RawMatch' -or
+    $acceptanceFunctionalText -notmatch 'API key scan reports file line type and redacted suffix without leaking the full key') {
+    throw "Release API Key scanning must report file/line/type with redacted snippets and must not print raw matches"
+}
+foreach ($arrayGuard in @(
+    '\$totalFiles\s*=\s*@\(Get-ChildItem',
+    '\$psFiles\s*=\s*@\(Get-ChildItem[\s\S]{0,120}-Filter "\*\.ps1"',
+    '\$psFiles\s*\+=\s*@\(Get-ChildItem[\s\S]{0,120}-Filter "\*\.psm1"',
+    '\$cmdFiles\s*=\s*@\(Get-ChildItem[\s\S]{0,120}-Filter "\*\.cmd"',
+    '\$nonAscii\s*=\s*@\(',
+    '\$shFiles\s*=\s*@\(Get-ChildItem[\s\S]{0,120}-Filter "\*\.sh"',
+    '\$psFilesNoBom\s*=\s*@\(',
+    '\$releaseDocFiles\s*=\s*@\(Get-ChildItem',
+    '\$scanFiles\s*\+=\s*@\(Get-ChildItem',
+    '\$scanFiles\s*=\s*@\(\$scanFiles \| Sort-Object FullName -Unique\)'
+)) {
+    if ($buildAcceptanceText -notmatch $arrayGuard) {
+        throw "Release build file enumerations used with .Count must be wrapped in @(...): $arrayGuard"
+    }
 }
 foreach ($term in @('.codex', 'settings.json', 'UserPath', 'MachinePath', 'NpmGlobal', 'Winget', 'Registry', 'ScheduledTasks', 'Services', 'FullSHA', 'Invoke-AcceptanceCapturedCommand', 'TimedOut')) {
     if ($acceptanceEnvironmentText -notmatch [regex]::Escape($term)) { throw "Acceptance baseline or bounded probe missing: $term" }

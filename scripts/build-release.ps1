@@ -26,6 +26,7 @@ $ProjectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Pa
 if (-not $ProjectRoot) {
     $ProjectRoot = Get-Location
 }
+. (Join-Path $PSScriptRoot "lib\ReleaseSafety.ps1")
 
 # 确定输出目录
 if (-not $OutputDir) {
@@ -223,57 +224,14 @@ $safePlaceholders = @(
 
 $dangerPatterns = @(
     'sk-[A-Za-z0-9]{20,}',
-    'ANTHROPIC_AUTH_TOKEN.*sk-',
-    'DEEPSEEK_API_KEY.*sk-',
-    'CCDI_API_KEY.*sk-'
+    'ANTHROPIC_AUTH_TOKEN.*sk-[A-Za-z0-9]{20,}',
+    'DEEPSEEK_API_KEY.*sk-[A-Za-z0-9]{20,}',
+    'CCDI_API_KEY.*sk-[A-Za-z0-9]{20,}'
 )
 
 $textExtensions = @("*.ps1", "*.psm1", "*.sh", "*.json", "*.md", "*.txt", "*.cmd", "*.bat",
                     "*.js", "*.ts", "*.py", "*.html", "*.css", "*.yaml", "*.yml",
                     "*.xml", "*.ini", "*.cfg", "*.conf", "*.env", "*.example")
-
-function Test-IsSafePlaceholderKey {
-    param([string]$KeyPart)
-
-    foreach ($safe in $safePlaceholders) {
-        if ($KeyPart -ceq $safe) {
-            return $true
-        }
-    }
-
-    return $false
-}
-
-function Add-ApiKeyHitsFromContent {
-    param(
-        [string]$Content,
-        [string]$DisplayPath,
-        [System.Collections.Generic.List[object]]$Hits
-    )
-
-    if (-not $Content) { return }
-
-    foreach ($pattern in $dangerPatterns) {
-        $matches = [regex]::Matches($Content, $pattern)
-        foreach ($m in $matches) {
-            $candidate = $m.Value.Trim()
-            $keyMatches = [regex]::Matches($candidate, 'sk-[A-Za-z0-9]{20,}')
-
-            foreach ($keyMatch in $keyMatches) {
-                $keyPart = $keyMatch.Value
-                if (Test-IsSafePlaceholderKey -KeyPart $keyPart) {
-                    continue
-                }
-
-                [void]$Hits.Add([PSCustomObject]@{
-                    File    = $DisplayPath
-                    Pattern = $pattern
-                    Match   = ($candidate.Substring(0, [Math]::Min(60, $candidate.Length)) + "...")
-                })
-            }
-        }
-    }
-}
 
 Write-Host ""
 Write-Host "[3.4/5] 源目录 API Key 预扫描..." -ForegroundColor Cyan
@@ -287,7 +245,7 @@ function Test-SourceFileForApiKey {
 
     try {
         $content = Get-Content -LiteralPath $FilePath -Raw -Encoding UTF8 -ErrorAction Stop
-        Add-ApiKeyHitsFromContent -Content $content -DisplayPath $DisplayPath -Hits $sourceApiHits
+        Add-ApiKeyHitsFromContent -Content $content -DisplayPath $DisplayPath -Hits $sourceApiHits -DangerPatterns $dangerPatterns -SafePlaceholders $safePlaceholders
     }
     catch { throw "Source API Key scan failed for '$DisplayPath': $($_.Exception.Message)" }
 }
@@ -320,8 +278,9 @@ if ($sourceApiHits.Count -gt 0) {
     Write-Host ""
     foreach ($hit in $sourceApiHits) {
         Write-Host "  [$($hit.File)]" -ForegroundColor Red
-        Write-Host "    匹配模式: $($hit.Pattern)" -ForegroundColor DarkYellow
-        Write-Host "    内容片段: $($hit.Match)" -ForegroundColor DarkYellow
+        Write-Host "    行号: $($hit.Line)" -ForegroundColor DarkYellow
+        Write-Host "    命中类型: $($hit.Type)" -ForegroundColor DarkYellow
+        Write-Host "    脱敏片段: $($hit.Redacted)" -ForegroundColor DarkYellow
     }
     Write-Host ""
     Write-Host "请确认以上文件中的 sk-... 是否为真实 API Key。" -ForegroundColor Yellow
@@ -355,7 +314,7 @@ foreach ($entry in $AllowedEntries) {
 }
 
 # 输出打包摘要
-$totalFiles = (Get-ChildItem -Path $stagingDir -Recurse -File -ErrorAction SilentlyContinue).Count
+$totalFiles = @(Get-ChildItem -Path $stagingDir -Recurse -File -ErrorAction SilentlyContinue).Count
 Write-Host ""
 Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
 
@@ -370,8 +329,8 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
     # .ps1/.psm1: 确保有 UTF-8 BOM（PowerShell 5.1 需要 BOM 才能正确解析中文）
-    $psFiles = Get-ChildItem -Path $stagingDir -Filter "*.ps1" -Recurse -ErrorAction SilentlyContinue
-    $psFiles += Get-ChildItem -Path $stagingDir -Filter "*.psm1" -Recurse -ErrorAction SilentlyContinue
+    $psFiles = @(Get-ChildItem -Path $stagingDir -Filter "*.ps1" -Recurse -ErrorAction SilentlyContinue)
+    $psFiles += @(Get-ChildItem -Path $stagingDir -Filter "*.psm1" -Recurse -ErrorAction SilentlyContinue)
 
     foreach ($f in $psFiles) {
         $raw = [System.IO.File]::ReadAllBytes($f.FullName)
@@ -383,11 +342,11 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
     }
 
     # .cmd: 验证无 BOM + 纯 ASCII
-    $cmdFiles = Get-ChildItem -Path $stagingDir -Filter "*.cmd" -Recurse -ErrorAction SilentlyContinue
+    $cmdFiles = @(Get-ChildItem -Path $stagingDir -Filter "*.cmd" -Recurse -ErrorAction SilentlyContinue)
     foreach ($f in $cmdFiles) {
         $raw = [System.IO.File]::ReadAllBytes($f.FullName)
         $hasBom = ($raw.Length -ge 3 -and $raw[0] -eq 0xEF -and $raw[1] -eq 0xBB -and $raw[2] -eq 0xBF)
-        $nonAscii = $raw | Where-Object { $_ -gt 0x7F }
+        $nonAscii = @($raw | Where-Object { $_ -gt 0x7F })
         if ($hasBom) {
             Write-Host "  错误: $($f.Name) 包含 UTF-8 BOM" -ForegroundColor Red
             Remove-Item $ZipFilePath -Force -ErrorAction SilentlyContinue
@@ -406,7 +365,7 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
 
     # .sh: 统一规范为 LF（UTF-8 without BOM）
     # Windows 构建环境可能引入 CRLF，导致 WSL 用户解压后 bash -n 报错
-    $shFiles = Get-ChildItem -Path $stagingDir -Filter "*.sh" -Recurse -ErrorAction SilentlyContinue
+    $shFiles = @(Get-ChildItem -Path $stagingDir -Filter "*.sh" -Recurse -ErrorAction SilentlyContinue)
     $utf8NoBomEncoding = New-Object System.Text.UTF8Encoding($false)
 
     foreach ($f in $shFiles) {
@@ -424,10 +383,10 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
     }
 
     # .ps1/.psm1 构建时校验：必须都有 BOM
-    $psFilesNoBom = $psFiles | Where-Object {
+    $psFilesNoBom = @($psFiles | Where-Object {
         $raw = [System.IO.File]::ReadAllBytes($_.FullName)
         -not ($raw.Length -ge 3 -and $raw[0] -eq 0xEF -and $raw[1] -eq 0xBB -and $raw[2] -eq 0xBF)
-    }
+    })
     if ($psFilesNoBom) {
         Write-Host "  错误: 以下 .ps1/.psm1 文件缺少 UTF-8 BOM：" -ForegroundColor Red
         foreach ($f in $psFilesNoBom) { Write-Host "    - $($f.Name)" -ForegroundColor Red }
@@ -451,8 +410,8 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
 
     $badReleaseDocPattern = '\p{So}|[\u2500-\u257F]|\uFE0F'
     $releaseDocHits = New-Object System.Collections.ArrayList
-    $releaseDocFiles = Get-ChildItem -Path $stagingDir -File -Recurse -ErrorAction SilentlyContinue |
-        Where-Object { $_.Extension -in @(".md", ".txt") }
+    $releaseDocFiles = @(Get-ChildItem -Path $stagingDir -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in @(".md", ".txt") })
 
     foreach ($docFile in $releaseDocFiles) {
         $content = [System.IO.File]::ReadAllText($docFile.FullName)
@@ -542,7 +501,7 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
 
         try {
             $content = Get-Content -LiteralPath $FilePath -Raw -Encoding UTF8 -ErrorAction Stop
-            Add-ApiKeyHitsFromContent -Content $content -DisplayPath $DisplayPath -Hits $apiKeyHits
+            Add-ApiKeyHitsFromContent -Content $content -DisplayPath $DisplayPath -Hits $apiKeyHits -DangerPatterns $dangerPatterns -SafePlaceholders $safePlaceholders
         }
         catch {
             throw "Staging API Key scan failed for '$DisplayPath': $($_.Exception.Message)"
@@ -552,14 +511,14 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
     # 扫描 staging 目录中的所有文本文件
     $scanFiles = @()
     foreach ($ext in $textExtensions) {
-        $scanFiles += Get-ChildItem -Path $stagingDir -Filter $ext -Recurse -ErrorAction SilentlyContinue
+        $scanFiles += @(Get-ChildItem -Path $stagingDir -Filter $ext -Recurse -ErrorAction SilentlyContinue)
     }
 
     # 也扫描无扩展名的文件（如 LICENSE）
-    $scanFiles += Get-ChildItem -Path $stagingDir -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Extension -eq "" }
+    $scanFiles += @(Get-ChildItem -Path $stagingDir -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -eq "" })
 
-    $scanFiles = $scanFiles | Sort-Object FullName -Unique
+    $scanFiles = @($scanFiles | Sort-Object FullName -Unique)
 
     foreach ($file in $scanFiles) {
         $relPath = $file.FullName.Substring($stagingDir.Length + 1)
@@ -572,8 +531,9 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
         Write-Host ""
         foreach ($hit in $apiKeyHits) {
             Write-Host "  [$($hit.File)]" -ForegroundColor Red
-            Write-Host "    匹配模式: $($hit.Pattern)" -ForegroundColor DarkYellow
-            Write-Host "    内容片段: $($hit.Match)" -ForegroundColor DarkYellow
+            Write-Host "    行号: $($hit.Line)" -ForegroundColor DarkYellow
+            Write-Host "    命中类型: $($hit.Type)" -ForegroundColor DarkYellow
+            Write-Host "    脱敏片段: $($hit.Redacted)" -ForegroundColor DarkYellow
         }
         Write-Host ""
         Write-Host "请确认以上文件中的 sk-... 是否为真实 API Key。" -ForegroundColor Yellow

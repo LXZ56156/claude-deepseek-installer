@@ -28,7 +28,7 @@
 
 ## 状态（截至 2026-06-23）
 
-- TestSafe 功能测试（`scripts/test-vm-acceptance.ps1`）：**112/112 通过**，在 host 实跑。沙盒化后不修改真实 User/Machine/Process PATH、真实 USERPROFILE、真实 settings.json；包含 `.claude` 精确跟踪、resume pending cleanup、checkpoint 删除、下一场景执行、SchemaVersion 3 完整结构校验、场景前缀顺序校验、任务注册/删除/报告失败、最终 lifecycle 失败路径、bounded command timeout evidence 和锁释放测试。
+- TestSafe 功能测试（`scripts/test-vm-acceptance.ps1`）：**113/113 通过**，在 host 实跑。沙盒化后不修改真实 User/Machine/Process PATH、真实 USERPROFILE、真实 settings.json；包含 `.claude` 精确跟踪、resume pending cleanup、checkpoint 删除、下一场景执行、SchemaVersion 3 完整结构校验、场景前缀顺序校验、任务注册/删除/报告失败、API Key 扫描脱敏、最终 lifecycle 失败路径、bounded command timeout evidence 和锁释放测试。
 - 完整 TestSafe 交互验收（16 个场景 + ConPTY driver self-tests）：**通过**，使用隔离 release ZIP（36 entries、8 prompt templates）和带空格的 runroot。
 - TestSafe `restore-config-backup` 场景：**通过**（host 实跑 6.87s），真实 settings.json 前后 SHA256 一致。
 - `check.ps1`：功能测试门控于 `-AcceptanceFunctional`；默认 Smoke 做静态检查（ConPTY 驱动编译、UTF-8/stateful decoder、场景定义校验、synthetic 快照字段 + release allow-list/functional-gate 源码防回归），无真实环境副作用。
@@ -80,3 +80,21 @@
 | ACC-025..027 | `build-release.ps1` / `simulate-user-release.ps1` / `sandbox-full-user-simulation.ps1` / `windows-scenario-matrix.ps1` | not in functional test; covered by release probes | exact 36 ZIP entries, 8 prompts, isolated output, direct process invocation gates | 否 |
 | ACC-028 | `Get-AcceptanceFileState` / `Reset-AcceptanceEnvironment` | `.claude` state cleanup and residual process identity tests | functional gate | 否 |
 | ACC-029 | `Invoke-AcceptanceCapturedCommand` / `Get-AcceptanceWingetPackages` | captured command timeout preserves stdout/stderr evidence | stdout/stderr timeout wait + winget 180s source gate | 否 |
+
+## 2026-06-23 Remote review closure fixes
+
+| ID | Problem | Root cause | Fix | Regression |
+|---|---|---|---|---|
+| ACC-030 | Release API Key scan could print the full matched key in failure diagnostics | Scan hits stored a raw match snippet and the failure path printed it directly | Added `ReleaseSafety.ps1` with `Redact-SensitiveMatch`; build output now reports file, line, type, and redacted suffix only | API key scan functional assertion + source gate forbidding `$hit.Match` output |
+| ACC-031 | ConPTY final output scan could miss scenario-level or step-level failureText after the final prompt | Waiting loop checked step failureText separately, while final scan only used global failure patterns | Added `Get-ScenarioFailurePatterns`; waiting and final scans now share global + scenario + step failureText with de-duplication | Step final failure, scenario final failure, and clean final output ConPTY self-tests |
+| ACC-032 | Final evidence write failure could still delete resume state before a FAIL summary | `Complete-VmAcceptanceLifecycle` attempted final resume cleanup even after evidence writing threw | Gate final cleanup on successful evidence write; evidence failure writes FAIL summary and preserves resume artifacts | Functional lifecycle test asserts cleanup is not called after evidence failure |
+| ACC-033 | Release simulation failed under StrictMode when staging had exactly one `.sh` file | Several build-release file enumerations could become scalars, then `.Count` was unavailable in StrictMode | Wrapped file enumerations and filtered byte collections in `@(...)` before `.Count` use | `simulate-user-release.ps1` + check.ps1 file-enumeration source gate |
+
+## 2026-06-23 Remote review coverage index
+
+| ID | 修复函数/脚本 | test-vm-acceptance.ps1 断言 | check.ps1 防回归 | 需专用 VM Live |
+|---|---|---|---|---|
+| ACC-030 | `ReleaseSafety.ps1` / `build-release.ps1` | API key scan reports file line type and redacted suffix without leaking the full key | `build-release.ps1` 不得输出 `$hit.Match`，必须输出 Line/Type/Redacted 并使用 `Redact-SensitiveMatch` | 否 |
+| ACC-031 | `Get-ScenarioFailurePatterns` / `Invoke-ConPtyScenario` | ConPTY driver self-test covers step final failure, scenario final failure, and clean final output | final output scan 必须纳入 global + scenario + step failureText | 否 |
+| ACC-032 | `Complete-VmAcceptanceLifecycle` | final evidence failure preserves resume state by skipping cleanup and writes FAIL summary | lifecycle source gate requires `$evidenceWritten` and evidence-failure functional assertion | 否 |
+| ACC-033 | `build-release.ps1` | release simulation exercises a single `.sh` in staging | source gate requires array-wrapped file enumerations before `.Count` | 否 |

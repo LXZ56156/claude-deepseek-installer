@@ -109,6 +109,57 @@ function ConvertTo-IncrementalVisibleTerminalText {
     }
 }
 
+function ConvertTo-SafeFailurePattern {
+    param([AllowNull()][string]$Text)
+
+    if ([string]::IsNullOrEmpty($Text)) { return "" }
+    $safe = [string]$Text
+    $matches = @([regex]::Matches($safe, 'sk-[A-Za-z0-9]{20,}')) | Sort-Object Index -Descending
+    foreach ($match in $matches) {
+        $key = [string]$match.Value
+        $suffix = if ($key.Length -ge 4) { $key.Substring($key.Length - 4) } else { '' }
+        $replacement = if ($suffix) { "<redacted-api-key: suffix=$suffix>" } else { '<redacted-api-key>' }
+        $safe = $safe.Remove($match.Index, $match.Length).Insert($match.Index, $replacement)
+    }
+    return $safe
+}
+
+function Add-ScenarioFailurePattern {
+    param(
+        [System.Collections.ArrayList]$Patterns,
+        [AllowNull()][string]$Pattern
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Pattern)) { return }
+    $value = [string]$Pattern
+    if (-not ($Patterns -ccontains $value)) { [void]$Patterns.Add($value) }
+}
+
+function Get-ScenarioFailurePatterns {
+    param(
+        $Scenario,
+        [string[]]$GlobalFailurePatterns
+    )
+
+    $patterns = New-Object System.Collections.ArrayList
+    foreach ($pattern in @($GlobalFailurePatterns)) {
+        Add-ScenarioFailurePattern -Patterns $patterns -Pattern $pattern
+    }
+    if ($Scenario.PSObject.Properties.Name -contains "failureText") {
+        foreach ($pattern in @($Scenario.failureText)) {
+            Add-ScenarioFailurePattern -Patterns $patterns -Pattern ([string]$pattern)
+        }
+    }
+    foreach ($step in @($Scenario.steps)) {
+        if ($step.PSObject.Properties.Name -contains "failureText") {
+            foreach ($pattern in @($step.failureText)) {
+                Add-ScenarioFailurePattern -Patterns $patterns -Pattern ([string]$pattern)
+            }
+        }
+    }
+    return @($patterns)
+}
+
 function Get-SettingsSnapshot {
     $path = Join-Path $env:USERPROFILE ".claude\settings.json"
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -278,7 +329,7 @@ function Invoke-ConPtyScenario {
     $scanOffset = 0
     $maxScanBuffer = 65536
     $responderCounts = @{}
-    $failurePatterns = @('脚本执行过程中发生未预期的错误', 'TIMEOUT:')
+    $failurePatterns = Get-ScenarioFailurePatterns -Scenario $Scenario -GlobalFailurePatterns @('脚本执行过程中发生未预期的错误', 'TIMEOUT:')
 
     try {
         # The process working directory is already the package root. Using the relative
@@ -312,11 +363,8 @@ function Invoke-ConPtyScenario {
                 $segment = $scanBuffer.Substring($scanOffset)
 
                 foreach ($failurePattern in $failurePatterns) {
-                    if ($segment -match $failurePattern) { throw "Failure text detected: $failurePattern" }
-                }
-                if ($step.PSObject.Properties.Name -contains "failureText") {
-                    foreach ($failurePattern in @($step.failureText)) {
-                        if ($segment -match [string]$failurePattern) { throw "State $stateId failure text detected: $failurePattern" }
+                    if ($segment -match $failurePattern) {
+                        throw "Failure text detected: $(ConvertTo-SafeFailurePattern -Text $failurePattern)"
                     }
                 }
 
@@ -380,7 +428,9 @@ function Invoke-ConPtyScenario {
 
         $visibleOutput = ConvertTo-VisibleTerminalText -Text $process.GetOutput()
         foreach ($failurePattern in $failurePatterns) {
-            if ($visibleOutput -match $failurePattern) { throw "Failure text detected after final interaction: $failurePattern" }
+            if ($visibleOutput -match $failurePattern) {
+                throw "Failure text detected after final interaction: $(ConvertTo-SafeFailurePattern -Text $failurePattern)"
+            }
         }
         foreach ($required in @($Scenario.required)) {
             if ($visibleOutput -notmatch [regex]::Escape([string]$required)) { throw "Required output missing: $required" }
@@ -532,6 +582,65 @@ Write-Host '脚本执行过程中发生未预期的错误'
     $finalFailureResult = Invoke-ConPtyScenario -Scenario $finalFailureScenario -ReleaseRoot $finalFailureDir -Secret $DummyApiKey -Environment @{} -ScenarioEvidenceDir (Join-Path $EvidenceDir "driver-final-failure-self-test")
     if ($finalFailureResult.Status -ne "FAIL" -or $finalFailureResult.Error -notmatch 'Failure text detected after final interaction') {
         throw "Fatal output emitted after the final prompt must fail the scenario"
+    }
+
+    $stepFinalFailureDir = Join-Path $selfTestDir "step-final-failure"
+    New-Item -ItemType Directory -Path $stepFinalFailureDir -Force | Out-Null
+    @'
+Write-Host 'BEFORE_STEP_FINAL_FAILURE'
+Write-Host 'Press any key to close this window...'
+cmd.exe /d /c pause `>nul
+Write-Host 'STEP_FINAL_FAILURE_UNIQUE'
+'@ | Set-Content -LiteralPath (Join-Path $stepFinalFailureDir "step-final-failure.ps1") -Encoding UTF8
+    "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0step-final-failure.ps1`"`r`n" | Set-Content -LiteralPath (Join-Path $stepFinalFailureDir "step-final-failure.cmd") -Encoding ASCII
+    $stepFinalFailureScenario = [PSCustomObject]@{
+        id = "driver-step-final-failure-self-test"; entry = "step-final-failure.cmd"; timeoutSec = 15; responders = @()
+        steps = @([PSCustomObject]@{ expect = "Press any key to close this window"; send = " `r"; delayMs = 100; timeoutSec = 5; failureText = @("STEP_FINAL_FAILURE_UNIQUE") })
+        required = @("BEFORE_STEP_FINAL_FAILURE"); forbidden = @($DummyApiKey); expectedExitCodes = @(0)
+    }
+    $stepFinalFailureResult = Invoke-ConPtyScenario -Scenario $stepFinalFailureScenario -ReleaseRoot $stepFinalFailureDir -Secret $DummyApiKey -Environment @{} -ScenarioEvidenceDir (Join-Path $EvidenceDir "driver-step-final-failure-self-test")
+    if ($stepFinalFailureResult.Status -ne "FAIL" -or $stepFinalFailureResult.Error -notmatch 'STEP_FINAL_FAILURE_UNIQUE') {
+        throw "Step failureText emitted after the final prompt must fail the scenario"
+    }
+
+    $scenarioFinalFailureDir = Join-Path $selfTestDir "scenario-final-failure"
+    New-Item -ItemType Directory -Path $scenarioFinalFailureDir -Force | Out-Null
+    @'
+Write-Host 'BEFORE_SCENARIO_FINAL_FAILURE'
+Write-Host 'Press any key to close this window...'
+cmd.exe /d /c pause `>nul
+Write-Host 'SCENARIO_FINAL_FAILURE_UNIQUE'
+'@ | Set-Content -LiteralPath (Join-Path $scenarioFinalFailureDir "scenario-final-failure.ps1") -Encoding UTF8
+    "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0scenario-final-failure.ps1`"`r`n" | Set-Content -LiteralPath (Join-Path $scenarioFinalFailureDir "scenario-final-failure.cmd") -Encoding ASCII
+    $scenarioFinalFailureScenario = [PSCustomObject]@{
+        id = "driver-scenario-final-failure-self-test"; entry = "scenario-final-failure.cmd"; timeoutSec = 15; responders = @()
+        failureText = @("SCENARIO_FINAL_FAILURE_UNIQUE")
+        steps = @([PSCustomObject]@{ expect = "Press any key to close this window"; send = " `r"; delayMs = 100; timeoutSec = 5 })
+        required = @("BEFORE_SCENARIO_FINAL_FAILURE"); forbidden = @($DummyApiKey); expectedExitCodes = @(0)
+    }
+    $scenarioFinalFailureResult = Invoke-ConPtyScenario -Scenario $scenarioFinalFailureScenario -ReleaseRoot $scenarioFinalFailureDir -Secret $DummyApiKey -Environment @{} -ScenarioEvidenceDir (Join-Path $EvidenceDir "driver-scenario-final-failure-self-test")
+    if ($scenarioFinalFailureResult.Status -ne "FAIL" -or $scenarioFinalFailureResult.Error -notmatch 'SCENARIO_FINAL_FAILURE_UNIQUE') {
+        throw "Scenario failureText emitted after the final prompt must fail the scenario"
+    }
+
+    $finalCleanDir = Join-Path $selfTestDir "final-clean"
+    New-Item -ItemType Directory -Path $finalCleanDir -Force | Out-Null
+    @'
+Write-Host 'BEFORE_FINAL_CLEAN'
+Write-Host 'Press any key to close this window...'
+cmd.exe /d /c pause `>nul
+Write-Host 'AFTER_FINAL_CLEAN'
+'@ | Set-Content -LiteralPath (Join-Path $finalCleanDir "final-clean.ps1") -Encoding UTF8
+    "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0final-clean.ps1`"`r`n" | Set-Content -LiteralPath (Join-Path $finalCleanDir "final-clean.cmd") -Encoding ASCII
+    $finalCleanScenario = [PSCustomObject]@{
+        id = "driver-final-clean-self-test"; entry = "final-clean.cmd"; timeoutSec = 15; responders = @()
+        failureText = @("SCENARIO_FINAL_FAILURE_UNIQUE")
+        steps = @([PSCustomObject]@{ expect = "Press any key to close this window"; send = " `r"; delayMs = 100; timeoutSec = 5; failureText = @("STEP_FINAL_FAILURE_UNIQUE") })
+        required = @("BEFORE_FINAL_CLEAN", "AFTER_FINAL_CLEAN"); forbidden = @($DummyApiKey); expectedExitCodes = @(0)
+    }
+    $finalCleanResult = Invoke-ConPtyScenario -Scenario $finalCleanScenario -ReleaseRoot $finalCleanDir -Secret $DummyApiKey -Environment @{} -ScenarioEvidenceDir (Join-Path $EvidenceDir "driver-final-clean-self-test")
+    if ($finalCleanResult.Status -ne "PASS") {
+        throw "Clean final output without failureText must pass: $($finalCleanResult.Error)"
     }
 
     $largeOutputDir = Join-Path $selfTestDir "large-output"

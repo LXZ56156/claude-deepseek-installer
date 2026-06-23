@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $module = Join-Path $PSScriptRoot 'lib\AcceptanceEnvironment.ps1'
 . $module
+. (Join-Path $PSScriptRoot 'lib\ReleaseSafety.ps1')
 
 $oldImport = $env:CCDI_ACCEPTANCE_IMPORT_ONLY
 $env:CCDI_ACCEPTANCE_IMPORT_ONLY = '1'
@@ -517,6 +518,14 @@ try {
     $cleanupReportFailure = Invoke-TestRemovalFault -Name 'report-failure' -Fault Report
     Assert-Test ($cleanupReportFailure.Error -match 'cleanup report write failed' -and (Test-Path -LiteralPath $cleanupReportFailure.Paths.ResumeState) -and $cleanupReportFailure.Tasks.Count -eq 0 -and -not (Test-Path -LiteralPath $cleanupReportFailure.Paths.ResumeBootstrap)) 'cleanup report write failure restores state and cannot report success'
 
+    # Release sensitive scanning must preserve diagnostics without emitting raw API keys.
+    $fakeKey = 'sk-ProdLeakForTest' + ('0' * 12) + 'abcd'
+    $scanContent = "first line`nDEEPSEEK_API_KEY=$fakeKey`n"
+    $apiHits = [System.Collections.Generic.List[object]]::new()
+    Add-ApiKeyHitsFromContent -Content $scanContent -DisplayPath 'fixtures\leak.env' -Hits $apiHits -DangerPatterns @('sk-[A-Za-z0-9]{20,}', 'DEEPSEEK_API_KEY.*sk-[A-Za-z0-9]{20,}') -SafePlaceholders @('sk-xxxx')
+    $renderedHits = @($apiHits | ForEach-Object { "file=$($_.File); line=$($_.Line); type=$($_.Type); redacted=$($_.Redacted)" }) -join "`n"
+    Assert-Test ($apiHits.Count -gt 0 -and $renderedHits -notmatch [regex]::Escape($fakeKey) -and $renderedHits -match '<redacted-api-key: suffix=abcd>' -and $renderedHits -match 'file=fixtures\\leak\.env' -and $renderedHits -match 'line=2' -and $renderedHits -match 'type=DEEPSEEK_API_KEY') 'API key scan reports file line type and redacted suffix without leaking the full key'
+
     # Final PASS is published only after evidence and resume cleanup complete. Summary failures are retried as FAIL.
     $lifecycleEvents = New-Object Collections.ArrayList
     $summaryFactory = {
@@ -539,7 +548,7 @@ try {
     $evidenceLifecycle = Complete-VmAcceptanceLifecycle -PriorError $null `
         -EvidenceWriter { throw 'INJECTED final evidence failure' } -FinalResumeCleanup { $script:evidenceCleanupCalls++ } `
         -SummaryFactory $summaryFactory -SummaryWriter { param($Summary) $script:capturedEvidenceSummary = $Summary }
-    Assert-Test ($evidenceLifecycle.Status -eq 'FAIL' -and $evidenceLifecycle.ExitCode -eq 1 -and $evidenceCleanupCalls -eq 1 -and $capturedEvidenceSummary.Status -eq 'FAIL' -and $capturedEvidenceSummary.Error -match 'final evidence write failed') 'final evidence failure still attempts cleanup and writes FAIL summary'
+    Assert-Test ($evidenceLifecycle.Status -eq 'FAIL' -and $evidenceLifecycle.ExitCode -eq 1 -and $evidenceCleanupCalls -eq 0 -and $capturedEvidenceSummary.Status -eq 'FAIL' -and $capturedEvidenceSummary.Error -match 'final evidence write failed') 'final evidence failure preserves resume state by skipping cleanup and writes FAIL summary'
 
     $priorErrorCleanupCalls = 0
     $priorErrorLifecycle = Complete-VmAcceptanceLifecycle -PriorError 'INJECTED prior run failure' `

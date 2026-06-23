@@ -258,10 +258,16 @@ function Complete-VmAcceptanceLifecycle {
     )
     $errors = New-Object Collections.ArrayList
     if ($PriorError) { [void]$errors.Add($PriorError) }
-    try { & $EvidenceWriter }
+    $evidenceWritten = $false
+    try {
+        & $EvidenceWriter
+        $evidenceWritten = $true
+    }
     catch { [void]$errors.Add("final evidence write failed: $($_.Exception.Message)") }
-    try { & $FinalResumeCleanup }
-    catch { [void]$errors.Add("final resume cleanup failed: $($_.Exception.Message)") }
+    if ($evidenceWritten) {
+        try { & $FinalResumeCleanup }
+        catch { [void]$errors.Add("final resume cleanup failed: $($_.Exception.Message)") }
+    }
     $status = if ($errors.Count -eq 0) { 'PASS' } else { 'FAIL' }
     $summary = $null
     $summaryWritten = $false
