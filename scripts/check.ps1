@@ -2263,6 +2263,7 @@ $origTestMode = $env:CCDI_TEST_MODE
 $origUserProfile = $env:CCDI_TEST_USERPROFILE
 $origTestDesktop = $env:CCDI_TEST_DESKTOP
 $origApiKey = $env:CCDI_API_KEY
+$origProcessPathForClaudeTest = $env:Path
 
 try {
     $env:CCDI_TEST_MODE = "1"
@@ -2292,6 +2293,16 @@ try {
         throw "Test-ClaudeCommandExisting missing Exists field"
     }
     Write-Host "[check]     Exists=$($t1.Exists), Usable=$($t1.Usable)"
+
+    $mockClaudeDirForT1 = Join-Path $sandboxDir "check-mock-claude"
+    New-Item -ItemType Directory -Path $mockClaudeDirForT1 -Force | Out-Null
+    "@echo off`r`necho claude-code 1.0.0`r`nexit /b 0" | Set-Content -LiteralPath (Join-Path $mockClaudeDirForT1 "claude.cmd") -Encoding ASCII
+    $env:Path = "$mockClaudeDirForT1;$origProcessPathForClaudeTest"
+    $t1Mock = Test-ClaudeCommandExisting
+    if (-not $t1Mock.Usable -or -not $t1Mock.Path -or -not ([string]$t1Mock.Path).StartsWith($mockClaudeDirForT1, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Test-ClaudeCommandExisting TestSafe must preserve detected mock claude Path; got Path=$($t1Mock.Path), Usable=$($t1Mock.Usable)"
+    }
+    Write-Host "[check]     TestSafe mock claude path preserved"
 
     # ----------------------------------------------------------
     # Test 2: Invoke-ClaudeDoctorSafe -TestSafe skips real call
@@ -2492,6 +2503,7 @@ try {
 finally {
     # 恢复环境变量
     $env:CCDI_TEST_MODE = $origTestMode
+    $env:Path = $origProcessPathForClaudeTest
     if ($origUserProfile) { $env:CCDI_TEST_USERPROFILE = $origUserProfile } else { Remove-Item Env:\CCDI_TEST_USERPROFILE -ErrorAction SilentlyContinue }
     if ($origTestDesktop) { $env:CCDI_TEST_DESKTOP = $origTestDesktop } else { Remove-Item Env:\CCDI_TEST_DESKTOP -ErrorAction SilentlyContinue }
     if ($origApiKey) { $env:CCDI_API_KEY = $origApiKey } else { Remove-Item Env:\CCDI_API_KEY -ErrorAction SilentlyContinue }
@@ -4912,6 +4924,19 @@ foreach ($s in $expectedScenarios) {
     }
 }
 Write-Host "[check]   1. simulate scenarios B/C/D/F/G present OK"
+
+foreach ($scenarioBMockTerm in @(
+    '$mockClaudeDir = Join-Path $tempRoot "mock-claude"',
+    'claude-code 1.0.0',
+    '$scenarioBEnv["PATH"]',
+    '$scenarioBEnv["SCENARIO_B_MOCK_CLAUDE_DIR"]',
+    'SCENARIO_B_MOCK_DETECTED=True'
+)) {
+    if ($simulateText -notmatch [regex]::Escape($scenarioBMockTerm)) {
+        throw "Scenario B release simulation must use an isolated mock Claude command: $scenarioBMockTerm"
+    }
+}
+Write-Host "[check]   1b. Scenario B isolated mock Claude command OK"
 
 # 2. Assert-TextOrder function exists
 if ($simulateText -notmatch 'function Assert-TextOrder') {

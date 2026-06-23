@@ -1423,27 +1423,61 @@ Write-Output "SANITIZE_LEN=$($sanitized.Length)"
     # --- Scenario B: npm mirror install + verification path (unit test) ---
     # Test the npm mirror install function and post-verification independently.
     # Full auto-install would detect existing Claude; this tests the fallback path directly.
+    $mockClaudeDir = Join-Path $tempRoot "mock-claude"
+    New-Item -ItemType Directory -Path $mockClaudeDir -Force | Out-Null
+    @'
+@echo off
+if /I "%~1"=="--version" (
+  echo claude-code 1.0.0
+  exit /b 0
+)
+echo claude-code 1.0.0
+exit /b 0
+'@.TrimStart() | Set-Content -LiteralPath (Join-Path $mockClaudeDir "claude.cmd") -Encoding ASCII
     $scenarioBEnv = New-SimEnvironment -ProfileDir $testProfile -DesktopDir $testDesktop -DummyKey $DummyApiKey -ApiStatus "200"
+    $scenarioBEnv["PATH"] = "$mockClaudeDir;$env:PATH"
+    $scenarioBEnv["SCENARIO_B_MOCK_CLAUDE_DIR"] = $mockClaudeDir
     $scenarioBScript = @'
-$scriptRoot = "{0}"
+$scriptRoot = "__RELEASE_ROOT__"
 . "$scriptRoot\lib\bootstrap.ps1"
 $null = Initialize-CcdiScript -ScriptName "sim-scenario-b"
+$mockClaudeDir = $env:SCENARIO_B_MOCK_CLAUDE_DIR
+if ([string]::IsNullOrWhiteSpace($mockClaudeDir) -or -not (Test-Path -LiteralPath (Join-Path $mockClaudeDir "claude.cmd"))) {
+    throw "Scenario B mock claude is missing: $mockClaudeDir"
+}
+$mockClaudeDir = [System.IO.Path]::GetFullPath($mockClaudeDir).TrimEnd('\')
+$env:Path = "$mockClaudeDir;$env:Path"
+function Refresh-CurrentProcessPath {
+    $mock = [System.IO.Path]::GetFullPath($env:SCENARIO_B_MOCK_CLAUDE_DIR).TrimEnd('\')
+    $entries = @($env:Path -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $hasMock = @($entries | Where-Object { $_.Trim().TrimEnd('\') -ieq $mock }).Count -gt 0
+    if (-not $hasMock) { $env:Path = "$mock;$env:Path" }
+}
 # 1. Verify npm mirror install function works in TestSafe
 $mirrorResult = Install-ClaudeCodeNpmMirror -TestSafe
 Write-Output "SCENARIO_B_MIRROR_SUCCESS=$($mirrorResult.Success)"
 Write-Output "SCENARIO_B_MIRROR_ERROR=$($mirrorResult.Error)"
+Write-Output "SCENARIO_B_MIRROR_STATUS=$($mirrorResult.Status)"
 Write-Output "SCENARIO_B_MIRROR_METHOD=$($mirrorResult.Method)"
-# 2. Verify Wait-ClaudeCommandReady detects existing Claude
+# 2. Verify Wait-ClaudeCommandReady detects the Scenario B mock Claude
 $ready = Wait-ClaudeCommandReady -TotalWaitSec 5 -IntervalSec 1 -Context "scenario B"
+$readyPath = if ($ready.Path) { [System.IO.Path]::GetFullPath([string]$ready.Path) } else { "" }
+$mockDetected = $ready.Ready -and $readyPath.StartsWith($mockClaudeDir, [System.StringComparison]::OrdinalIgnoreCase)
 Write-Output "SCENARIO_B_READY=$($ready.Ready)"
 Write-Output "SCENARIO_B_WCCR_STATUS=$($ready.Status)"
+Write-Output "SCENARIO_B_WCCR_PATH=$readyPath"
+Write-Output "SCENARIO_B_WCCR_VERSION=$($ready.Version)"
+Write-Output "SCENARIO_B_MOCK_DETECTED=$mockDetected"
+if ($ready.Ready -and -not $mockDetected) {
+    throw "Scenario B detected non-mock Claude: $readyPath"
+}
 # 3. Verify npm mirror output text does NOT contain premature diagnostic
-if ($ready.Ready) {{
+if ($ready.Ready) {
     Write-Output "SCENARIO_B_TEXT_ORDER=OK"
-}} else {{
+} else {
     Write-Output "SCENARIO_B_TEXT_ORDER=NA"
-}}
-'@ -f $releaseRoot
+}
+'@.Replace('__RELEASE_ROOT__', $releaseRoot)
     $scenarioBPath = Join-Path $tempRoot "test_scenario_b.ps1"
     Set-Content -Path $scenarioBPath -Value $scenarioBScript -Encoding UTF8
     $scenarioBRun = Invoke-SimCommand -Name "Scenario B: npm mirror install + verify" -FileName $powerShellExe -Arguments @(
@@ -1454,7 +1488,10 @@ if ($ready.Ready) {{
         throw "Scenario B: Install-ClaudeCodeNpmMirror did not return expected structure: $($scenarioBRun.Combined)"
     }
     if ($scenarioBRun.Combined -notmatch 'SCENARIO_B_READY=True') {
-        throw "Scenario B: Wait-ClaudeCommandReady should detect existing Claude: $($scenarioBRun.Combined)"
+        throw "Scenario B: Wait-ClaudeCommandReady should detect mock Claude: $($scenarioBRun.Combined)"
+    }
+    if ($scenarioBRun.Combined -notmatch 'SCENARIO_B_MOCK_DETECTED=True') {
+        throw "Scenario B: Wait-ClaudeCommandReady must use Scenario B mock Claude, not a host install: $($scenarioBRun.Combined)"
     }
     Write-Host "[simulate]   Scenario B (npm mirror install + WCCR verify): unit OK" -ForegroundColor Green
     Assert-TextOrder -Text $scenarioBRun.Combined -Scenario "B"

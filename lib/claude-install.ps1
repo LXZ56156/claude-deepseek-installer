@@ -51,7 +51,9 @@ function Test-ClaudeCommandExisting {
         # Non-mock TestSafe: use Get-Command only, skip --version
         $cmd = Get-Command "claude" -ErrorAction SilentlyContinue
         if ($cmd) {
-            return @{ Exists = $true; Usable = $true; Version = "test-safe"; Error = ""; Path = $null; Source = "" }
+            $cmdPath = if ($cmd.Source) { $cmd.Source } else { $cmd.Definition }
+            $cmdSource = if ($cmd.CommandType) { $cmd.CommandType.ToString() } else { "path" }
+            return @{ Exists = $true; Usable = $true; Version = "test-safe"; Error = ""; Path = $cmdPath; Source = $cmdSource }
         }
         return @{ Exists = $false; Usable = $false; Version = $null; Error = "test-safe: claude not found"; Path = $null; Source = "" }
     }
