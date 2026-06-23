@@ -443,7 +443,9 @@ function Get-VmScenarioOwnership {
     # TestSafe invokes the real buyer launchers; Claude itself may update this state file.
     if ($ScenarioMode -eq 'TestSafe') { [void]$pathRoots.Add((Join-Path $env:USERPROFILE '.claude.json')) }
     $ownershipSpec = if ($Scenario.PSObject.Properties.Name -contains 'ownership') { $Scenario.ownership } else { $null }
-    foreach ($kind in @($(if ($ownershipSpec) { $ownershipSpec.pathKinds } else { @() }))) {
+    $ownershipPropertyNames = if ($ownershipSpec) { @($ownershipSpec.PSObject.Properties.Name) } else { @() }
+    $ownershipPathKinds = if ($ownershipPropertyNames -contains 'pathKinds') { @($ownershipSpec.PSObject.Properties['pathKinds'].Value) } else { @() }
+    foreach ($kind in $ownershipPathKinds) {
         switch ([string]$kind) {
             'claude-runtime' {
                 foreach ($path in @((Join-Path $env:USERPROFILE '.claude'), (Join-Path $env:USERPROFILE '.local\bin'), (Join-Path $env:USERPROFILE '.local\share\claude'), (Join-Path $env:LOCALAPPDATA 'Programs\claude'), (Join-Path $env:LOCALAPPDATA 'AnthropicClaude'))) { [void]$pathRoots.Add($path) }
@@ -458,9 +460,11 @@ function Get-VmScenarioOwnership {
             'npm-runtime' { [void]$pathRoots.Add((Join-Path $env:APPDATA 'npm')) }
         }
     }
-    if ($ownershipSpec) {
-        foreach ($value in @($ownershipSpec.npmPackages)) { [void]$npmPackages.Add([string]$value) }
-        foreach ($value in @($ownershipSpec.wingetPackages)) { [void]$wingetPackages.Add([string]$value) }
+    if ($ownershipSpec -and $ownershipPropertyNames -contains 'npmPackages') {
+        foreach ($value in @($ownershipSpec.PSObject.Properties['npmPackages'].Value)) { [void]$npmPackages.Add([string]$value) }
+    }
+    if ($ownershipSpec -and $ownershipPropertyNames -contains 'wingetPackages') {
+        foreach ($value in @($ownershipSpec.PSObject.Properties['wingetPackages'].Value)) { [void]$wingetPackages.Add([string]$value) }
     }
     if ($SetupState) {
         foreach ($value in @($SetupState.OwnedPathRoots)) { [void]$pathRoots.Add([string]$value) }
@@ -652,6 +656,7 @@ try {
         $sceneDir = Join-Path $scenarioRoot $scenarioId
         New-Item -ItemType Directory -Path $sceneDir -Force | Out-Null
         Write-VmAcceptance "Scenario $($index + 1)/$($orderedScenarios.Count): $scenarioId ($scenarioMode)"
+        $currentScenarioOwnership = New-AcceptanceOwnership
 
         $phase = "scenario-pre-cleanup"
         $protectedPids = Get-ProtectedProcessIds
@@ -682,7 +687,11 @@ try {
         $scenarioResult = $null
         $scenarioFailure = $null
         try {
-            if ($scenarioMode -eq "Live") { $setupState = Start-LiveScenarioSetup -Scenario $scenario -SceneDir $sceneDir }
+            $currentScenarioOwnership = Get-VmScenarioOwnership -Scenario $scenario -SetupState $setupState -ScenarioMode $scenarioMode
+            if ($scenarioMode -eq "Live") {
+                $setupState = Start-LiveScenarioSetup -Scenario $scenario -SceneDir $sceneDir
+                $currentScenarioOwnership = Get-VmScenarioOwnership -Scenario $scenario -SetupState $setupState -ScenarioMode $scenarioMode
+            }
             $scenarioResult = Invoke-VmStage -Name ("scenario-" + $scenarioId) -FilePath "powershell.exe" -Arguments $arguments `
                 -TimeoutSec $(if ($scenarioMode -eq "Live") { 2400 } else { 600 }) -EvidenceRoot $sceneDir
         }
@@ -695,7 +704,6 @@ try {
                 catch { $scenarioFailure = if ($scenarioFailure) { "$scenarioFailure; $($_.Exception.Message)" } else { $_.Exception.Message } }
             }
         }
-        $currentScenarioOwnership = Get-VmScenarioOwnership -Scenario $scenario -SetupState $setupState -ScenarioMode $scenarioMode
         [void]$allResults.Add([ordered]@{
             Id = $scenarioId
             Mode = $scenarioMode

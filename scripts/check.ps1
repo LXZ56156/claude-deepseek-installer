@@ -5549,6 +5549,40 @@ if ($acceptanceRunnerText -match $responderCountParenthesizedIfPattern) {
 if ($acceptanceAllText -match '(?i)New-LocalUser|Remove-LocalUser|Windows\s*Sandbox|WindowsSandbox|\bVNC\b|SendKeys|VMware\s+snapshot|Checkpoint-VM') {
     throw "VM acceptance must remain single-user and must not depend on Sandbox, VNC, SendKeys, or VM snapshots"
 }
+$scenarioOwnershipFunction = [regex]::Match($acceptanceOrchestratorText, 'function Get-VmScenarioOwnership\s*\{[\s\S]*?(?=\r?\nfunction New-VmResumeState)')
+if (-not $scenarioOwnershipFunction.Success) {
+    throw "vm-final-acceptance.ps1 must define Get-VmScenarioOwnership before New-VmResumeState"
+}
+if ($scenarioOwnershipFunction.Value -match '\$ownershipSpec\.(pathKinds|npmPackages|wingetPackages)') {
+    throw "Get-VmScenarioOwnership must not directly access optional ownership properties"
+}
+foreach ($optionalOwnershipGate in @(
+    'ownershipPropertyNames',
+    "PSObject.Properties['pathKinds']",
+    "PSObject.Properties['npmPackages']",
+    "PSObject.Properties['wingetPackages']",
+    "-contains 'pathKinds'",
+    "-contains 'npmPackages'",
+    "-contains 'wingetPackages'"
+)) {
+    if ($scenarioOwnershipFunction.Value -notmatch [regex]::Escape($optionalOwnershipGate)) {
+        throw "Get-VmScenarioOwnership missing optional property guard: $optionalOwnershipGate"
+    }
+}
+$scenarioLoopStart = $acceptanceOrchestratorText.IndexOf('for ($index = $nextScenarioIndex;')
+$scenarioStageIndex = if ($scenarioLoopStart -ge 0) { $acceptanceOrchestratorText.IndexOf('Invoke-VmStage -Name ("scenario-" + $scenarioId)', $scenarioLoopStart) } else { -1 }
+if ($scenarioLoopStart -lt 0 -or $scenarioStageIndex -lt 0) {
+    throw "vm-final-acceptance.ps1 scenario loop or Invoke-VmStage call not found"
+}
+$preStageScenarioLoop = $acceptanceOrchestratorText.Substring($scenarioLoopStart, $scenarioStageIndex - $scenarioLoopStart)
+if ($preStageScenarioLoop -notmatch '\$currentScenarioOwnership\s*=\s*New-AcceptanceOwnership') {
+    throw "scenario loop must reset currentScenarioOwnership at scenario start"
+}
+if (@([regex]::Matches($preStageScenarioLoop, '\$currentScenarioOwnership\s*=\s*Get-VmScenarioOwnership')).Count -lt 2 -or
+    $preStageScenarioLoop -notmatch 'Start-LiveScenarioSetup' -or
+    $preStageScenarioLoop -notmatch 'SetupState \$setupState') {
+    throw "scenario loop must calculate currentScenarioOwnership before Invoke-VmStage, then recalculate after Live setup"
+}
 foreach ($term in @('CreatePseudoConsole', 'PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE', 'PROC_THREAD_ATTRIBUTE_JOB_LIST', 'JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE', 'TerminateJobObject')) {
     if ($acceptanceDriverText -notmatch [regex]::Escape($term)) { throw "ConPTY driver missing process-control primitive: $term" }
 }

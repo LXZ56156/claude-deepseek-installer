@@ -300,6 +300,25 @@ try {
     $trackedReset = Reset-AcceptanceEnvironment -Baseline $trackedBefore -Current $trackedAfter -Delta $trackedDelta -ProjectRoot $ProjectRoot -ControlRoot (Join-Path $testRoot 'control-b') -ResultRoot (Join-Path $testRoot 'results-b') -AllowedCleanupRoots @($trackedAfterRoots + $trackedBeforeRoots) -ProtectedProcessIds @($PID) -Ownership $trackedOwnership
     Assert-Test ($trackedReset.Success -and -not (Test-Path $desktopMain) -and -not (Test-Path $desktopBackup) -and -not (Test-Path $stateDir) -and -not (Test-Path $claudeJson)) 'desktop variants and state roots are tracked and cleaned'
 
+    # Scenario ownership may specify only pathKinds. StrictMode must not require
+    # optional npmPackages/wingetPackages properties, and cleanup must already
+    # have scenario ownership available if the stage later fails.
+    $pathKindsOnlyScenario = [PSCustomObject]@{ ownership = [PSCustomObject]@{ pathKinds = @('installer-state') } }
+    $pathKindsOwnership = Get-VmScenarioOwnership -Scenario $pathKindsOnlyScenario -SetupState $null -ScenarioMode Live
+    Assert-Test (($pathKindsOwnership.PathRoots -contains ([IO.Path]::GetFullPath($stateDir).TrimEnd('\'))) -and @($pathKindsOwnership.NpmPackages).Count -eq 0 -and @($pathKindsOwnership.WingetPackages).Count -eq 0) 'scenario ownership handles pathKinds-only specification under StrictMode'
+
+    $stageFailureStateDir = Join-Path $fakeProfile '.claude-deepseek-installer'
+    $stageFailureBefore = New-TestSnapshot (Get-AcceptanceFileState -Roots @($stageFailureStateDir) -CaptureBytes -BackupRoot (Join-Path $testRoot 'stage-failure-baseline'))
+    New-Item -ItemType Directory -Path $stageFailureStateDir -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $stageFailureStateDir 'state.json'), '{"phase":"stage-failed"}', [Text.Encoding]::UTF8)
+    $stageFailureAfter = New-TestSnapshot (Get-AcceptanceFileState -Roots @($stageFailureStateDir))
+    $stageFailureDelta = Compare-AcceptanceSnapshot $stageFailureBefore $stageFailureAfter
+    $stageFailureOwnership = Get-VmScenarioOwnership -Scenario $pathKindsOnlyScenario -SetupState $null -ScenarioMode Live
+    $stageFailureReset = Reset-AcceptanceEnvironment -Baseline $stageFailureBefore -Current $stageFailureAfter -Delta $stageFailureDelta `
+        -ProjectRoot $ProjectRoot -ControlRoot (Join-Path $testRoot 'control-stage-failure') -ResultRoot (Join-Path $testRoot 'results-stage-failure') `
+        -AllowedCleanupRoots @($stageFailureStateDir) -ProtectedProcessIds @($PID) -Ownership $stageFailureOwnership
+    Assert-Test ($stageFailureReset.Success -and -not (@($stageFailureReset.Reports) -match 'UNOWNED_PATH') -and -not (Test-Path -LiteralPath $stageFailureStateDir)) 'stage failure cleanup uses precomputed scenario ownership for installer state'
+
     # Unregistered package changes are reported without invoking an uninstall.
     $packageBefore = New-TestSnapshot @()
     $packageAfter = New-TestSnapshot @() @([PSCustomObject]@{ Id = 'unregistered-package'; Version = '1.0.0' })
