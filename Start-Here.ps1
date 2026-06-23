@@ -804,6 +804,34 @@ function Step-InstallClaudeCode {
 # Step 3: DeepSeek API Key 获取和输入
 # ============================================================
 
+function Open-DeepSeekApiKeyPage {
+    param(
+        [switch]$Again
+    )
+
+    if ($script:TestSafeMode) {
+        Write-Info "测试安全模式：跳过打开 DeepSeek API Key 页面。"
+        return
+    }
+
+    if ($Again) {
+        Write-Info "正在重新打开 DeepSeek API Key 页面..."
+    }
+    else {
+        Write-Info "正在为您打开 DeepSeek API Key 页面..."
+    }
+
+    try {
+        Start-Process "https://platform.deepseek.com/api_keys"
+        if (-not $Again) {
+            Write-Info "如果浏览器未自动打开，请手动访问: https://platform.deepseek.com/api_keys"
+        }
+    }
+    catch {
+        Write-Info "请手动在浏览器中打开: https://platform.deepseek.com/api_keys"
+    }
+}
+
 function Step-GetApiKey {
     Write-Step "Step 3/7：获取 DeepSeek API Key"
 
@@ -821,14 +849,7 @@ function Step-GetApiKey {
     }
 
     # 自动打开 DeepSeek API Key 页面（首次）
-    Write-Info "正在为您打开 DeepSeek API Key 页面..."
-    try {
-        Start-Process "https://platform.deepseek.com/api_keys"
-        Write-Info "如果浏览器未自动打开，请手动访问: https://platform.deepseek.com/api_keys"
-    }
-    catch {
-        Write-Info "请手动在浏览器中打开: https://platform.deepseek.com/api_keys"
-    }
+    Open-DeepSeekApiKeyPage
 
     # 预备菜单循环
     :menu while ($true) {
@@ -880,13 +901,7 @@ function Step-GetApiKey {
                 return $apiKey
             }
             "2" {
-                Write-Info "正在重新打开 DeepSeek API Key 页面..."
-                try {
-                    Start-Process "https://platform.deepseek.com/api_keys"
-                }
-                catch {
-                    Write-Info "请手动在浏览器中打开: https://platform.deepseek.com/api_keys"
-                }
+                Open-DeepSeekApiKeyPage -Again
                 continue menu
             }
             "3" {

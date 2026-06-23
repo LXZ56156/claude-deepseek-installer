@@ -2080,6 +2080,24 @@ if ($configureText -notmatch "下一步会显示脱敏后的 Key，可选择 R �
 if ($startHereText -notmatch 'if\s*\(\$NonInteractive\)\s*\{[\s\S]{0,300}Get-ApiKeyFromEnvironment') {
     throw "Step-GetApiKey NonInteractive path must still use Get-ApiKeyFromEnvironment"
 }
+# Step-GetApiKey 的浏览器打开必须受 TestSafe guard 保护。ConPTY TestSafe 不能启动真实 URL。
+$apiKeyOpenBlock = [regex]::Match($startHereText, 'function Open-DeepSeekApiKeyPage\s*\{[\s\S]{0,1600}Start-Process\s+"https://platform\.deepseek\.com/api_keys"[\s\S]{0,800}\}')
+if (-not $apiKeyOpenBlock.Success) {
+    throw "Start-Here.ps1 must route DeepSeek API Key URL opening through Open-DeepSeekApiKeyPage"
+}
+if ($apiKeyOpenBlock.Value -notmatch 'if\s*\(\$script:TestSafeMode\)\s*\{[\s\S]{0,200}测试安全模式：跳过打开 DeepSeek API Key 页面。[\s\S]{0,200}return') {
+    throw "Open-DeepSeekApiKeyPage must return before Start-Process when TestSafeMode is true"
+}
+$stepGetApiKeyBlock = [regex]::Match($startHereText, 'function Step-GetApiKey\s*\{[\s\S]*?(?=\r?\n# ============================================================\r?\n# Step 4:)')
+if (-not $stepGetApiKeyBlock.Success) {
+    throw "Start-Here.ps1 must contain a bounded Step-GetApiKey section"
+}
+if ($stepGetApiKeyBlock.Value -match 'Start-Process\s+"https://platform\.deepseek\.com/api_keys"') {
+    throw "Step-GetApiKey must not call Start-Process URL directly; use the TestSafe-guarded helper"
+}
+if ([regex]::Matches($stepGetApiKeyBlock.Value, 'Open-DeepSeekApiKeyPage').Count -lt 2) {
+    throw "Step-GetApiKey must use Open-DeepSeekApiKeyPage for initial open and menu option 2"
+}
 # Step-TestApi SkipApiTest 路径必须存在
 if ($startHereText -notmatch '\$script:EffectiveSkipApiTest') {
     throw "Step-TestApi must still check EffectiveSkipApiTest"
