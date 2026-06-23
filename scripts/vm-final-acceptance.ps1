@@ -110,14 +110,27 @@ function Test-VmAutomaticRestartAllowed {
 }
 
 function Invoke-VmAuthorizedRestart {
-    param($ResumeState)
-    if (-not (Test-VmAutomaticRestartAllowed -AcceptanceMode $Mode -RealInstallAcknowledged ([bool]$AcknowledgeRealInstall) -RestartAcknowledged ([bool]$AcknowledgeRestart))) {
+    param(
+        $ResumeState,
+        [string]$AcceptanceMode = $Mode,
+        [bool]$RealInstallAcknowledged = [bool]$AcknowledgeRealInstall,
+        [bool]$RestartAcknowledged = [bool]$AcknowledgeRestart,
+        [scriptblock]$LiveGate,
+        [scriptblock]$ResumeRegistrar,
+        [scriptblock]$RestartInvoker
+    )
+    if (-not (Test-VmAutomaticRestartAllowed -AcceptanceMode $AcceptanceMode -RealInstallAcknowledged $RealInstallAcknowledged -RestartAcknowledged $RestartAcknowledged)) {
         throw 'Automatic restart is disabled. It requires -Mode Live, -AcknowledgeRealInstall, and -AcknowledgeRestart.'
     }
-    Assert-VmLiveGate -ZipPath $zipPath
-    [void](Register-AcceptanceResume -Paths $paths -EntryScript $PSCommandPath -State $ResumeState)
-    Restart-Computer -Force
-    exit 194
+    if (-not $LiveGate) { $LiveGate = { Assert-VmLiveGate -ZipPath $zipPath } }
+    if (-not $ResumeRegistrar) {
+        $ResumeRegistrar = { param($State) Register-AcceptanceResume -Paths $paths -EntryScript $PSCommandPath -State $State -ScenarioCount $orderedScenarios.Count }
+    }
+    if (-not $RestartInvoker) { $RestartInvoker = { Restart-Computer -Force } }
+    & $LiveGate
+    $registration = & $ResumeRegistrar $ResumeState
+    & $RestartInvoker
+    return [PSCustomObject]@{ Registration = $registration; RestartRequested = $true }
 }
 
 function Get-ProtectedProcessIds {
@@ -137,7 +150,143 @@ function Get-ProtectedProcessIds {
 
 function Write-JsonFile {
     param([string]$Path, $Value)
-    $Value | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding UTF8
+    Write-AcceptanceJsonFileAtomic -Path $Path -Value $Value
+}
+
+function Get-VmStaticGuardSnapshot {
+    $settingsPath = Join-Path $env:USERPROFILE '.claude\settings.json'
+    $settingsExists = Test-Path -LiteralPath $settingsPath -PathType Leaf
+    $commands = @('claude', 'node', 'npm') | ForEach-Object {
+        $command = Get-Command $_ -ErrorAction SilentlyContinue | Select-Object -First 1
+        [ordered]@{ Name = $_; Exists = [bool]$command; Source = if ($command) { [string]$command.Source } else { $null } }
+    }
+    [PSCustomObject]@{
+        UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+        MachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+        ProcessPath = $env:Path
+        SettingsPath = $settingsPath
+        SettingsExists = $settingsExists
+        SettingsLength = if ($settingsExists) { (Get-Item -LiteralPath $settingsPath -ErrorAction Stop).Length } else { 0 }
+        SettingsHash = if ($settingsExists) { (Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256 -ErrorAction Stop).Hash } else { $null }
+        SettingsBytes = if ($settingsExists) { [IO.File]::ReadAllBytes($settingsPath) } else { $null }
+        Commands = @($commands)
+    }
+}
+
+function Compare-VmStaticGuardSnapshot {
+    param($Before, $After)
+    $differences = New-Object Collections.ArrayList
+    foreach ($name in @('UserPath', 'MachinePath', 'ProcessPath', 'SettingsExists', 'SettingsLength', 'SettingsHash')) {
+        if ($Before.$name -cne $After.$name) { [void]$differences.Add($name) }
+    }
+    if (($Before.Commands | ConvertTo-Json -Compress) -cne ($After.Commands | ConvertTo-Json -Compress)) { [void]$differences.Add('Commands') }
+    return @($differences)
+}
+
+function Restore-VmStaticGuardSnapshot {
+    param($Snapshot)
+    $errors = New-Object Collections.ArrayList
+    try { if ([Environment]::GetEnvironmentVariable('Path', 'User') -cne $Snapshot.UserPath) { [Environment]::SetEnvironmentVariable('Path', [string]$Snapshot.UserPath, 'User') } } catch { [void]$errors.Add("UserPath: $($_.Exception.Message)") }
+    try { if ([Environment]::GetEnvironmentVariable('Path', 'Machine') -cne $Snapshot.MachinePath) { [Environment]::SetEnvironmentVariable('Path', [string]$Snapshot.MachinePath, 'Machine') } } catch { [void]$errors.Add("MachinePath: $($_.Exception.Message)") }
+    try { if ($env:Path -cne $Snapshot.ProcessPath) { $env:Path = [string]$Snapshot.ProcessPath } } catch { [void]$errors.Add("ProcessPath: $($_.Exception.Message)") }
+    try {
+        if ($Snapshot.SettingsExists) {
+            $parent = Split-Path -Parent $Snapshot.SettingsPath
+            if (-not (Test-Path -LiteralPath $parent -PathType Container)) { New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop | Out-Null }
+            [IO.File]::WriteAllBytes([string]$Snapshot.SettingsPath, [byte[]]$Snapshot.SettingsBytes)
+        }
+        elseif (Test-Path -LiteralPath $Snapshot.SettingsPath) { Remove-Item -LiteralPath $Snapshot.SettingsPath -Force -ErrorAction Stop }
+    }
+    catch { [void]$errors.Add("settings.json: $($_.Exception.Message)") }
+    if ($errors.Count) { throw "Static validation rollback failed: $($errors -join '; ')" }
+}
+
+function Write-VmSummaryArtifactsTransactional {
+    param([string]$RunPath, $Summary, [string[]]$TextLines, [scriptblock]$FileWriter, [scriptblock]$Publisher)
+    $jsonPath = Join-Path $RunPath 'summary.json'
+    $textPath = Join-Path $RunPath 'summary.txt'
+    $transactionId = [guid]::NewGuid().ToString('N')
+    $jsonTemp = "$jsonPath.tmp.$transactionId"
+    $textTemp = "$textPath.tmp.$transactionId"
+    $jsonBackup = "$jsonPath.bak.$transactionId"
+    $textBackup = "$textPath.bak.$transactionId"
+    $jsonExisted = Test-Path -LiteralPath $jsonPath -PathType Leaf
+    $textExisted = Test-Path -LiteralPath $textPath -PathType Leaf
+    if (-not $FileWriter) {
+        $FileWriter = {
+            param($Path, $Value)
+            [IO.File]::WriteAllText($Path, [string]$Value, (New-Object Text.UTF8Encoding($false)))
+        }
+    }
+    if (-not $Publisher) { $Publisher = { param($Source, $Destination) Move-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop } }
+    try {
+        & $FileWriter $jsonTemp ($Summary | ConvertTo-Json -Depth 20)
+        & $FileWriter $textTemp ($TextLines -join [Environment]::NewLine)
+        if (-not (Test-Path -LiteralPath $jsonTemp -PathType Leaf) -or -not (Test-Path -LiteralPath $textTemp -PathType Leaf)) { throw 'Summary staging did not create both artifacts' }
+        if ($jsonExisted) { Copy-Item -LiteralPath $jsonPath -Destination $jsonBackup -Force -ErrorAction Stop }
+        if ($textExisted) { Copy-Item -LiteralPath $textPath -Destination $textBackup -Force -ErrorAction Stop }
+        & $Publisher $jsonTemp $jsonPath
+        & $Publisher $textTemp $textPath
+        $published = Get-Content -LiteralPath $jsonPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ([string]$published.Status -cne [string]$Summary.Status) { throw 'Published summary status does not match the requested status' }
+        $publishedText = Get-Content -LiteralPath $textPath -Raw -Encoding UTF8 -ErrorAction Stop
+        if ($publishedText -notmatch ('(?m)^Status: ' + [regex]::Escape([string]$Summary.Status) + '\r?$')) { throw 'Published summary text status does not match the requested status' }
+    }
+    catch {
+        $publishError = $_.Exception.Message
+        try {
+            if ($jsonExisted -and (Test-Path -LiteralPath $jsonBackup)) { Copy-Item -LiteralPath $jsonBackup -Destination $jsonPath -Force -ErrorAction Stop }
+            elseif (-not $jsonExisted -and (Test-Path -LiteralPath $jsonPath)) { Remove-Item -LiteralPath $jsonPath -Force -ErrorAction Stop }
+            if ($textExisted -and (Test-Path -LiteralPath $textBackup)) { Copy-Item -LiteralPath $textBackup -Destination $textPath -Force -ErrorAction Stop }
+            elseif (-not $textExisted -and (Test-Path -LiteralPath $textPath)) { Remove-Item -LiteralPath $textPath -Force -ErrorAction Stop }
+        }
+        catch { $publishError += "; summary rollback failed: $($_.Exception.Message)" }
+        throw $publishError
+    }
+    finally {
+        foreach ($path in @($jsonTemp, $textTemp, $jsonBackup, $textBackup)) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Complete-VmAcceptanceLifecycle {
+    param(
+        [AllowNull()][string]$PriorError,
+        [scriptblock]$EvidenceWriter,
+        [scriptblock]$FinalResumeCleanup,
+        [scriptblock]$SummaryFactory,
+        [scriptblock]$SummaryWriter
+    )
+    $errors = New-Object Collections.ArrayList
+    if ($PriorError) { [void]$errors.Add($PriorError) }
+    try { & $EvidenceWriter }
+    catch { [void]$errors.Add("final evidence write failed: $($_.Exception.Message)") }
+    try { & $FinalResumeCleanup }
+    catch { [void]$errors.Add("final resume cleanup failed: $($_.Exception.Message)") }
+    $status = if ($errors.Count -eq 0) { 'PASS' } else { 'FAIL' }
+    $summary = $null
+    $summaryWritten = $false
+    try {
+        $summary = & $SummaryFactory $status $(if ($errors.Count) { $errors -join '; ' } else { $null })
+        & $SummaryWriter $summary
+        $summaryWritten = $true
+    }
+    catch {
+        [void]$errors.Add("summary write failed: $($_.Exception.Message)")
+        $status = 'FAIL'
+        try {
+            $summary = & $SummaryFactory $status ($errors -join '; ')
+            & $SummaryWriter $summary
+            $summaryWritten = $true
+        }
+        catch { [void]$errors.Add("FAIL summary write failed: $($_.Exception.Message)") }
+    }
+    return [PSCustomObject]@{
+        Status = $status
+        ExitCode = if ($status -eq 'PASS' -and $summaryWritten) { 0 } else { 1 }
+        Error = if ($errors.Count) { $errors -join '; ' } else { $null }
+        Summary = $summary
+        SummaryWritten = $summaryWritten
+    }
 }
 
 function New-VmPathAdapter {
@@ -334,7 +483,11 @@ function Invoke-VmResumeControlFlow {
 
 if ($env:CCDI_ACCEPTANCE_IMPORT_ONLY -eq '1') { return }
 
-$resumeBootstrapState = if ($Resume) { Read-AcceptanceResumeState -ControlRoot $ControlRoot } else { $null }
+if ($Mode -eq 'TestSafe' -and -not $PSBoundParameters.ContainsKey('ControlRoot')) {
+    $ControlRoot = Join-Path ([IO.Path]::GetTempPath()) 'CCDI-Acceptance-Control'
+}
+
+$resumeBootstrapState = if ($Resume) { Read-AcceptanceResumeState -ControlRoot $ControlRoot -ScenarioFile $scenarioFile -RequireRunArtifacts } else { $null }
 if ($resumeBootstrapState) {
     $Mode = [string]$resumeBootstrapState.Mode; $Version = [string]$resumeBootstrapState.Version
     $CredentialTarget = [string]$resumeBootstrapState.CredentialTarget
@@ -343,14 +496,16 @@ if ($resumeBootstrapState) {
 }
 $runId = if ($Resume) { [string]$resumeBootstrapState.RunId } else { Get-Date -Format "yyyyMMdd-HHmmss-fff" }
 $instanceLock = Enter-AcceptanceInstanceLock -ControlRoot $ControlRoot
+$processExitCode = 1
+try {
 $paths = Get-AcceptanceControlPaths -ControlRoot $ControlRoot -RunId $runId
 foreach ($directory in @($paths.Root, $paths.Baseline, $paths.Runs, $paths.Run)) { New-Item -ItemType Directory -Path $directory -Force | Out-Null }
 $scenarioRoot = Join-Path $paths.Run "scenarios"
 $snapshotTemp = Join-Path $paths.Run "snapshot-temp"
 New-Item -ItemType Directory -Path $scenarioRoot, $snapshotTemp -Force | Out-Null
 
-$zipPath = Join-Path $ProjectRoot "release\ClaudeCode-DeepSeek-本地配置助手-v$Version.zip"
-Assert-VmLiveGate -ZipPath $zipPath
+$releaseOutputRoot = if ($Mode -eq 'TestSafe') { Join-Path $paths.Run 'release-output' } else { Join-Path $ProjectRoot 'release' }
+$zipPath = Join-Path $releaseOutputRoot "ClaudeCode-DeepSeek-本地配置助手-v$Version.zip"
 
 $settingsBytes = $null
 $baseline = $null
@@ -361,11 +516,15 @@ $cleanupReports = New-Object System.Collections.ArrayList
 $stageResults = New-Object System.Collections.ArrayList
 $finalStatus = "FAIL"
 $errorMessage = $null
-$protectedPids = Get-ProtectedProcessIds
+$protectedPids = @()
 $pendingOwnership = New-AcceptanceOwnership
 $currentScenarioOwnership = New-AcceptanceOwnership
+$staticGuardBefore = $null
+$staticGuardActive = $false
 
 try {
+    Assert-VmLiveGate -ZipPath $zipPath
+    $protectedPids = Get-ProtectedProcessIds
     if ($Resume) {
         $resumeState = $resumeBootstrapState
         $nextScenarioIndex = [int]$resumeState.NextScenarioIndex
@@ -384,6 +543,8 @@ try {
                 throw "Live baseline must start without claude/node/npm: $($preexistingRequiredCleanCommands -join ', ')"
             }
         }
+        $staticGuardBefore = Get-VmStaticGuardSnapshot
+        $staticGuardActive = $true
         $phase = "static-validation"
         [void]$stageResults.Add((Invoke-VmStage -Name "acceptance-functional" -FilePath "powershell.exe" -Arguments @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "test-vm-acceptance.ps1")
@@ -398,8 +559,28 @@ try {
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "validate.ps1"), "-Mode", "Hardcore", "-Version", $Version
         ) -TimeoutSec 900 -EvidenceRoot $paths.Run))
         [void]$stageResults.Add((Invoke-VmStage -Name "build-release" -FilePath "powershell.exe" -Arguments @(
-            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "build-release.ps1"), "-Version", $Version
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "build-release.ps1"), "-Version", $Version, '-OutputDir', $releaseOutputRoot
         ) -TimeoutSec 300 -EvidenceRoot $paths.Run))
+
+        $staticGuardAfter = Get-VmStaticGuardSnapshot
+        $staticDifferences = @(Compare-VmStaticGuardSnapshot -Before $staticGuardBefore -After $staticGuardAfter)
+        if ($staticGuardAfter.SettingsBytes) { [Array]::Clear($staticGuardAfter.SettingsBytes, 0, $staticGuardAfter.SettingsBytes.Length) }
+        if ($staticDifferences.Count -gt 0) {
+            Restore-VmStaticGuardSnapshot -Snapshot $staticGuardBefore
+            $restoredStatic = Get-VmStaticGuardSnapshot
+            $restoredDifferences = @(Compare-VmStaticGuardSnapshot -Before $staticGuardBefore -After $restoredStatic)
+            if ($restoredStatic.SettingsBytes) { [Array]::Clear($restoredStatic.SettingsBytes, 0, $restoredStatic.SettingsBytes.Length) }
+            if ($restoredDifferences.Count -gt 0) { throw "Static validation changed machine state and rollback was incomplete: $($restoredDifferences -join ', ')" }
+            $staticGuardActive = $false
+            if ($staticGuardBefore.SettingsBytes) { [Array]::Clear($staticGuardBefore.SettingsBytes, 0, $staticGuardBefore.SettingsBytes.Length) }
+            throw "Static validation changed guarded machine state: $($staticDifferences -join ', ')"
+        }
+        if ($Mode -eq 'Live') {
+            $postStaticCommands = @('claude', 'node', 'npm') | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue }
+            if ($postStaticCommands.Count -gt 0) { throw "Static validation polluted the Live clean-install baseline: $($postStaticCommands -join ', ')" }
+        }
+        $staticGuardActive = $false
+        if ($staticGuardBefore.SettingsBytes) { [Array]::Clear($staticGuardBefore.SettingsBytes, 0, $staticGuardBefore.SettingsBytes.Length) }
 
         Write-VmAcceptance "Capturing single-user scenario baseline"
         $fileBackupRoot = Join-Path $paths.Baseline 'files'
@@ -436,7 +617,9 @@ try {
                 if ($lockOnly -and (Test-VmAutomaticRestartAllowed -AcceptanceMode $Mode -RealInstallAcknowledged ([bool]$AcknowledgeRealInstall) -RestartAcknowledged ([bool]$AcknowledgeRestart))) {
                     $resume = New-VmResumeState -NextScenarioIndex $nextScenarioIndex -CurrentPhase 'resume-cleanup-pending' -PendingOwnership $pendingOwnership
                     $resume.Error = ($resumeCleanup.Errors -join '; ')
-                    Invoke-VmAuthorizedRestart -ResumeState $resume
+                    [void](Invoke-VmAuthorizedRestart -ResumeState $resume)
+                    $processExitCode = 194
+                    exit 194
                 }
                 throw "Resume cleanup failed: $($resumeCleanup.Errors -join '; ')"
             }
@@ -524,7 +707,9 @@ try {
             if ($lockOnly -and -not $scenarioFailure -and (Test-VmAutomaticRestartAllowed -AcceptanceMode $Mode -RealInstallAcknowledged ([bool]$AcknowledgeRealInstall) -RestartAcknowledged ([bool]$AcknowledgeRestart))) {
                 $resume = New-VmResumeState -NextScenarioIndex ($index + 1) -CurrentPhase 'resume-cleanup-pending' -PendingOwnership $currentScenarioOwnership
                 $resume.Error = ($cleanup.Errors -join '; ')
-                Invoke-VmAuthorizedRestart -ResumeState $resume
+                [void](Invoke-VmAuthorizedRestart -ResumeState $resume)
+                $processExitCode = 194
+                exit 194
             }
             throw "Cleanup failed: $($cleanup.Errors -join '; ')"
         }
@@ -568,10 +753,23 @@ try {
     $failedScenarioCount = @($allResults | Where-Object { $_.Status -ne 'PASS' }).Count
     if ($failedScenarioCount -gt 0) { throw "$failedScenarioCount scenario result(s) failed" }
 
-    $finalStatus = "PASS"
 }
 catch {
     $errorMessage = $_.Exception.Message
+    if ($staticGuardActive -and $staticGuardBefore) {
+        try {
+            Restore-VmStaticGuardSnapshot -Snapshot $staticGuardBefore
+            $guardAfterFailure = Get-VmStaticGuardSnapshot
+            $guardFailureDifferences = @(Compare-VmStaticGuardSnapshot -Before $staticGuardBefore -After $guardAfterFailure)
+            if ($guardAfterFailure.SettingsBytes) { [Array]::Clear($guardAfterFailure.SettingsBytes, 0, $guardAfterFailure.SettingsBytes.Length) }
+            if ($guardFailureDifferences.Count -gt 0) { throw "guard differences remain: $($guardFailureDifferences -join ', ')" }
+        }
+        catch { $errorMessage += "; static guard rollback exception: $($_.Exception.Message)" }
+        finally {
+            $staticGuardActive = $false
+            if ($staticGuardBefore.SettingsBytes) { [Array]::Clear($staticGuardBefore.SettingsBytes, 0, $staticGuardBefore.SettingsBytes.Length) }
+        }
+    }
     if ($baseline) {
         try {
             $protectedPids = Get-ProtectedProcessIds
@@ -603,30 +801,47 @@ finally {
     if ($settingsBytes) { [Array]::Clear($settingsBytes, 0, $settingsBytes.Length) }
 }
 
-Write-JsonFile -Path (Join-Path $paths.Run "scenario-results.json") -Value @($allResults)
-Write-JsonFile -Path (Join-Path $paths.Run "cleanup-report.json") -Value @($cleanupReports)
 $summaryFullSha = try { (& git -C $ProjectRoot rev-parse HEAD) } catch { $null }
 $summaryZipSha = if (Test-Path -LiteralPath $zipPath) { (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash } else { $null }
 $passedScenarioCount = @($allResults | Where-Object { $_.Status -eq 'PASS' }).Count
 $failedScenarioCount = @($allResults | Where-Object { $_.Status -ne 'PASS' }).Count
-$summary = [ordered]@{
-    SchemaVersion = 1; RunId = $runId; Status = $finalStatus; Mode = $Mode; Version = $Version
-    FullSHA = $summaryFullSha
-    Zip = $zipPath; ZipSHA256 = $summaryZipSha
-    Phase = $phase; StaticStages = @($stageResults); Scenarios = @($allResults)
-    ScenariosPassed = $passedScenarioCount; ScenariosFailed = $failedScenarioCount
-    Error = $errorMessage; CompletedAt = (Get-Date).ToString("o")
+$lifecycle = Complete-VmAcceptanceLifecycle -PriorError $errorMessage -EvidenceWriter {
+    Write-JsonFile -Path (Join-Path $paths.Run 'scenario-results.json') -Value @($allResults)
+    Write-JsonFile -Path (Join-Path $paths.Run 'cleanup-report.json') -Value @($cleanupReports)
+} -FinalResumeCleanup {
+    [void](Remove-AcceptanceResume -Paths $paths)
+} -SummaryFactory {
+    param([string]$Status, [AllowNull()][string]$ErrorText)
+    [ordered]@{
+        SchemaVersion = 1; RunId = $runId; Status = $Status; Mode = $Mode; Version = $Version
+        FullSHA = $summaryFullSha
+        Zip = $zipPath; ZipSHA256 = $summaryZipSha
+        Phase = if ($Status -eq 'PASS') { 'complete' } else { $phase }
+        StaticStages = @($stageResults); Scenarios = @($allResults)
+        ScenariosPassed = $passedScenarioCount; ScenariosFailed = $failedScenarioCount
+        Error = $ErrorText; CompletedAt = (Get-Date).ToString('o')
+    }
+} -SummaryWriter {
+    param($Value)
+    $textLines = @(
+        'CCDI VM final acceptance', "Status: $($Value.Status)", "Mode: $Mode", "Version: $Version", "Full SHA: $($Value.FullSHA)",
+        "ZIP SHA256: $($Value.ZipSHA256)", "Scenarios passed: $passedScenarioCount", "Scenarios failed: $failedScenarioCount", "Run directory: $($paths.Run)",
+        $(if ($Value.Error) { "Error: $($Value.Error)" } else { $null })
+    ) | Where-Object { $null -ne $_ }
+    Write-VmSummaryArtifactsTransactional -RunPath $paths.Run -Summary $Value -TextLines $textLines
 }
-Write-JsonFile -Path (Join-Path $paths.Run "summary.json") -Value $summary
-@(
-    "CCDI VM final acceptance", "Status: $finalStatus", "Mode: $Mode", "Version: $Version", "Full SHA: $($summary.FullSHA)",
-    "ZIP SHA256: $($summary.ZipSHA256)", "Scenarios passed: $passedScenarioCount", "Scenarios failed: $failedScenarioCount", "Run directory: $($paths.Run)",
-    $(if ($errorMessage) { "Error: $errorMessage" } else { "" })
-) | Where-Object { $_ } | Set-Content -LiteralPath (Join-Path $paths.Run "summary.txt") -Encoding UTF8
-
-Write-VmAcceptance "Summary: $(Join-Path $paths.Run 'summary.txt')"
-if ($finalStatus -ne "PASS") { Write-VmAcceptance "FAIL: $errorMessage" Red; Exit-AcceptanceInstanceLock -Lock $instanceLock; exit 1 }
-Remove-AcceptanceResume -Paths $paths
-Exit-AcceptanceInstanceLock -Lock $instanceLock
-Write-VmAcceptance "PASS" Green
-exit 0
+$finalStatus = [string]$lifecycle.Status
+$errorMessage = [string]$lifecycle.Error
+$processExitCode = [int]$lifecycle.ExitCode
+if ($lifecycle.SummaryWritten) { Write-VmAcceptance "Summary: $(Join-Path $paths.Run 'summary.txt')" }
+if ($finalStatus -ne 'PASS') { Write-VmAcceptance "FAIL: $errorMessage" Red }
+else { Write-VmAcceptance 'PASS' Green }
+}
+catch {
+    $processExitCode = 1
+    Write-VmAcceptance "FAIL outside reportable run lifecycle: $($_.Exception.Message)" Red
+}
+finally {
+    Exit-AcceptanceInstanceLock -Lock $instanceLock
+}
+exit $processExitCode

@@ -167,12 +167,14 @@ function Invoke-ValidationStep {
     )
 
     $script:StepCount++
+    $script:LastStepSucceeded = $false
     Write-Host ""
     Write-Host ("[validate] {0}. {1}" -f $script:StepCount, $Name) -ForegroundColor Cyan
     $started = Get-Date
 
     try {
         & $ScriptBlock
+        $script:LastStepSucceeded = $true
         $elapsed = [int]((Get-Date) - $started).TotalSeconds
         Write-Host ("[validate] OK: {0} ({1}s)" -f $Name, $elapsed) -ForegroundColor Green
     }
@@ -250,7 +252,9 @@ function Invoke-PowerShellScript {
 
         [string[]]$Arguments = @(),
 
-        [int]$TimeoutSec = 300
+        [int]$TimeoutSec = 300,
+
+        [string]$PowerShellExecutable = 'powershell.exe'
     )
 
     $safeFilePath = [System.IO.Path]::GetFullPath($FilePath)
@@ -286,7 +290,7 @@ function Invoke-PowerShellScript {
     $stderrFile = Join-Path $reportsDir "validate-child-${timestamp}-${scriptName}-${childId}.stderr.txt"
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "powershell.exe"
+    $psi.FileName = $PowerShellExecutable
     $psi.Arguments = $cliArgs
     $psi.WorkingDirectory = $RootDir
     $psi.UseShellExecute = $false
@@ -428,9 +432,7 @@ function Invoke-SmokeValidation {
     $pwshCommand = Get-Command "pwsh" -ErrorAction SilentlyContinue
     if ((-not $SkipPwsh) -and $pwshCommand) {
         Invoke-ValidationStep -Name "scripts/check.ps1 (pwsh)" -ScriptBlock ([scriptblock]{
-            Invoke-ExternalCommand -FileName "pwsh" -Arguments @(
-                "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $RootDir "scripts\check.ps1")
-            )
+            Invoke-PowerShellScript -PowerShellExecutable ([string]$pwshCommand.Source) -FilePath (Join-Path $RootDir "scripts\check.ps1") -TimeoutSec 300
         })
     }
 }
@@ -439,6 +441,9 @@ function Invoke-FullValidation {
     Write-ValidationHeader "Full source validation"
 
     Invoke-SmokeValidation
+    Invoke-ValidationStep -Name "scripts/test-vm-acceptance.ps1 (functional)" -ScriptBlock ([scriptblock]{
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\test-vm-acceptance.ps1") -TimeoutSec 300
+    })
     Invoke-ValidationStep -Name "PowerShell full AST parse" -ScriptBlock ([scriptblock]{ Invoke-ParseCheck })
     Invoke-ValidationStep -Name "scripts/ux-check.ps1" -ScriptBlock ([scriptblock]{
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\ux-check.ps1") -TimeoutSec 180
@@ -452,17 +457,21 @@ function Invoke-FullValidation {
 function Invoke-ReleaseValidation {
     Write-ValidationHeader "Release validation"
 
-    Invoke-ValidationStep -Name "package release ZIP" -ScriptBlock ([scriptblock]{
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\package-release.ps1") -Arguments @("-Version", $Version) -TimeoutSec 300
+    Invoke-ValidationStep -Name "build release ZIP (isolated output)" -ScriptBlock ([scriptblock]{
+        $releaseOutput = Join-Path $script:RunRoot 'release-output'
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\build-release.ps1") -Arguments @("-Version", $Version, '-OutputDir', $releaseOutput) -TimeoutSec 300
     })
     Invoke-ValidationStep -Name "release ZIP user simulation" -ScriptBlock ([scriptblock]{
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\simulate-user-release.ps1") -Arguments @("-Version", $Version) -TimeoutSec 600
     })
+    $releaseSimulationPassed = [bool]$script:LastStepSucceeded
     Invoke-ValidationStep -Name "sandbox full user simulation (scenarios A-P)" -ScriptBlock ([scriptblock]{
         Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\sandbox-full-user-simulation.ps1") -Arguments @("-Version", $Version) -TimeoutSec 900
     })
     Invoke-ValidationStep -Name "Windows scenario matrix" -ScriptBlock ([scriptblock]{
-        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\windows-scenario-matrix.ps1") -Arguments @("-Version", $Version, "-Quick", "-AssumePreviousSimulationPassed") -TimeoutSec 300
+        $matrixArguments = @('-Version', $Version, '-Quick')
+        if ($releaseSimulationPassed) { $matrixArguments += '-AssumePreviousSimulationPassed' }
+        Invoke-PowerShellScript -FilePath (Join-Path $RootDir "scripts\windows-scenario-matrix.ps1") -Arguments $matrixArguments -TimeoutSec 300
     })
 }
 

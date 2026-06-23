@@ -19,10 +19,7 @@ namespace Ccdi.Acceptance
         private const uint WAIT_TIMEOUT = 258;
         private const uint INFINITE = 0xffffffff;
         private const uint STILL_ACTIVE = 259;
-        private const int STD_INPUT_HANDLE = -10;
-        private const int STD_OUTPUT_HANDLE = -11;
-        private const int STD_ERROR_HANDLE = -12;
-        private static readonly object ProcessCreationLock = new object();
+        private const int STARTF_USESTDHANDLES = 0x00000100;
 
         private IntPtr pseudoConsole = IntPtr.Zero;
         private IntPtr pseudoInputHandle = IntPtr.Zero;
@@ -32,7 +29,9 @@ namespace Ccdi.Acceptance
         private SafeFileHandle inputHandle;
         private SafeFileHandle outputHandle;
         private FileStream inputStream;
-        private StreamReader outputReader;
+        private FileStream outputStream;
+        private Encoding terminalEncoding;
+        private Decoder outputDecoder;
         private Thread outputThread;
         private readonly StringBuilder output = new StringBuilder();
         private readonly object outputLock = new object();
@@ -108,6 +107,10 @@ namespace Ccdi.Acceptance
 
                 STARTUPINFOEX startupInfo = new STARTUPINFOEX();
                 startupInfo.StartupInfo.cb = Marshal.SizeOf(typeof(STARTUPINFOEX));
+                startupInfo.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+                startupInfo.StartupInfo.hStdInput = IntPtr.Zero;
+                startupInfo.StartupInfo.hStdOutput = IntPtr.Zero;
+                startupInfo.StartupInfo.hStdError = IntPtr.Zero;
                 startupInfo.lpAttributeList = attributeList;
                 SECURITY_ATTRIBUTES processAttributes = new SECURITY_ATTRIBUTES();
                 processAttributes.nLength = Marshal.SizeOf(typeof(SECURITY_ATTRIBUTES));
@@ -115,35 +118,17 @@ namespace Ccdi.Acceptance
                 threadAttributes.nLength = Marshal.SizeOf(typeof(SECURITY_ATTRIBUTES));
 
                 uint flags = EXTENDED_STARTUPINFO_PRESENT;
-                lock (ProcessCreationLock)
-                {
-                    IntPtr oldInput = GetStdHandle(STD_INPUT_HANDLE);
-                    IntPtr oldOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-                    IntPtr oldError = GetStdHandle(STD_ERROR_HANDLE);
-                    try
-                    {
-                        SetStdHandle(STD_INPUT_HANDLE, IntPtr.Zero);
-                        SetStdHandle(STD_OUTPUT_HANDLE, IntPtr.Zero);
-                        SetStdHandle(STD_ERROR_HANDLE, IntPtr.Zero);
-                        Check(CreateProcessW(
-                            null,
-                            commandLine,
-                            ref processAttributes,
-                            ref threadAttributes,
-                            false,
-                            flags,
-                            IntPtr.Zero,
-                            workingDirectory,
-                            ref startupInfo,
-                            out processInfo), "CreateProcessW");
-                    }
-                    finally
-                    {
-                        SetStdHandle(STD_INPUT_HANDLE, oldInput);
-                        SetStdHandle(STD_OUTPUT_HANDLE, oldOutput);
-                        SetStdHandle(STD_ERROR_HANDLE, oldError);
-                    }
-                }
+                Check(CreateProcessW(
+                    null,
+                    commandLine,
+                    ref processAttributes,
+                    ref threadAttributes,
+                    false,
+                    flags,
+                    IntPtr.Zero,
+                    workingDirectory,
+                    ref startupInfo,
+                    out processInfo), "CreateProcessW");
 
                 processHandle = processInfo.hProcess;
                 ProcessId = unchecked((int)processInfo.dwProcessId);
@@ -156,12 +141,9 @@ namespace Ccdi.Acceptance
                 outputHandle = new SafeFileHandle(hostOutputRead, true);
                 hostOutputRead = IntPtr.Zero;
                 inputStream = new FileStream(inputHandle, FileAccess.Write, 4096, false);
-                outputReader = new StreamReader(
-                    new FileStream(outputHandle, FileAccess.Read, 4096, false),
-                    new UTF8Encoding(false, false),
-                    true,
-                    4096,
-                    false);
+                terminalEncoding = GetTerminalEncoding();
+                outputDecoder = terminalEncoding.GetDecoder();
+                outputStream = new FileStream(outputHandle, FileAccess.Read, 4096, false);
 
                 outputThread = new Thread(ReadOutputLoop);
                 outputThread.IsBackground = true;
@@ -215,16 +197,17 @@ namespace Ccdi.Acceptance
 
         private void ReadOutputLoop()
         {
-            char[] buffer = new char[2048];
+            byte[] buffer = new byte[4096];
             try
             {
                 while (!disposed)
                 {
-                    int count = outputReader.Read(buffer, 0, buffer.Length);
+                    int count = outputStream.Read(buffer, 0, buffer.Length);
                     if (count <= 0) break;
+                    string text = DecodeTerminalBytes(buffer, count, outputDecoder, terminalEncoding);
                     lock (outputLock)
                     {
-                        output.Append(buffer, 0, count);
+                        output.Append(text);
                     }
                 }
             }
@@ -246,11 +229,21 @@ namespace Ccdi.Acceptance
             }
         }
 
+        public string GetOutputSince(int offset)
+        {
+            lock (outputLock)
+            {
+                if (offset < 0 || offset > output.Length)
+                    throw new ArgumentOutOfRangeException("offset");
+                return output.ToString(offset, output.Length - offset);
+            }
+        }
+
         public void Write(string text)
         {
             if (disposed) throw new ObjectDisposedException("ConPtyProcess");
             if (inputStream == null) throw new InvalidOperationException("ConPTY input is unavailable");
-            byte[] bytes = new UTF8Encoding(false).GetBytes(text ?? String.Empty);
+            byte[] bytes = (terminalEncoding ?? GetTerminalEncoding()).GetBytes(text ?? String.Empty);
             inputStream.Write(bytes, 0, bytes.Length);
             inputStream.Flush();
         }
@@ -280,6 +273,7 @@ namespace Ccdi.Acceptance
             uint result = WaitForSingleObject(processHandle, timeout);
             if (result == WAIT_OBJECT_0)
             {
+                ClosePseudoConsoleHandles();
                 if (outputThread != null) outputThread.Join(5000);
                 return true;
             }
@@ -335,14 +329,13 @@ namespace Ccdi.Acceptance
             catch { }
             try { if (inputStream != null) inputStream.Dispose(); } catch { }
             inputStream = null;
-            try { if (outputReader != null) outputReader.Dispose(); } catch { }
-            outputReader = null;
+            try { if (outputStream != null) outputStream.Dispose(); } catch { }
+            outputStream = null;
+            outputDecoder = null;
             try { if (outputThread != null) outputThread.Join(1000); } catch { }
             if (processHandle != IntPtr.Zero) { CloseHandle(processHandle); processHandle = IntPtr.Zero; }
             if (jobHandle != IntPtr.Zero) { CloseHandle(jobHandle); jobHandle = IntPtr.Zero; }
-            if (pseudoConsole != IntPtr.Zero) { ClosePseudoConsole(pseudoConsole); pseudoConsole = IntPtr.Zero; }
-            if (pseudoInputHandle != IntPtr.Zero) { CloseHandle(pseudoInputHandle); pseudoInputHandle = IntPtr.Zero; }
-            if (pseudoOutputHandle != IntPtr.Zero) { CloseHandle(pseudoOutputHandle); pseudoOutputHandle = IntPtr.Zero; }
+            ClosePseudoConsoleHandles();
             if (inputHandle != null && !inputHandle.IsClosed) inputHandle.Dispose();
             if (outputHandle != null && !outputHandle.IsClosed) outputHandle.Dispose();
         }
@@ -350,6 +343,99 @@ namespace Ccdi.Acceptance
         private static void Check(bool success, string operation)
         {
             if (!success) throw new Win32Exception(Marshal.GetLastWin32Error(), operation + " failed");
+        }
+
+        private void ClosePseudoConsoleHandles()
+        {
+            if (pseudoConsole != IntPtr.Zero) { ClosePseudoConsole(pseudoConsole); pseudoConsole = IntPtr.Zero; }
+            if (pseudoInputHandle != IntPtr.Zero) { CloseHandle(pseudoInputHandle); pseudoInputHandle = IntPtr.Zero; }
+            if (pseudoOutputHandle != IntPtr.Zero) { CloseHandle(pseudoOutputHandle); pseudoOutputHandle = IntPtr.Zero; }
+        }
+
+        private static Encoding GetTerminalEncoding()
+        {
+            return new UTF8Encoding(false, false);
+        }
+
+        private static Encoding GetFallbackEncoding(uint codePage)
+        {
+            if (codePage == 0) return null;
+            TryRegisterCodePagesProvider();
+            try
+            {
+                return Encoding.GetEncoding(
+                    checked((int)codePage),
+                    EncoderFallback.ReplacementFallback,
+                    DecoderFallback.ReplacementFallback);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static int CountReplacementCharacters(string value)
+        {
+            if (String.IsNullOrEmpty(value)) return 0;
+            int count = 0;
+            for (int i = 0; i < value.Length; i++)
+                if (value[i] == '\uFFFD') count++;
+            return count;
+        }
+
+        private static string DecodeTerminalBytes(byte[] buffer, int count, Decoder decoder, Encoding encoding)
+        {
+            if (decoder == null || encoding == null) return DecodeTerminalBytes(buffer, count);
+
+            char[] chars = new char[encoding.GetMaxCharCount(count)];
+            int charCount = decoder.GetChars(buffer, 0, count, chars, 0, false);
+            string decoded = new string(chars, 0, charCount);
+            if (CountReplacementCharacters(decoded) == 0) return decoded;
+
+            return DecodeTerminalBytes(buffer, count);
+        }
+
+        private static string DecodeTerminalBytes(byte[] buffer, int count)
+        {
+            Encoding primary = GetTerminalEncoding();
+            string best = primary.GetString(buffer, 0, count);
+            int bestReplacementCount = CountReplacementCharacters(best);
+            if (bestReplacementCount == 0) return best;
+
+            uint[] candidateCodePages = new uint[] { GetACP(), GetOEMCP(), 936, 54936, 950, 437, 1252, 65001 };
+            for (int i = 0; i < candidateCodePages.Length; i++)
+            {
+                uint codePage = candidateCodePages[i];
+                if (codePage == 0 || codePage == primary.CodePage) continue;
+                try
+                {
+                    Encoding candidate = GetFallbackEncoding(codePage);
+                    if (candidate == null) continue;
+                    string decoded = candidate.GetString(buffer, 0, count);
+                    int replacementCount = CountReplacementCharacters(decoded);
+                    if (replacementCount < bestReplacementCount)
+                    {
+                        best = decoded;
+                        bestReplacementCount = replacementCount;
+                        if (bestReplacementCount == 0) break;
+                    }
+                }
+                catch { }
+            }
+            return best;
+        }
+
+        private static void TryRegisterCodePagesProvider()
+        {
+            try
+            {
+                Type providerType = Type.GetType("System.Text.CodePagesEncodingProvider, System.Text.Encoding.CodePages");
+                if (providerType == null) return;
+                object provider = providerType.GetProperty("Instance").GetValue(null, null);
+                var registerMethod = typeof(Encoding).GetMethod("RegisterProvider", new Type[] { providerType.BaseType });
+                if (registerMethod != null) registerMethod.Invoke(null, new object[] { provider });
+            }
+            catch { }
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -440,11 +526,14 @@ namespace Ccdi.Acceptance
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool CloseHandle(IntPtr handle);
 
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr GetStdHandle(int standardHandle);
+        [DllImport("kernel32.dll")]
+        private static extern uint GetConsoleOutputCP();
 
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool SetStdHandle(int standardHandle, IntPtr handle);
+        [DllImport("kernel32.dll")]
+        private static extern uint GetOEMCP();
+
+        [DllImport("kernel32.dll")]
+        private static extern uint GetACP();
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern int CreatePseudoConsole(COORD size, IntPtr input, IntPtr output, uint flags, out IntPtr pseudoConsole);

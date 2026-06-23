@@ -283,17 +283,16 @@ try {
 
     try {
         $buildScript = Join-Path $ProjectRoot "scripts\build-release.ps1"
-        $releaseDir = Join-Path $ProjectRoot "release"
+        $releaseDir = Join-Path $tempRoot "release-output"
 
         $buildResult = Invoke-SandboxProcess -Label "build ZIP" `
             -FileName "powershell.exe" `
-            -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $buildScript, "-Version", $Version) `
+            -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $buildScript, "-Version", $Version, "-OutputDir", $releaseDir) `
             -WorkingDirectory $ProjectRoot -TimeoutSec 300
 
-        $zipFile = Get-ChildItem -Path $releaseDir -Filter "*.zip" |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1
-
-        if (-not $zipFile) { throw "ZIP file not found in release/" }
+        $zipPath = Join-Path $releaseDir "ClaudeCode-DeepSeek-本地配置助手-v$Version.zip"
+        if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) { throw "ZIP file not found: $zipPath" }
+        $zipFile = Get-Item -LiteralPath $zipPath
 
         # Forbidden entries
         Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -303,7 +302,7 @@ try {
             "scripts/build-release.ps1", "scripts/simulate-user-release.ps1",
             "scripts/package-release.ps1", "CLAUDE.md", ".gitignore", "report.txt"
         )
-        $zipEntries = $zip.Entries | ForEach-Object { $_.FullName }
+        $zipEntries = $zip.Entries | ForEach-Object { ([string]$_.FullName).Replace('\', '/') }
         $forbiddenFound = $false
         foreach ($entry in $zipEntries) {
             foreach ($fp in $forbiddenPatterns) {
@@ -319,8 +318,8 @@ try {
         }
 
         # SHA256
-        $shaFile = Join-Path $releaseDir "*.zip.sha256"
-        if (Get-ChildItem -Path $releaseDir -Filter "*.zip.sha256" -ErrorAction SilentlyContinue) {
+        $shaFile = "$zipPath.sha256"
+        if (Test-Path -LiteralPath $shaFile -PathType Leaf) {
             Write-SandboxPass "A2. SHA256 file generated"
         } else {
             Write-SandboxFail "A2. SHA256" "no .sha256 file"

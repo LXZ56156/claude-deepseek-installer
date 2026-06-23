@@ -12,7 +12,6 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $BuildScript = Join-Path $ProjectRoot "scripts\build-release.ps1"
-$ReleaseDir = Join-Path $ProjectRoot "release"
 $DummyApiKey = "sk-" + ("x" * 32)
 
 function Write-Check {
@@ -381,7 +380,7 @@ function Assert-ZipDoesNotContainForbiddenEntries {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
     try {
-        $entries = $zip.Entries | ForEach-Object { $_.FullName }
+        $entries = $zip.Entries | ForEach-Object { ([string]$_.FullName).Replace('\', '/') }
         $forbidden = @(
             ".git/",
             "logs/",
@@ -529,6 +528,7 @@ $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ccdi 用户 模拟 $PI
 $extractRoot = Join-Path $tempRoot "解压 目录 With Spaces"
 $testProfile = Join-Path $tempRoot "User Profile"
 $testDesktop = Join-Path $tempRoot "Desktop 桌面"
+$ReleaseDir = Join-Path $tempRoot 'release-output'
 
 if (Test-Path $tempRoot) {
     Remove-Item -Path $tempRoot -Recurse -Force
@@ -539,17 +539,14 @@ New-Item -ItemType Directory -Path $testDesktop -Force | Out-Null
 
 try {
     Write-Check "build release $Version"
-    & $powerShellExe -NoProfile -ExecutionPolicy Bypass -File $BuildScript -Version $Version
+    & $powerShellExe -NoProfile -ExecutionPolicy Bypass -File $BuildScript -Version $Version -OutputDir $ReleaseDir
     if ($LASTEXITCODE -ne 0) {
         throw "build-release.ps1 failed with exit code $LASTEXITCODE"
     }
 
-    $zip = Get-ChildItem -Path $ReleaseDir -Filter "*.zip" |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 1
-    if (-not $zip) {
-        throw "release ZIP not found"
-    }
+    $zipPath = Join-Path $ReleaseDir "ClaudeCode-DeepSeek-本地配置助手-v$Version.zip"
+    if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) { throw "release ZIP not found: $zipPath" }
+    $zip = Get-Item -LiteralPath $zipPath
 
     Assert-ZipDoesNotContainForbiddenEntries -ZipPath $zip.FullName
     Assert-ZipContainsRequiredEntries -ZipPath $zip.FullName

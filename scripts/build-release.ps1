@@ -95,7 +95,7 @@ $RequiredFiles = @(
 $missing = @()
 foreach ($file in $RequiredFiles) {
     $fullPath = Join-Path $ProjectRoot $file
-    if (-not (Test-Path $fullPath)) {
+    if (-not (Test-Path $fullPath -PathType Leaf)) {
         $missing += $file
         Write-Host "  [MISSING] $file" -ForegroundColor Red
     }
@@ -124,12 +124,10 @@ Write-Host ""
 
 Write-Host "[2/5] 准备输出目录..." -ForegroundColor Cyan
 
-if (Test-Path $OutputDir) {
-    Write-Host "  清理旧的 release 目录..."
-    Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue
-}
-
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+foreach ($oldTarget in @($ZipFilePath, $Sha256FilePath)) {
+    if (Test-Path -LiteralPath $oldTarget -PathType Leaf) { Remove-Item -LiteralPath $oldTarget -Force -ErrorAction Stop }
+}
 Write-Host "  输出目录: $OutputDir" -ForegroundColor Green
 Write-Host ""
 
@@ -288,10 +286,10 @@ function Test-SourceFileForApiKey {
     param([string]$FilePath, [string]$DisplayPath)
 
     try {
-        $content = Get-Content -Path $FilePath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        $content = Get-Content -LiteralPath $FilePath -Raw -Encoding UTF8 -ErrorAction Stop
         Add-ApiKeyHitsFromContent -Content $content -DisplayPath $DisplayPath -Hits $sourceApiHits
     }
-    catch { }
+    catch { throw "Source API Key scan failed for '$DisplayPath': $($_.Exception.Message)" }
 }
 
 $sourceTextFiles = @()
@@ -329,9 +327,7 @@ if ($sourceApiHits.Count -gt 0) {
     Write-Host "请确认以上文件中的 sk-... 是否为真实 API Key。" -ForegroundColor Yellow
     Write-Host "如果是真实 Key，请立即删除并到 DeepSeek 平台重新生成。" -ForegroundColor Yellow
     Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-    if (Test-Path $OutputDir) {
-        Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    Remove-Item -LiteralPath $ZipFilePath, $Sha256FilePath -Force -ErrorAction SilentlyContinue
     exit 1
 }
 
@@ -342,33 +338,20 @@ foreach ($entry in $AllowedEntries) {
     $sourcePath = Join-Path $ProjectRoot $entry
     $destPath = Join-Path $stagingDir $entry
 
-    if (-not (Test-Path $sourcePath)) {
+    if (-not (Test-Path $sourcePath -PathType Leaf)) {
         Write-Host "  错误: 白名单条目不存在: $entry" -ForegroundColor Red
         Write-Host "  正式 release 不允许缺失必要文件，请检查项目完整性。" -ForegroundColor Yellow
         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-        if (Test-Path $OutputDir) { Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue }
+        Remove-Item -LiteralPath $ZipFilePath, $Sha256FilePath -Force -ErrorAction SilentlyContinue
         exit 1
     }
 
-    if (Test-Path $sourcePath -PathType Container) {
-        # 目录：递归复制全部内容
-        $destParent = Split-Path -Parent $destPath
-        if (-not (Test-Path $destParent)) {
-            New-Item -ItemType Directory -Path $destParent -Force | Out-Null
-        }
-        Copy-Item -Path $sourcePath -Destination $destPath -Recurse -Force
-        $fileCount = (Get-ChildItem -Path $destPath -Recurse -File -ErrorAction SilentlyContinue).Count
-        Write-Host "  [ADD] $entry/ ($fileCount files)" -ForegroundColor Green
+    $destParent = Split-Path -Parent $destPath
+    if ($destParent -and -not (Test-Path $destParent)) {
+        New-Item -ItemType Directory -Path $destParent -Force | Out-Null
     }
-    else {
-        # 单个文件
-        $destParent = Split-Path -Parent $destPath
-        if ($destParent -and -not (Test-Path $destParent)) {
-            New-Item -ItemType Directory -Path $destParent -Force | Out-Null
-        }
-        Copy-Item -Path $sourcePath -Destination $destPath -Force
-        Write-Host "  [ADD] $entry" -ForegroundColor Green
-    }
+    Copy-Item -LiteralPath $sourcePath -Destination $destPath -Force -ErrorAction Stop
+    Write-Host "  [ADD] $entry" -ForegroundColor Green
 }
 
 # 输出打包摘要
@@ -410,7 +393,6 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
             Remove-Item $ZipFilePath -Force -ErrorAction SilentlyContinue
             Remove-Item $Sha256FilePath -Force -ErrorAction SilentlyContinue
             Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-            if (Test-Path $OutputDir) { Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue }
             exit 1
         }
         if ($nonAscii) {
@@ -418,7 +400,6 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
             Remove-Item $ZipFilePath -Force -ErrorAction SilentlyContinue
             Remove-Item $Sha256FilePath -Force -ErrorAction SilentlyContinue
             Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-            if (Test-Path $OutputDir) { Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue }
             exit 1
         }
     }
@@ -454,7 +435,6 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
         Remove-Item $ZipFilePath -Force -ErrorAction SilentlyContinue
         Remove-Item $Sha256FilePath -Force -ErrorAction SilentlyContinue
         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-        if (Test-Path $OutputDir) { Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue }
         exit 1
     }
 
@@ -493,7 +473,6 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
         Remove-Item $ZipFilePath -Force -ErrorAction SilentlyContinue
         Remove-Item $Sha256FilePath -Force -ErrorAction SilentlyContinue
         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-        if (Test-Path $OutputDir) { Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue }
         exit 1
     }
 
@@ -562,11 +541,11 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
         param([string]$FilePath, [string]$DisplayPath)
 
         try {
-            $content = Get-Content -Path $FilePath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+            $content = Get-Content -LiteralPath $FilePath -Raw -Encoding UTF8 -ErrorAction Stop
             Add-ApiKeyHitsFromContent -Content $content -DisplayPath $DisplayPath -Hits $apiKeyHits
         }
         catch {
-            Write-Host "    [WARN] 无法扫描: $DisplayPath" -ForegroundColor DarkGray
+            throw "Staging API Key scan failed for '$DisplayPath': $($_.Exception.Message)"
         }
     }
 
@@ -603,9 +582,7 @@ Write-Host "  Staging 目录共 $totalFiles 个文件" -ForegroundColor Cyan
 
         # 清理临时目录和输出文件
         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-        if (Test-Path $OutputDir) {
-            Remove-Item -Path $OutputDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        Remove-Item -LiteralPath $ZipFilePath, $Sha256FilePath -Force -ErrorAction SilentlyContinue
         exit 1
     }
 
@@ -646,7 +623,7 @@ if (-not $SkipSha256) {
         Write-Host "  SHA256 文件: $Sha256FilePath" -ForegroundColor Green
     }
     catch {
-        Write-Host "  SHA256 生成失败: $($_.Exception.Message)" -ForegroundColor Yellow
+        throw "SHA256 generation failed: $($_.Exception.Message)"
     }
 }
 else {
@@ -661,7 +638,8 @@ Write-Host ""
 Write-Host "[5/5] 验证 ZIP 内容..." -ForegroundColor Cyan
 
 $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipFilePath)
-$entries = $zip.Entries | ForEach-Object { $_.FullName } | Sort-Object
+$entries = @($zip.Entries | ForEach-Object { ([string]$_.FullName).Replace('\', '/') } | Sort-Object)
+$expectedEntries = @($AllowedEntries | ForEach-Object { ([string]$_).Replace('\', '/') } | Sort-Object)
 
 $forbiddenPatterns = @(
     ".git/",
@@ -682,6 +660,19 @@ foreach ($entry in $entries) {
         }
     }
 }
+
+$entryDifference = @(Compare-Object -ReferenceObject $expectedEntries -DifferenceObject $entries)
+if ($entryDifference.Count -gt 0) {
+    foreach ($difference in $entryDifference) {
+        $issues += "$($difference.SideIndicator) $($difference.InputObject)"
+        Write-Host "  [WARN] ZIP whitelist mismatch: $($difference.SideIndicator) $($difference.InputObject)" -ForegroundColor Yellow
+    }
+}
+if ($entries.Count -ne 36 -or $expectedEntries.Count -ne 36) {
+    $issues += "Expected exactly 36 files; allowlist=$($expectedEntries.Count) zip=$($entries.Count)"
+}
+$promptEntries = @($entries | Where-Object { $_ -match '^提示词模板/[^/]+\.txt$' })
+if ($promptEntries.Count -ne 8) { $issues += "Expected exactly 8 prompt files; found $($promptEntries.Count)" }
 
 Write-Host ""
 Write-Host "  ZIP 包含 $($zip.Entries.Count) 个条目" -ForegroundColor Green

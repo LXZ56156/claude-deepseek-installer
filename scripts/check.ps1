@@ -5482,6 +5482,23 @@ if ($acceptanceAllText -match '(?i)New-LocalUser|Remove-LocalUser|Windows\s*Sand
 foreach ($term in @('CreatePseudoConsole', 'PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE', 'PROC_THREAD_ATTRIBUTE_JOB_LIST', 'JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE', 'TerminateJobObject')) {
     if ($acceptanceDriverText -notmatch [regex]::Escape($term)) { throw "ConPTY driver missing process-control primitive: $term" }
 }
+if ($acceptanceDriverText -match '\bSetStdHandle\b' -or
+    $acceptanceDriverText -notmatch 'STARTF_USESTDHANDLES' -or
+    $acceptanceDriverText -notmatch 'hStdInput\s*=\s*IntPtr\.Zero' -or
+    $acceptanceDriverText -notmatch 'hStdOutput\s*=\s*IntPtr\.Zero' -or
+    $acceptanceDriverText -notmatch 'hStdError\s*=\s*IntPtr\.Zero') {
+    throw "ConPTY driver must isolate child std handles per process without mutating process-global std handles"
+}
+if ($acceptanceDriverText -notmatch 'ClosePseudoConsoleHandles\(\)' -or
+    $acceptanceRunnerText -notmatch 'OutputCompleted') {
+    throw "ConPTY final output scan must close the pseudo console and wait for the reader before accepting final output"
+}
+if ($acceptanceDriverText -notmatch 'new UTF8Encoding\(false,\s*false\)' -or
+    $acceptanceDriverText -notmatch '\.GetDecoder\(\)' -or
+    $acceptanceDriverText -notmatch 'GetMaxCharCount' -or
+    $acceptanceDriverText -notmatch '(?s)GetACP\(\).*GetOEMCP\(\).*936.*54936.*950.*437.*1252.*65001') {
+    throw "ConPTY driver must decode pseudo-console output as stateful UTF-8 with legacy codepage fallback"
+}
 if ($acceptanceRunnerText -match 'RedirectStandardInput|StandardInput\.Write' -or
     $acceptanceRunnerText -notmatch '\[regex\]::Match\(' -or
     $acceptanceRunnerText -notmatch '\[SECRET SENT\]' -or
@@ -5523,20 +5540,49 @@ if ($acceptanceEnvironmentText -notmatch '\$errors\.Add\("UNOWNED_PROCESS' -or
     throw "Residual acceptance processes must block cleanup and final baseline equivalence"
 }
 if ($acceptanceFunctionalText -match 'SetEnvironmentVariable\(''Path'',\$oldUserPath,''User''\)' -or
-    $acceptanceFunctionalText -notmatch 'TestSafe can never authorize automatic restart' -or
+    $acceptanceFunctionalText -notmatch "Mode = 'TestSafe'; Install = \`$true; Restart = \`$true" -or
+    $acceptanceFunctionalText -notmatch 'authorization blocks registration and restart:' -or
     $acceptanceFunctionalText -notmatch 'resume control flow removes checkpoint and executes only following scenarios' -or
-    $acceptanceFunctionalText -notmatch 'task deletion failure preserves resume state and evidence') {
+    $acceptanceFunctionalText -notmatch "foreach \(\`$removalFault in @\('Query','Timeout','NonZero'" -or
+    $acceptanceFunctionalText -notmatch 'failure preserves state and failure evidence') {
     throw "Functional acceptance must not write real user PATH and must prove TestSafe cannot restart"
 }
-if ($acceptanceEnvironmentText -notmatch 'Only SchemaVersion 3 is accepted' -or
+if ($acceptanceEnvironmentText -notmatch 'Assert-AcceptanceResumeState' -or
+    $acceptanceEnvironmentText -notmatch "SchemaVersion'.*integer 3" -or
     $acceptanceEnvironmentText -notmatch 'Test-AcceptanceScheduledTaskExists' -or
     $acceptanceEnvironmentText -notmatch '0x80070002' -or
     $acceptanceEnvironmentText -notmatch 'ResumeCleanupReport' -or
+    $acceptanceEnvironmentText -notmatch 'ResumeRegistrationReport' -or
     $acceptanceEnvironmentText -notmatch "Status = 'Deleted'") {
     throw "Resume state version and scheduled-task cleanup must fail closed with persistent evidence"
 }
+if ($acceptanceOrchestratorText -notmatch 'Complete-VmAcceptanceLifecycle' -or
+    $acceptanceOrchestratorText -notmatch 'Write-VmSummaryArtifactsTransactional' -or
+    $acceptanceOrchestratorText -notmatch 'final resume cleanup failed' -or
+    $acceptanceFunctionalText -notmatch 'PASS summary write failure retries only as FAIL') {
+    throw "Final acceptance PASS must remain gated by evidence, strict resume cleanup, transactional summaries, and failure injection"
+}
+$validateAcceptanceText = Get-Content -LiteralPath (Join-Path $RootDir 'scripts\validate.ps1') -Raw -Encoding UTF8
+if ($validateAcceptanceText -notmatch 'scripts/test-vm-acceptance\.ps1 \(functional\)' -or
+    $validateAcceptanceText -notmatch "releaseSimulationPassed") {
+    throw "Full validation must execute acceptance functional tests and Release must not assume a failed simulation passed"
+}
+$buildAcceptanceText = Get-Content -LiteralPath (Join-Path $RootDir 'scripts\build-release.ps1') -Raw -Encoding UTF8
+if ($buildAcceptanceText -notmatch 'Expected exactly 36 files' -or
+    $buildAcceptanceText -notmatch 'Expected exactly 8 prompt files' -or
+    $buildAcceptanceText -notmatch 'Compare-Object -ReferenceObject \$expectedEntries') {
+    throw "Release build must enforce the exact 36-file allowlist and 8 prompt files"
+}
+if ($buildAcceptanceText -match 'Remove-Item\s+-Path\s+\$OutputDir\s+-Recurse') {
+    throw "Release build must never recursively delete the caller-provided OutputDir"
+}
 foreach ($term in @('.codex', 'settings.json', 'UserPath', 'MachinePath', 'NpmGlobal', 'Winget', 'Registry', 'ScheduledTasks', 'Services', 'FullSHA', 'Invoke-AcceptanceCapturedCommand', 'TimedOut')) {
     if ($acceptanceEnvironmentText -notmatch [regex]::Escape($term)) { throw "Acceptance baseline or bounded probe missing: $term" }
+}
+if ($acceptanceEnvironmentText -notmatch '\$stdoutTask\.Wait\(2000\)' -or
+    $acceptanceEnvironmentText -notmatch '\$stderrTask\.Wait\(2000\)' -or
+    $acceptanceEnvironmentText -notmatch 'TimeoutSec 180') {
+    throw "Acceptance captured commands must preserve timeout stdout/stderr and give winget inventory a realistic bounded timeout"
 }
 if (-not $acceptanceEnvironmentText.Contains('_git_cache\.json') -or
     -not $acceptanceEnvironmentText.Contains('(-not [bool]$beforeFiles[$_].Exists -and [bool]$afterFiles[$_].Exists)')) {
@@ -5633,6 +5679,7 @@ if (Test-Path $releaseZip) {
     $zip = [System.IO.Compression.ZipFile]::OpenRead($releaseZip)
     try {
         $zipEntryNames = $zip.Entries | ForEach-Object { $_.FullName.Replace('\', '/').TrimEnd('/') }
+        if (@($zipEntryNames).Count -ne 36) { throw "Release ZIP entry count must be 36, actual: $(@($zipEntryNames).Count)" }
 
         # 1. 必须存在的买家文档
         $mustExistInZip = @(
@@ -5738,6 +5785,7 @@ if (Test-Path $releaseZip) {
     Write-Host "[check] v1.3.3 release ZIP content check OK"
 }
 else {
+    if ($strictReleaseCheck) { throw "Release ZIP required by -ReleaseCheck but not found: $releaseZip" }
     Write-Host "[check] Release ZIP 未找到，跳过 ZIP 内容检查"
 }
 

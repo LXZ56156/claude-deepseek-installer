@@ -129,6 +129,23 @@ function Write-ReportLine {
     [void]$reportLines.Add($Line)
 }
 
+function ConvertTo-MatrixArgument {
+    param([AllowNull()][string]$Argument)
+    if ($null -eq $Argument -or $Argument.Length -eq 0) { return '""' }
+    if ($Argument -notmatch '[\s"]') { return $Argument }
+    $builder = New-Object Text.StringBuilder
+    [void]$builder.Append('"'); $slashes = 0
+    foreach ($character in $Argument.ToCharArray()) {
+        if ($character -eq '\') { $slashes++; continue }
+        if ($character -eq '"') { [void]$builder.Append(('\' * ($slashes * 2 + 1))); [void]$builder.Append('"') }
+        else { if ($slashes) { [void]$builder.Append(('\' * $slashes)) }; [void]$builder.Append($character) }
+        $slashes = 0
+    }
+    if ($slashes) { [void]$builder.Append(('\' * ($slashes * 2))) }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
 function Invoke-ToolCheck {
     param(
         [string]$Name,
@@ -138,31 +155,23 @@ function Invoke-ToolCheck {
     )
 
     Write-Host ("[matrix] Running: {0}" -f $Name) -ForegroundColor Cyan
-
-    $tmpOut = Join-Path $env:TEMP ("ccdi_matrix_stdout_{0}_{1}.tmp" -f $PID, (Get-Random))
-    $tmpErr = Join-Path $env:TEMP ("ccdi_matrix_stderr_{0}_{1}.tmp" -f $PID, (Get-Random))
-
+    $proc = $null
     try {
-        # Build powershell command line
-        $psArgs = @()
-        foreach ($a in @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $ToolPath) + $Arguments) {
-            if ($a -match '[\s"]') {
-                $psArgs += "`"$($a -replace '"','""')`""
-            } else {
-                $psArgs += $a
-            }
-        }
-        # Use cmd.exe /c for reliable redirection + real PID via Process
+        $psArgs = (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ToolPath) + @($Arguments) | ForEach-Object { ConvertTo-MatrixArgument ([string]$_) }) -join ' '
         $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = "cmd.exe"
-        $psi.Arguments = "/c `"`"powershell.exe`" $($psArgs -join ' ') > `"$tmpOut`" 2> `"$tmpErr`"`""
+        $psi.FileName = 'powershell.exe'
+        $psi.Arguments = $psArgs
         $psi.UseShellExecute = $false
         $psi.CreateNoWindow = $true
         $psi.WorkingDirectory = $ScriptDir
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
 
         $proc = New-Object System.Diagnostics.Process
         $proc.StartInfo = $psi
         [void]$proc.Start()
+        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+        $stderrTask = $proc.StandardError.ReadToEndAsync()
 
         $finished = $proc.WaitForExit($TimeoutSec * 1000)
 
@@ -175,18 +184,21 @@ function Invoke-ToolCheck {
             if (-not $proc.HasExited) {
                 try { Stop-Process -Id $realPid -Force -ErrorAction SilentlyContinue } catch { }
             }
+            [void]$proc.WaitForExit(5000)
+            [void]$stdoutTask.Wait(5000); [void]$stderrTask.Wait(5000)
             return @{
                 Name     = $Name
                 ExitCode = -2
                 Success  = $false
-                Output   = ""
-                Error    = "TIMEOUT: $Name after ${TimeoutSec}s (PID=$realPid)"
+                Output   = if ($stdoutTask.IsCompleted) { [string]$stdoutTask.Result } else { '' }
+                Error    = "TIMEOUT: $Name after ${TimeoutSec}s (PID=$realPid)`n$($(if ($stderrTask.IsCompleted) { [string]$stderrTask.Result } else { '' }))"
             }
         }
 
+        [void]$stdoutTask.Wait(5000); [void]$stderrTask.Wait(5000)
         $exitCode = $proc.ExitCode
-        $stdout = if (Test-Path $tmpOut) { Get-Content $tmpOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue } else { "" }
-        $stderr = if (Test-Path $tmpErr) { Get-Content $tmpErr -Raw -Encoding UTF8 -ErrorAction SilentlyContinue } else { "" }
+        $stdout = if ($stdoutTask.IsCompleted) { [string]$stdoutTask.Result } else { '' }
+        $stderr = if ($stderrTask.IsCompleted) { [string]$stderrTask.Result } else { '' }
 
         return @{
             Name     = $Name
@@ -205,9 +217,7 @@ function Invoke-ToolCheck {
             Error    = $_.Exception.Message
         }
     }
-    finally {
-        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
-    }
+    finally { if ($proc) { $proc.Dispose() } }
 }
 
 # Main

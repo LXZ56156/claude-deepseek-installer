@@ -44,7 +44,7 @@ function Write-AcceptanceInfo {
 function ConvertTo-WindowsCommandLineArgument {
     param([AllowNull()][string]$Argument)
     if ($null -eq $Argument -or $Argument.Length -eq 0) { return '""' }
-    if ($Argument -notmatch '[\s"]') { return $Argument }
+    if ($Argument -notmatch '[\s"&|<>^()%!]') { return $Argument }
     $result = New-Object System.Text.StringBuilder
     [void]$result.Append('"')
     $backslashes = 0
@@ -73,6 +73,40 @@ function ConvertTo-VisibleTerminalText {
     $value = [regex]::Replace($value, "`e\[[0-?]*[ -/]*[@-~]", "")
     $value = $value -replace "`r(?!`n)", "`n"
     return $value
+}
+
+function ConvertTo-IncrementalVisibleTerminalText {
+    param(
+        [AllowNull()][string]$Text,
+        [AllowNull()][string]$Carry
+    )
+    $combined = [string]$Carry + [string]$Text
+    if ($combined.Length -eq 0) { return [PSCustomObject]@{ Text = ""; Carry = "" } }
+
+    # Hold an incomplete terminal control sequence (or trailing CR) until the next
+    # ConPTY read so escape sequences split across reads cannot shift scan offsets.
+    $carryStart = $combined.Length
+    foreach ($pattern in @(
+        "`e\](?s:(?:(?!`a|`e\\).)*)$",
+        "`e\[[0-?]*[ -/]*$",
+        "`e$"
+    )) {
+        $match = [regex]::Match($combined, $pattern)
+        if ($match.Success -and $match.Index -lt $carryStart) { $carryStart = $match.Index }
+    }
+    if ($carryStart -eq $combined.Length -and $combined.EndsWith("`r")) {
+        $carryStart--
+    }
+    elseif ($carryStart -gt 0 -and $combined[$carryStart - 1] -eq "`r") {
+        $carryStart--
+    }
+
+    $complete = if ($carryStart -gt 0) { $combined.Substring(0, $carryStart) } else { "" }
+    $nextCarry = if ($carryStart -lt $combined.Length) { $combined.Substring($carryStart) } else { "" }
+    return [PSCustomObject]@{
+        Text = ConvertTo-VisibleTerminalText -Text $complete
+        Carry = $nextCarry
+    }
 }
 
 function Get-SettingsSnapshot {
@@ -223,7 +257,11 @@ function Invoke-ConPtyScenario {
             if (Test-Path -LiteralPath $removePath) { Remove-Item -LiteralPath $removePath -Force -Recurse }
         }
     }
-    $entryPath = Join-Path $scenarioReleaseRoot ([string]$Scenario.entry)
+    $entryRelative = [string]$Scenario.entry
+    if ([IO.Path]::IsPathRooted($entryRelative) -or $entryRelative -match '[&|<>^()%!]' ) { throw "Scenario entry is not a safe package-relative path: $entryRelative" }
+    $releaseFull = [IO.Path]::GetFullPath($scenarioReleaseRoot).TrimEnd('\')
+    $entryPath = [IO.Path]::GetFullPath((Join-Path $releaseFull $entryRelative))
+    if (-not $entryPath.StartsWith($releaseFull + '\', [StringComparison]::OrdinalIgnoreCase)) { throw "Scenario entry escapes the package root: $entryRelative" }
     if (-not (Test-Path -LiteralPath $entryPath -PathType Leaf)) { throw "Scenario entry missing: $entryPath" }
 
     $scenarioEnvironment = @{} + $Environment
@@ -234,12 +272,18 @@ function Invoke-ConPtyScenario {
     $process = $null
     $events = New-Object System.Collections.ArrayList
     $startedAt = Get-Date
+    $rawScanOffset = 0
+    $terminalCarry = ""
+    $scanBuffer = ""
     $scanOffset = 0
+    $maxScanBuffer = 65536
     $responderCounts = @{}
     $failurePatterns = @('脚本执行过程中发生未预期的错误', 'TIMEOUT:')
 
     try {
-        $commandLine = (ConvertTo-WindowsCommandLineArgument $env:ComSpec) + " /d /s /c call " + (ConvertTo-WindowsCommandLineArgument $entryPath)
+        # The process working directory is already the package root. Using the relative
+        # entry avoids cmd.exe expanding metacharacters from an arbitrary extraction path.
+        $commandLine = (ConvertTo-WindowsCommandLineArgument $env:ComSpec) + " /d /s /c call " + (ConvertTo-WindowsCommandLineArgument $entryRelative)
         $process = [Ccdi.Acceptance.ConPtyProcess]::Start($commandLine, $scenarioReleaseRoot, 160, 50)
         Add-InteractionEvent -Events $events -Type "start" -Rule ([string]$Scenario.id) -Value "PID=$($process.ProcessId); JobAssigned=$($process.JobAssigned)"
         $scenarioDeadline = $startedAt.AddSeconds([int]$Scenario.timeoutSec)
@@ -257,9 +301,15 @@ function Invoke-ConPtyScenario {
                 if ((Get-Date) -gt $scenarioDeadline) { throw "Scenario total timeout waiting for: $($step.expect)" }
                 if ((Get-Date) -gt $stepDeadline) { throw "Step timeout after ${stepTimeout}s waiting for: $($step.expect)" }
 
-                $visible = ConvertTo-VisibleTerminalText -Text $process.GetOutput()
-                if ($scanOffset -gt $visible.Length) { $scanOffset = 0 }
-                $segment = $visible.Substring($scanOffset)
+                $rawChunk = $process.GetOutputSince($rawScanOffset)
+                if ($rawChunk.Length -gt 0) {
+                    $rawScanOffset += $rawChunk.Length
+                    $converted = ConvertTo-IncrementalVisibleTerminalText -Text $rawChunk -Carry $terminalCarry
+                    $terminalCarry = [string]$converted.Carry
+                    if ($converted.Text) { $scanBuffer += [string]$converted.Text }
+                }
+                if ($scanOffset -gt $scanBuffer.Length) { $scanOffset = 0 }
+                $segment = $scanBuffer.Substring($scanOffset)
 
                 foreach ($failurePattern in $failurePatterns) {
                     if ($segment -match $failurePattern) { throw "Failure text detected: $failurePattern" }
@@ -304,6 +354,14 @@ function Invoke-ConPtyScenario {
                     continue
                 }
 
+                if ($scanOffset -gt 0) {
+                    $scanBuffer = $scanBuffer.Substring($scanOffset)
+                    $scanOffset = 0
+                }
+                if ($scanBuffer.Length -gt $maxScanBuffer) {
+                    $scanBuffer = $scanBuffer.Substring($scanBuffer.Length - $maxScanBuffer)
+                }
+
                 if ($process.HasExited) {
                     throw "Process exited before expected prompt: $($step.expect); exit=$($process.ExitCode)"
                 }
@@ -318,8 +376,12 @@ function Invoke-ConPtyScenario {
         if (@($Scenario.expectedExitCodes) -notcontains $exitCode) {
             throw "Unexpected exit code $exitCode; expected $(@($Scenario.expectedExitCodes) -join ', ')"
         }
+        if (-not $process.OutputCompleted) { throw "ConPTY output reader did not complete after process exit" }
 
         $visibleOutput = ConvertTo-VisibleTerminalText -Text $process.GetOutput()
+        foreach ($failurePattern in $failurePatterns) {
+            if ($visibleOutput -match $failurePattern) { throw "Failure text detected after final interaction: $failurePattern" }
+        }
         foreach ($required in @($Scenario.required)) {
             if ($visibleOutput -notmatch [regex]::Escape([string]$required)) { throw "Required output missing: $required" }
         }
@@ -452,6 +514,50 @@ Write-Host -NoNewline '重复提示>'
         try { Stop-Process -Id $childPid -Force -ErrorAction SilentlyContinue } catch { }
         throw "ConPTY timeout did not terminate the child process tree: PID=$childPid"
     }
+
+    $finalFailureDir = Join-Path $selfTestDir "final-failure"
+    New-Item -ItemType Directory -Path $finalFailureDir -Force | Out-Null
+    @'
+Write-Host 'BEFORE_FINAL_FAILURE'
+Write-Host 'Press any key to close this window...'
+cmd.exe /d /c pause `>nul
+Write-Host '脚本执行过程中发生未预期的错误'
+'@ | Set-Content -LiteralPath (Join-Path $finalFailureDir "final-failure.ps1") -Encoding UTF8
+    "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0final-failure.ps1`"`r`n" | Set-Content -LiteralPath (Join-Path $finalFailureDir "final-failure.cmd") -Encoding ASCII
+    $finalFailureScenario = [PSCustomObject]@{
+        id = "driver-final-failure-self-test"; entry = "final-failure.cmd"; timeoutSec = 15; responders = @()
+        steps = @([PSCustomObject]@{ expect = "Press any key to close this window"; send = " `r"; delayMs = 100; timeoutSec = 5 })
+        required = @("BEFORE_FINAL_FAILURE"); forbidden = @($DummyApiKey); expectedExitCodes = @(0)
+    }
+    $finalFailureResult = Invoke-ConPtyScenario -Scenario $finalFailureScenario -ReleaseRoot $finalFailureDir -Secret $DummyApiKey -Environment @{} -ScenarioEvidenceDir (Join-Path $EvidenceDir "driver-final-failure-self-test")
+    if ($finalFailureResult.Status -ne "FAIL" -or $finalFailureResult.Error -notmatch 'Failure text detected after final interaction') {
+        throw "Fatal output emitted after the final prompt must fail the scenario"
+    }
+
+    $largeOutputDir = Join-Path $selfTestDir "large-output"
+    New-Item -ItemType Directory -Path $largeOutputDir -Force | Out-Null
+    @'
+$chunk = 'X' * 8192
+for ($index = 0; $index -lt 384; $index++) {
+    [Console]::Out.Write($chunk)
+    [Console]::Out.Flush()
+}
+[Console]::Out.Write("`e[3")
+[Console]::Out.Flush()
+Start-Sleep -Milliseconds 100
+[Console]::Out.Write('2m')
+Write-Host -NoNewline '多兆输出完成>'
+$value = Read-Host
+Write-Host "LARGE_OUTPUT_VALUE=$value"
+'@ | Set-Content -LiteralPath (Join-Path $largeOutputDir "large-output.ps1") -Encoding UTF8
+    "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0large-output.ps1`"`r`n" | Set-Content -LiteralPath (Join-Path $largeOutputDir "large-output.cmd") -Encoding ASCII
+    $largeOutputScenario = [PSCustomObject]@{
+        id = "driver-large-output-self-test"; entry = "large-output.cmd"; timeoutSec = 30; responders = @()
+        steps = @([PSCustomObject]@{ expect = "多兆输出完成>"; send = "Y`r"; timeoutSec = 20 })
+        required = @("LARGE_OUTPUT_VALUE=Y"); forbidden = @($DummyApiKey); expectedExitCodes = @(0)
+    }
+    $largeOutputResult = Invoke-ConPtyScenario -Scenario $largeOutputScenario -ReleaseRoot $largeOutputDir -Secret $DummyApiKey -Environment @{} -ScenarioEvidenceDir (Join-Path $EvidenceDir "driver-large-output-self-test")
+    if ($largeOutputResult.Status -ne "PASS") { throw "Multi-megabyte incremental output self-test failed: $($largeOutputResult.Error)" }
 }
 
 function Assert-NoSecretInEvidence {

@@ -33,6 +33,191 @@ function New-TestSnapshot {
     }
 }
 
+function New-TestResumeState {
+    param(
+        [string]$RunId = '20260623-120000-001',
+        [ValidateSet('TestSafe', 'Live')][string]$Mode = 'Live',
+        [int]$NextScenarioIndex = 1,
+        [string[]]$ScenarioIds
+    )
+    $stageResult = [ordered]@{
+        Name = 'stage-before'; ExitCode = 0; TimedOut = $false; DurationSec = 1.25
+        Stdout = 'stage-before.stdout.txt'; Stderr = 'stage-before.stderr.txt'; Result = 'stage-before.result.json'
+    }
+    if (-not $ScenarioIds) {
+        $generatedIds = New-Object Collections.ArrayList
+        for ($i = 0; $i -lt $NextScenarioIndex; $i++) { [void]$generatedIds.Add("scenario-before-$i") }
+        $ScenarioIds = @($generatedIds)
+    }
+    if ($ScenarioIds.Count -ne $NextScenarioIndex) { throw "Test fixture ScenarioIds count must match NextScenarioIndex" }
+    $scenarioResults = New-Object Collections.ArrayList
+    foreach ($scenarioId in @($ScenarioIds)) {
+        [void]$scenarioResults.Add([ordered]@{ Id = $scenarioId; Mode = $Mode; Status = 'PASS'; Stage = $stageResult; Error = $null })
+    }
+    [ordered]@{
+        SchemaVersion = 3; RunId = $RunId; Mode = $Mode; Version = '1.3.3'; CredentialTarget = 'TEST_TARGET'
+        AcknowledgeRealInstall = ($Mode -eq 'Live'); AcknowledgeRestart = ($Mode -eq 'Live')
+        Phase = 'resume-cleanup-pending'; NextScenarioIndex = $NextScenarioIndex
+        StageResults = @($stageResult)
+        ScenarioResults = @($scenarioResults)
+        CleanupReports = @([ordered]@{
+            Scenario = 'cleanup-before'; Phase = 'post'
+            Report = [ordered]@{
+                Success = $true; Actions = @('removed-owned-state'); Errors = @(); Reports = @('cleanup-evidence.json')
+                Ownership = New-AcceptanceOwnership
+            }
+        })
+        PendingOwnership = New-AcceptanceOwnership
+        Error = $null; SavedAt = '2026-06-23T12:00:00.0000000+08:00'
+    }
+}
+
+function Copy-TestResumeState {
+    param($State)
+    return ($State | ConvertTo-Json -Depth 30 | ConvertFrom-Json)
+}
+
+function Write-TestResumeState {
+    param($Paths, $State)
+    New-Item -ItemType Directory -Path $Paths.Root -Force | Out-Null
+    Write-AcceptanceJsonFileAtomic -Path $Paths.ResumeState -Value $State
+}
+
+function Invoke-TestRegistrationFault {
+    param(
+        [string]$Name,
+        [ValidateSet('None','State','UserTask','Bootstrap','SystemTask','VerifyMissing','VerifyMismatch','Query','QueryAfterRegistration','Report','ExistingSameState','ExistingDifferentState','ExistingCorruptState')][string]$Fault = 'None',
+        [switch]$RollbackFails,
+        [switch]$SeedPreexistingTasks
+    )
+    $paths = Get-AcceptanceControlPaths -ControlRoot (Join-Path $testRoot "registration-$Name") -RunId '20260623-120000-001'
+    New-Item -ItemType Directory -Path $paths.Root -Force | Out-Null
+    $state = New-TestResumeState
+    if ($Fault -eq 'ExistingSameState') { Write-AcceptanceJsonFileAtomic -Path $paths.ResumeState -Value $state }
+    elseif ($Fault -eq 'ExistingDifferentState') { Write-AcceptanceJsonFileAtomic -Path $paths.ResumeState -Value (New-TestResumeState -RunId '20260623-120000-999') }
+    elseif ($Fault -eq 'ExistingCorruptState') { [IO.File]::WriteAllText($paths.ResumeState, '{CORRUPT', [Text.Encoding]::UTF8) }
+    $existingStateBytes = if (Test-Path -LiteralPath $paths.ResumeState) { [IO.File]::ReadAllBytes($paths.ResumeState) } else { $null }
+    $tasks = @{}
+    if ($SeedPreexistingTasks) {
+        $tasks[$paths.ResumeUserTask] = [PSCustomObject]@{ Exists = $true; Execute = 'powershell.exe'; Arguments = 'PREEXISTING-USER' }
+        $tasks[$paths.ResumeTask] = [PSCustomObject]@{ Exists = $true; Execute = 'powershell.exe'; Arguments = 'PREEXISTING-SYSTEM' }
+    }
+    $events = New-Object Collections.ArrayList
+    $counters = @{ Probe = 0 }
+    $stateWriter = {
+        param($Path, $Value)
+        [void]$events.Add('write-state')
+        if ($Fault -eq 'State') { throw 'INJECTED state write failure' }
+        Write-AcceptanceJsonFileAtomic -Path $Path -Value $Value
+    }
+    $userRegistrar = {
+        param($Spec)
+        [void]$events.Add('register-user')
+        if ($Fault -eq 'UserTask') { throw 'INJECTED user task registration failure' }
+        $tasks[$Spec.UserTaskName] = [PSCustomObject]@{ Exists = $true; Execute = 'powershell.exe'; Arguments = $Spec.Arguments }
+    }
+    $bootstrapWriter = {
+        param($Path, $Text)
+        [void]$events.Add('write-bootstrap')
+        if ($Fault -eq 'Bootstrap') { throw 'INJECTED bootstrap write failure' }
+        [IO.File]::WriteAllText($Path, $Text, (New-Object Text.UTF8Encoding($false)))
+    }
+    $systemRegistrar = {
+        param($Spec)
+        [void]$events.Add('register-system')
+        if ($Fault -eq 'SystemTask') { throw 'INJECTED SYSTEM task registration failure' }
+        if ($Fault -ne 'VerifyMissing') {
+            $arguments = if ($Fault -eq 'VerifyMismatch') { 'WRONG-ARGUMENTS' } else { $Spec.SystemArguments }
+            $tasks[$Spec.SystemTaskName] = [PSCustomObject]@{ Exists = $true; Execute = 'powershell.exe'; Arguments = $arguments }
+        }
+    }
+    $taskProbe = {
+        param($TaskName)
+        $counters.Probe++
+        [void]$events.Add("probe-$TaskName")
+        if ($Fault -eq 'Query' -or ($Fault -eq 'QueryAfterRegistration' -and $counters.Probe -gt 2)) { throw 'INJECTED task query RPC failure' }
+        if ($tasks.ContainsKey($TaskName)) { return $tasks[$TaskName] }
+        return [PSCustomObject]@{ Exists = $false; Execute = $null; Arguments = $null }
+    }
+    $taskDelete = {
+        param($TaskName)
+        [void]$events.Add("delete-$TaskName")
+        if ($RollbackFails) { throw 'INJECTED rollback delete failure' }
+        [void]$tasks.Remove($TaskName)
+    }
+    $reportWriter = {
+        param($Path, $Value)
+        [void]$events.Add('write-registration-report')
+        if ($Fault -eq 'Report') { throw 'INJECTED registration report write failure' }
+        Write-AcceptanceJsonFileAtomic -Path $Path -Value $Value
+    }
+    $errorText = $null
+    try {
+        [void](Register-AcceptanceResume -Paths $paths -EntryScript (Join-Path $PSScriptRoot 'vm-final-acceptance.ps1') -State $state -ScenarioCount 7 `
+            -StateWriter $stateWriter -UserTaskRegistrar $userRegistrar -BootstrapWriter $bootstrapWriter -SystemTaskRegistrar $systemRegistrar `
+            -TaskProbe $taskProbe -TaskDeleteInvoker $taskDelete -ReportWriter $reportWriter)
+    }
+    catch { $errorText = $_.Exception.Message }
+    $report = if (Test-Path -LiteralPath $paths.ResumeRegistrationReport) {
+        Get-Content -LiteralPath $paths.ResumeRegistrationReport -Raw -Encoding UTF8 | ConvertFrom-Json
+    } else { $null }
+    [PSCustomObject]@{ Paths = $paths; Tasks = $tasks; Events = @($events); Error = $errorText; Report = $report; ExistingStateBytes = $existingStateBytes }
+}
+
+function Invoke-TestRemovalFault {
+    param(
+        [string]$Name,
+        [ValidateSet('None','Query','Timeout','NonZero','TaskStillExists','StateDelete','StateStillExists','BootstrapDelete','BootstrapStillExists','Report')][string]$Fault = 'None',
+        [switch]$KeepState
+    )
+    $paths = Get-AcceptanceControlPaths -ControlRoot (Join-Path $testRoot "removal-$Name") -RunId '20260623-120000-001'
+    New-Item -ItemType Directory -Path $paths.Root -Force | Out-Null
+    [IO.File]::WriteAllText($paths.ResumeState, 'STATE-MUST-SURVIVE-FAILURE', [Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText($paths.ResumeBootstrap, 'BOOTSTRAP', [Text.Encoding]::UTF8)
+    $tasks = @{ $paths.ResumeTask = $true; $paths.ResumeUserTask = $true }
+    $events = New-Object Collections.ArrayList
+    $probe = {
+        param($TaskName)
+        [void]$events.Add("probe-$TaskName")
+        if ($Fault -eq 'Query') { throw 'INJECTED task query RPC failure' }
+        return $tasks.ContainsKey($TaskName)
+    }
+    $delete = {
+        param($FilePath, $Arguments)
+        $taskName = [string]$Arguments[2]
+        [void]$events.Add("delete-$taskName")
+        if ($Fault -eq 'Timeout') { return [PSCustomObject]@{ TimedOut = $true; ExitCode = $null; StdOut = ''; StdErr = '' } }
+        if ($Fault -eq 'NonZero') { return [PSCustomObject]@{ TimedOut = $false; ExitCode = 5; StdOut = ''; StdErr = 'ACCESS DENIED' } }
+        if ($Fault -ne 'TaskStillExists') { [void]$tasks.Remove($taskName) }
+        return [PSCustomObject]@{ TimedOut = $false; ExitCode = 0; StdOut = ''; StdErr = '' }
+    }
+    $fileRemove = {
+        param($Path)
+        [void]$events.Add("remove-file-$([IO.Path]::GetFileName($Path))")
+        if (($Fault -eq 'StateDelete' -and $Path -eq $paths.ResumeState) -or ($Fault -eq 'BootstrapDelete' -and $Path -eq $paths.ResumeBootstrap)) {
+            throw "INJECTED file deletion failure: $Path"
+        }
+        if (($Fault -eq 'StateStillExists' -and $Path -eq $paths.ResumeState) -or ($Fault -eq 'BootstrapStillExists' -and $Path -eq $paths.ResumeBootstrap)) { return }
+        Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+    }
+    $reportWriter = {
+        param($Path, $Value)
+        [void]$events.Add('write-cleanup-report')
+        if ($Fault -eq 'Report') { throw 'INJECTED cleanup report write failure' }
+        Write-AcceptanceJsonFileAtomic -Path $Path -Value $Value
+    }
+    $errorText = $null; $result = $null
+    try {
+        $result = Remove-AcceptanceResume -Paths $paths -KeepState:$KeepState -TaskCommandInvoker $delete -TaskExistenceProbe $probe `
+            -FileRemoveInvoker $fileRemove -ReportWriter $reportWriter
+    }
+    catch { $errorText = $_.Exception.Message }
+    $report = if (Test-Path -LiteralPath $paths.ResumeCleanupReport) {
+        Get-Content -LiteralPath $paths.ResumeCleanupReport -Raw -Encoding UTF8 | ConvertFrom-Json
+    } else { $null }
+    [PSCustomObject]@{ Paths = $paths; Tasks = $tasks; Events = @($events); Error = $errorText; Result = $result; Report = $report }
+}
+
 New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
 
 # Capture the real environment before any test runs. Every assertion below must leave
@@ -43,6 +228,7 @@ $realEnvBaseline = [ordered]@{
     MachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     ProcessPath = $env:Path
     SettingsExists = Test-Path -LiteralPath $realSettingsPath
+    SettingsLength = if (Test-Path -LiteralPath $realSettingsPath) { (Get-Item -LiteralPath $realSettingsPath -Force).Length } else { 0 }
     SettingsHash = if (Test-Path -LiteralPath $realSettingsPath) { (Get-FileHash -LiteralPath $realSettingsPath -Algorithm SHA256).Hash } else { $null }
 }
 
@@ -73,6 +259,27 @@ try {
     $reset = Reset-AcceptanceEnvironment -Baseline $before -Current $after -Delta $delta -ProjectRoot $ProjectRoot -ControlRoot (Join-Path $testRoot 'control-a') -ResultRoot (Join-Path $testRoot 'results-a') -AllowedCleanupRoots @($owned) -ProtectedProcessIds @($PID) -Ownership $ownership
     Assert-Test $reset.Success 'created modified removed rollback succeeds'
     Assert-Test (([IO.File]::ReadAllText((Join-Path $owned 'modified.txt')) -eq 'ORIGINAL-MODIFIED') -and ([IO.File]::ReadAllText((Join-Path $owned 'removed.txt')) -eq 'ORIGINAL-REMOVED') -and ([IO.File]::ReadAllText((Join-Path $owned 'removed-dir\nested.txt')) -eq 'ORIGINAL-NESTED') -and -not (Test-Path (Join-Path $owned 'created.txt'))) 'rollback restores exact file bytes'
+
+    # An existing .claude baseline tracks scenario-created files while preserving the
+    # exact _git_cache.json exclusion and the pre-existing settings.json bytes.
+    $existingClaudeRoot = Join-Path $testRoot 'profile-existing\.claude'
+    $existingSettings = Join-Path $existingClaudeRoot 'settings.json'
+    $ignoredGitCache = Join-Path $existingClaudeRoot '_git_cache.json'
+    $scenarioNewState = Join-Path $existingClaudeRoot 'new-state'
+    New-Item -ItemType Directory -Path $existingClaudeRoot -Force | Out-Null
+    [IO.File]::WriteAllText($existingSettings, 'BASELINE-SETTINGS', [Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText($ignoredGitCache, 'BASELINE-GIT-CACHE', [Text.Encoding]::UTF8)
+    $existingClaudeBefore = New-TestSnapshot (Get-AcceptanceFileState -Roots @($existingClaudeRoot) -CaptureBytes -BackupRoot (Join-Path $testRoot 'existing-claude-baseline'))
+    [IO.File]::WriteAllText($scenarioNewState, 'SCENARIO-STATE', [Text.Encoding]::UTF8)
+    $existingClaudeAfter = New-TestSnapshot (Get-AcceptanceFileState -Roots @($existingClaudeRoot))
+    $existingClaudeDelta = Compare-AcceptanceSnapshot $existingClaudeBefore $existingClaudeAfter
+    Assert-Test (($existingClaudeBefore.Files.Path -contains $existingSettings) -and ($existingClaudeDelta.CreatedPaths -contains $scenarioNewState) -and -not ($existingClaudeBefore.Files.Path -contains $ignoredGitCache) -and -not ($existingClaudeAfter.Files.Path -contains $ignoredGitCache)) 'existing .claude baseline tracks new scenario state and precisely ignores _git_cache.json'
+    $existingClaudeReset = Reset-AcceptanceEnvironment -Baseline $existingClaudeBefore -Current $existingClaudeAfter -Delta $existingClaudeDelta `
+        -ProjectRoot $ProjectRoot -ControlRoot (Join-Path $testRoot 'control-existing-claude') -ResultRoot (Join-Path $testRoot 'results-existing-claude') `
+        -AllowedCleanupRoots @($existingClaudeRoot) -ProtectedProcessIds @($PID) -Ownership (New-AcceptanceOwnership -PathRoots @($scenarioNewState))
+    $existingClaudeFinal = New-TestSnapshot (Get-AcceptanceFileState -Roots @($existingClaudeRoot))
+    $existingClaudeEquivalent = Test-AcceptanceBaselineEquivalent -Baseline $existingClaudeBefore -Candidate $existingClaudeFinal
+    Assert-Test ($existingClaudeReset.Success -and -not (Test-Path -LiteralPath $scenarioNewState) -and $existingClaudeEquivalent.Equivalent -and ([IO.File]::ReadAllText($existingSettings) -eq 'BASELINE-SETTINGS') -and ([IO.File]::ReadAllText($ignoredGitCache) -eq 'BASELINE-GIT-CACHE')) 'owned .claude scenario state cleanup restores baseline equivalence without changing ignored cache or settings'
 
     # Desktop project variants, installer state, and .claude.json are dynamically tracked and removed.
     $fakeProfile = Join-Path $testRoot 'profile'; $fakeDesktop = Join-Path $testRoot 'desktop'
@@ -137,14 +344,15 @@ try {
     Assert-Test (($env:Path -ceq $oldProcessPath) -and ([Environment]::GetEnvironmentVariable('Path', 'User') -ceq $oldUserPath)) 'real PATH fully unchanged across fault test'
 
     # Resume state round-trip preserves parameters and all previous results without registering real tasks.
-    $resumePaths = Get-AcceptanceControlPaths -ControlRoot (Join-Path $testRoot 'resume-control') -RunId 'roundtrip-run'
+    $resumePaths = Get-AcceptanceControlPaths -ControlRoot (Join-Path $testRoot 'resume-control') -RunId '20260623-120000-001'
     New-Item -ItemType Directory -Path $resumePaths.Run -Force | Out-Null
-    $resumeState = [ordered]@{ SchemaVersion=3;RunId='roundtrip-run';Mode='Live';Version='1.3.3';CredentialTarget='TEST_TARGET';AcknowledgeRealInstall=$true;AcknowledgeRestart=$true;Phase='resume-cleanup-pending';NextScenarioIndex=5;StageResults=@(@{Name='stage-before'});ScenarioResults=@(@{Id='scenario-before';Status='PASS'});CleanupReports=@(@{Scenario='cleanup-before'});PendingOwnership=(New-AcceptanceOwnership -PathRoots @($owned)) }
-    $taskSpec = Register-AcceptanceResume -Paths $resumePaths -EntryScript (Join-Path $PSScriptRoot 'vm-final-acceptance.ps1') -State $resumeState -SkipTaskRegistration
-    $roundTrip = Read-AcceptanceResumeState -ControlRoot $resumePaths.Root
+    $resumeState = New-TestResumeState -NextScenarioIndex 5
+    $resumeState.PendingOwnership = New-AcceptanceOwnership -PathRoots @($owned)
+    $taskSpec = Register-AcceptanceResume -Paths $resumePaths -EntryScript (Join-Path $PSScriptRoot 'vm-final-acceptance.ps1') -State $resumeState -ScenarioCount 7 -SkipTaskRegistration
+    $roundTrip = Read-AcceptanceResumeState -ControlRoot $resumePaths.Root -ScenarioCount 7
     $sr=New-Object Collections.ArrayList;$cr=New-Object Collections.ArrayList;$rr=New-Object Collections.ArrayList
     Import-AcceptanceResumeResults -State $roundTrip -StageResults $sr -ScenarioResults $cr -CleanupReports $rr
-    Assert-Test ($roundTrip.CredentialTarget -eq 'TEST_TARGET' -and $roundTrip.NextScenarioIndex -eq 5 -and $roundTrip.Phase -eq 'resume-cleanup-pending' -and $taskSpec.Arguments -match 'CredentialTarget "TEST_TARGET"' -and $taskSpec.Arguments -match '-AcknowledgeRestart' -and $sr.Count -eq 1 -and $cr.Count -eq 1 -and $rr.Count -eq 1) 'resume state starts after completed scenario and preserves prior results'
+    Assert-Test ($roundTrip.CredentialTarget -eq 'TEST_TARGET' -and $roundTrip.NextScenarioIndex -eq 5 -and $roundTrip.Phase -eq 'resume-cleanup-pending' -and $taskSpec.Arguments -match 'CredentialTarget "TEST_TARGET"' -and $taskSpec.Arguments -match '-AcknowledgeRestart' -and $sr.Count -eq 1 -and $cr.Count -eq 5 -and $rr.Count -eq 1 -and $sr[0].ExitCode -eq 0 -and $cr[0].Stage.Name -eq 'stage-before' -and @($rr[0].Report.Actions).Count -eq 1 -and @($rr[0].Report.Reports).Count -eq 1) 'resume state preserves completed scenario prefix and cleanup result collections'
     $cleanupEvents = New-Object Collections.ArrayList; $executedScenarios = New-Object Collections.ArrayList
     $missingTaskProbe = { param($TaskName) return $false }
     $resumeFlow = Invoke-VmResumeControlFlow -State $roundTrip -ScenarioCount 7 -PendingCleanup {
@@ -155,30 +363,223 @@ try {
     $scenarioNames = @('completed-0', 'completed-1', 'completed-2', 'completed-3', 'completed-4', 'next-5', 'next-6')
     for ($resumeIndex = $resumeFlow.NextScenarioIndex; $resumeIndex -lt $scenarioNames.Count; $resumeIndex++) { [void]$executedScenarios.Add($scenarioNames[$resumeIndex]) }
     Assert-Test ($cleanupEvents.Count -eq 1 -and -not (Test-Path -LiteralPath $resumePaths.ResumeState) -and ((@($executedScenarios) -join ',') -eq 'next-5,next-6')) 'resume control flow removes checkpoint and executes only following scenarios'
-    Assert-Test (-not (Test-VmAutomaticRestartAllowed -AcceptanceMode 'TestSafe' -RealInstallAcknowledged $true -RestartAcknowledged $true)) 'TestSafe can never authorize automatic restart'
-    Assert-Test (-not (Test-VmAutomaticRestartAllowed -AcceptanceMode 'Live' -RealInstallAcknowledged $true -RestartAcknowledged $false)) 'Live restart requires independent acknowledgement'
 
-    $legacyPaths = Get-AcceptanceControlPaths -ControlRoot (Join-Path $testRoot 'legacy-resume-control') -RunId 'legacy-run'
-    New-Item -ItemType Directory -Path $legacyPaths.Root -Force | Out-Null
-    ([ordered]@{ SchemaVersion=2;RunId='legacy-run';Phase='scenario-post-cleanup';NextScenarioIndex=4 } | ConvertTo-Json) | Set-Content -LiteralPath $legacyPaths.ResumeState -Encoding UTF8
-    $legacyRejected = $false
-    try { [void](Read-AcceptanceResumeState -ControlRoot $legacyPaths.Root) } catch { $legacyRejected = $_.Exception.Message -match 'Only SchemaVersion 3 is accepted' }
-    Assert-Test $legacyRejected 'legacy resume schema is rejected before control flow'
+    # A second resume starts at the terminal index, so completed install/API-like scenarios are not repeated.
+    $repeatExecuted = New-Object Collections.ArrayList
+    $repeatState = New-TestResumeState -NextScenarioIndex 7
+    $repeatFlow = Invoke-VmResumeControlFlow -State $repeatState -ScenarioCount 7 -PendingCleanup { [PSCustomObject]@{ Success = $true } }
+    for ($resumeIndex = $repeatFlow.NextScenarioIndex; $resumeIndex -lt $scenarioNames.Count; $resumeIndex++) { [void]$repeatExecuted.Add($scenarioNames[$resumeIndex]) }
+    Assert-Test ($repeatExecuted.Count -eq 0) 'repeated resume at terminal checkpoint does not repeat install or API scenarios'
 
-    $failedDeletePaths = Get-AcceptanceControlPaths -ControlRoot (Join-Path $testRoot 'failed-delete-control') -RunId 'failed-delete-run'
-    New-Item -ItemType Directory -Path $failedDeletePaths.Root -Force | Out-Null
-    'state-must-remain' | Set-Content -LiteralPath $failedDeletePaths.ResumeState -Encoding UTF8
-    $deleteEvents = New-Object Collections.ArrayList
-    $failedDeleteInvoker = {
-        param($FilePath, $Arguments)
-        [void]$deleteEvents.Add([string]$Arguments[0])
-        return [PSCustomObject]@{ TimedOut=$false;ExitCode=5;StdOut='';StdErr='ERROR: Access is denied.' }
+    # Authorization failure occurs before registration, restart, VM probing, or any persistent write.
+    $authorizationPaths = Get-AcceptanceControlPaths -ControlRoot (Join-Path $testRoot 'authorization-control') -RunId '20260623-120000-001'
+    $savedMode = $Mode; $savedInstallAck = $AcknowledgeRealInstall; $savedRestartAck = $AcknowledgeRestart
+    $hadPaths = $null -ne (Get-Variable -Name paths -Scope Script -ErrorAction SilentlyContinue)
+    $savedPaths = if ($hadPaths) { Get-Variable -Name paths -Scope Script -ValueOnly } else { $null }
+    try {
+        $paths = $authorizationPaths
+        foreach ($authorizationCase in @(
+            [PSCustomObject]@{ Mode = 'TestSafe'; Install = $true; Restart = $true },
+            [PSCustomObject]@{ Mode = 'Live'; Install = $false; Restart = $true },
+            [PSCustomObject]@{ Mode = 'Live'; Install = $true; Restart = $false }
+        )) {
+            $Mode = $authorizationCase.Mode; $AcknowledgeRealInstall = $authorizationCase.Install; $AcknowledgeRestart = $authorizationCase.Restart
+            $blocked = $false
+            try { Invoke-VmAuthorizedRestart -ResumeState (New-TestResumeState) } catch { $blocked = $_.Exception.Message -match 'Automatic restart is disabled' }
+            Assert-Test ($blocked -and -not (Test-Path -LiteralPath $authorizationPaths.Root)) "authorization blocks registration and restart: $($authorizationCase.Mode)/$($authorizationCase.Install)/$($authorizationCase.Restart)"
+        }
     }
-    $existingTaskProbe = { param($TaskName) return $true }
-    $deleteFailureBlocked = $false
-    try { [void](Remove-AcceptanceResume -Paths $failedDeletePaths -TaskCommandInvoker $failedDeleteInvoker -TaskExistenceProbe $existingTaskProbe) } catch { $deleteFailureBlocked = $_.Exception.Message -match 'Failed to delete resume task' }
-    $deleteEvidence = Get-Content -LiteralPath $failedDeletePaths.ResumeCleanupReport -Raw -Encoding UTF8 | ConvertFrom-Json
-    Assert-Test ($deleteFailureBlocked -and (Test-Path -LiteralPath $failedDeletePaths.ResumeState) -and -not $deleteEvidence.Success -and $deleteEvents.Count -eq 1) 'task deletion failure preserves resume state and evidence'
+    finally {
+        $Mode = $savedMode; $AcknowledgeRealInstall = $savedInstallAck; $AcknowledgeRestart = $savedRestartAck
+        if ($hadPaths) { $paths = $savedPaths } else { Remove-Variable -Name paths -Scope Script -ErrorAction SilentlyContinue }
+    }
+
+    # SchemaVersion 3 is treated as untrusted persisted input, including numeric boundaries.
+    $schemaPaths = Get-AcceptanceControlPaths -ControlRoot (Join-Path $testRoot 'schema-control') -RunId '20260623-120000-001'
+    foreach ($validIndex in @(0, 6, 7)) {
+        Write-TestResumeState -Paths $schemaPaths -State (New-TestResumeState -NextScenarioIndex $validIndex)
+        $validState = Read-AcceptanceResumeState -Path $schemaPaths.ResumeState -ScenarioCount 7
+        Assert-Test ([int]$validState.NextScenarioIndex -eq $validIndex) "Schema 3 accepts index boundary $validIndex"
+    }
+    $scenarioFile = Join-Path $ProjectRoot 'scripts\data\interactive-acceptance-scenarios.json'
+    $scenarioDocument = Get-Content -LiteralPath $scenarioFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    $orderedTestSafeIds = @($scenarioDocument.scenarioSets.TestSafe | Select-Object -First 2 | ForEach-Object { [string]$_.id })
+    Write-TestResumeState -Paths $schemaPaths -State (New-TestResumeState -Mode TestSafe -NextScenarioIndex 2 -ScenarioIds $orderedTestSafeIds)
+    $orderedState = Read-AcceptanceResumeState -Path $schemaPaths.ResumeState -ScenarioFile $scenarioFile
+    Assert-Test (@($orderedState.ScenarioResults).Count -eq 2) 'Schema 3 accepts completed scenario prefix matching scenario definition order'
+    $wrongOrder = Copy-TestResumeState (New-TestResumeState -Mode TestSafe -NextScenarioIndex 2 -ScenarioIds @($orderedTestSafeIds[1], $orderedTestSafeIds[0]))
+    Write-TestResumeState -Paths $schemaPaths -State $wrongOrder
+    $wrongOrderError = $null
+    try { [void](Read-AcceptanceResumeState -Path $schemaPaths.ResumeState -ScenarioFile $scenarioFile) } catch { $wrongOrderError = $_.Exception.Message }
+    Assert-Test ($wrongOrderError -and $wrongOrderError.Contains('ScenarioResults[0].Id')) 'Schema 3 rejects resume scenario prefix that does not match scenario definition order'
+    $invalidStates = @(
+        [PSCustomObject]@{ Field = 'SchemaVersion'; Mutate = { param($s) $s.SchemaVersion = 2 } },
+        [PSCustomObject]@{ Field = 'SchemaVersion'; Mutate = { param($s) $s.SchemaVersion = '3' } },
+        [PSCustomObject]@{ Field = 'RunId'; Mutate = { param($s) $s.RunId = '..\escape' } },
+        [PSCustomObject]@{ Field = 'Mode'; Mutate = { param($s) $s.Mode = 'Unsafe' } },
+        [PSCustomObject]@{ Field = 'Version'; Mutate = { param($s) $s.Version = 'latest' } },
+        [PSCustomObject]@{ Field = 'CredentialTarget'; Mutate = { param($s) $s.CredentialTarget = 'SECRET VALUE' } },
+        [PSCustomObject]@{ Field = 'AcknowledgeRestart'; Mutate = { param($s) $s.AcknowledgeRestart = $false } },
+        [PSCustomObject]@{ Field = 'AcknowledgeRealInstall'; Mutate = { param($s) $s.AcknowledgeRealInstall = 'true' } },
+        [PSCustomObject]@{ Field = 'Phase'; Mutate = { param($s) $s.Phase = 'scenario-post-cleanup' } },
+        [PSCustomObject]@{ Field = 'NextScenarioIndex'; Mutate = { param($s) $s.NextScenarioIndex = -1 } },
+        [PSCustomObject]@{ Field = 'NextScenarioIndex'; Mutate = { param($s) $s.NextScenarioIndex = 8 } },
+        [PSCustomObject]@{ Field = 'NextScenarioIndex'; Mutate = { param($s) $s.NextScenarioIndex = 1.5 } },
+        [PSCustomObject]@{ Field = 'StageResults'; Mutate = { param($s) $s.StageResults = 'not-an-array' } },
+        [PSCustomObject]@{ Field = 'StageResults[0].Name'; Mutate = { param($s) $s.StageResults[0].Name = 7 } },
+        [PSCustomObject]@{ Field = 'StageResults[0].ExitCode'; Mutate = { param($s) $s.StageResults[0].ExitCode = '0' } },
+        [PSCustomObject]@{ Field = 'StageResults[0].TimedOut'; Mutate = { param($s) $s.StageResults[0].TimedOut = 'false' } },
+        [PSCustomObject]@{ Field = 'StageResults[0].DurationSec'; Mutate = { param($s) $s.StageResults[0].DurationSec = -1 } },
+        [PSCustomObject]@{ Field = 'StageResults[0].Stdout'; Mutate = { param($s) $s.StageResults[0].Stdout = 7 } },
+        [PSCustomObject]@{ Field = 'StageResults[0].Stderr'; Mutate = { param($s) $s.StageResults[0].Stderr = $null } },
+        [PSCustomObject]@{ Field = 'StageResults[0].Result'; Mutate = { param($s) $s.StageResults[0].Result = @() } },
+        [PSCustomObject]@{ Field = 'ScenarioResults'; Mutate = { param($s) $s.ScenarioResults = @() } },
+        [PSCustomObject]@{ Field = 'ScenarioResults.Id'; Mutate = { param($s) $s.ScenarioResults = @($s.ScenarioResults[0], $s.ScenarioResults[0]); $s.NextScenarioIndex = 2 } },
+        [PSCustomObject]@{ Field = 'ScenarioResults[0].Mode'; Mutate = { param($s) $s.Mode = 'TestSafe'; $s.AcknowledgeRealInstall = $false; $s.AcknowledgeRestart = $false; $s.ScenarioResults[0].Mode = 'Live' } },
+        [PSCustomObject]@{ Field = 'ScenarioResults[0].Id'; Mutate = { param($s) $s.ScenarioResults[0].Id = 7 } },
+        [PSCustomObject]@{ Field = 'ScenarioResults[0].Mode'; Mutate = { param($s) $s.ScenarioResults[0].Mode = $true } },
+        [PSCustomObject]@{ Field = 'ScenarioResults[0].Status'; Mutate = { param($s) $s.ScenarioResults[0].Status = 'UNKNOWN' } },
+        [PSCustomObject]@{ Field = 'ScenarioResults[0].Stage'; Mutate = { param($s) $s.ScenarioResults[0].Stage = 'not-an-object' } },
+        [PSCustomObject]@{ Field = 'ScenarioResults[0].Stage.ExitCode'; Mutate = { param($s) $s.ScenarioResults[0].Stage.ExitCode = 1.5 } },
+        [PSCustomObject]@{ Field = 'ScenarioResults[0].Error'; Mutate = { param($s) $s.ScenarioResults[0].Error = 7 } },
+        [PSCustomObject]@{ Field = 'CleanupReports[0].Scenario'; Mutate = { param($s) $s.CleanupReports[0].Scenario = 7 } },
+        [PSCustomObject]@{ Field = 'CleanupReports[0].Phase'; Mutate = { param($s) $s.CleanupReports[0].Phase = $false } },
+        [PSCustomObject]@{ Field = 'CleanupReports[0].Report.Success'; Mutate = { param($s) $s.CleanupReports[0].Report.Success = 'true' } },
+        [PSCustomObject]@{ Field = 'CleanupReports[0].Report.Actions'; Mutate = { param($s) $s.CleanupReports[0].Report.Actions = 'not-an-array' } },
+        [PSCustomObject]@{ Field = 'CleanupReports[0].Report.Actions'; Mutate = { param($s) $s.CleanupReports[0].Report.Actions = @(7) } },
+        [PSCustomObject]@{ Field = 'CleanupReports[0].Report.Errors'; Mutate = { param($s) $s.CleanupReports[0].Report.Errors = @(7) } },
+        [PSCustomObject]@{ Field = 'CleanupReports[0].Report.Reports'; Mutate = { param($s) $s.CleanupReports[0].Report.Reports = $null } },
+        [PSCustomObject]@{ Field = 'CleanupReports[0].Report.Ownership'; Mutate = { param($s) $s.CleanupReports[0].Report.Ownership = 'not-an-object' } },
+        [PSCustomObject]@{ Field = 'CleanupReports[0].Report.Ownership.PathRoots'; Mutate = { param($s) $s.CleanupReports[0].Report.Ownership.PathRoots = @(7) } },
+        [PSCustomObject]@{ Field = 'PendingOwnership.PathRoots'; Mutate = { param($s) $s.PendingOwnership.PathRoots = 'C:\unsafe' } },
+        [PSCustomObject]@{ Field = 'PendingOwnership.ProcessIds'; Mutate = { param($s) $s.PendingOwnership.ProcessIds = @('123') } },
+        [PSCustomObject]@{ Field = 'SavedAt'; Mutate = { param($s) $s.SavedAt = 'not-a-time' } },
+        [PSCustomObject]@{ Field = 'Error'; Mutate = { param($s) $s.Error = 7 } }
+    )
+    foreach ($invalidCase in $invalidStates) {
+        $invalidState = Copy-TestResumeState (New-TestResumeState)
+        & $invalidCase.Mutate $invalidState
+        Write-TestResumeState -Paths $schemaPaths -State $invalidState
+        $invalidError = $null
+        try { [void](Read-AcceptanceResumeState -Path $schemaPaths.ResumeState -ScenarioCount 7) } catch { $invalidError = $_.Exception.Message }
+        Assert-Test ($invalidError -and $invalidError.Contains($schemaPaths.ResumeState) -and $invalidError.Contains($invalidCase.Field)) "Schema 3 rejects invalid $($invalidCase.Field) with path and field evidence"
+    }
+    $missingMode = Copy-TestResumeState (New-TestResumeState); $missingMode.PSObject.Properties.Remove('Mode')
+    Write-TestResumeState -Paths $schemaPaths -State $missingMode
+    $missingError = $null
+    try { [void](Read-AcceptanceResumeState -Path $schemaPaths.ResumeState -ScenarioCount 7) } catch { $missingError = $_.Exception.Message }
+    Assert-Test ($missingError -and $missingError.Contains($schemaPaths.ResumeState) -and $missingError -match "field 'Mode' is missing") 'Schema 3 rejects missing required field before side effects'
+
+    # Registration is transactional at each write/task boundary and never calls real Task Scheduler APIs.
+    $registrationSuccess = Invoke-TestRegistrationFault -Name 'success'
+    Assert-Test (-not $registrationSuccess.Error -and $registrationSuccess.Tasks.Count -eq 2 -and $registrationSuccess.Report.Success) 'registration success verifies both injected tasks and writes success evidence'
+    $sameCheckpoint = Invoke-TestRegistrationFault -Name 'same-checkpoint' -Fault ExistingSameState
+    Assert-Test (-not $sameCheckpoint.Error -and $sameCheckpoint.Tasks.Count -eq 2 -and $sameCheckpoint.Report.Success) 'registration accepts a valid owned checkpoint for the same RunId'
+    foreach ($checkpointCase in @('ExistingDifferentState','ExistingCorruptState')) {
+        $checkpointFailure = Invoke-TestRegistrationFault -Name $checkpointCase -Fault $checkpointCase
+        $checkpointBytesAfter = [IO.File]::ReadAllBytes($checkpointFailure.Paths.ResumeState)
+        Assert-Test ($checkpointFailure.Error -and $checkpointFailure.Tasks.Count -eq 0 -and $checkpointFailure.Report -and -not $checkpointFailure.Report.Success -and ([Convert]::ToBase64String($checkpointBytesAfter) -ceq [Convert]::ToBase64String($checkpointFailure.ExistingStateBytes)) -and -not (@($checkpointFailure.Events) -contains 'write-state')) "registration rejects $checkpointCase checkpoint without overwrite or task side effects"
+    }
+    foreach ($registrationCase in @(
+        [PSCustomObject]@{ Name = 'state'; Fault = 'State' },
+        [PSCustomObject]@{ Name = 'user'; Fault = 'UserTask' },
+        [PSCustomObject]@{ Name = 'bootstrap'; Fault = 'Bootstrap' },
+        [PSCustomObject]@{ Name = 'system'; Fault = 'SystemTask' },
+        [PSCustomObject]@{ Name = 'verify-missing'; Fault = 'VerifyMissing' },
+        [PSCustomObject]@{ Name = 'verify-mismatch'; Fault = 'VerifyMismatch' }
+    )) {
+        $registrationFailure = Invoke-TestRegistrationFault -Name $registrationCase.Name -Fault $registrationCase.Fault
+        Assert-Test ($registrationFailure.Error -and $registrationFailure.Tasks.Count -eq 0 -and $registrationFailure.Report -and -not $registrationFailure.Report.Success -and (Test-Path -LiteralPath $registrationFailure.Paths.ResumeState) -eq ($registrationCase.Fault -ne 'State')) "registration $($registrationCase.Fault) failure rolls back only created resources and preserves state"
+    }
+    $rollbackFailure = Invoke-TestRegistrationFault -Name 'rollback-failure' -Fault SystemTask -RollbackFails
+    Assert-Test ($rollbackFailure.Error -match 'rollback/report errors' -and $rollbackFailure.Tasks.Count -eq 1 -and @($rollbackFailure.Report.RollbackErrors).Count -gt 0 -and (Test-Path -LiteralPath $rollbackFailure.Paths.ResumeState)) 'registration rollback failure preserves original error, task state, and rollback evidence'
+    $queryFailure = Invoke-TestRegistrationFault -Name 'query-failure' -Fault Query
+    Assert-Test ($queryFailure.Error -match 'task query RPC failure' -and $queryFailure.Tasks.Count -eq 0 -and @($queryFailure.Report.RollbackErrors).Count -eq 0 -and -not (Test-Path -LiteralPath $queryFailure.Paths.ResumeState)) 'registration preflight task query failure occurs before persistent side effects'
+    $verificationQueryFailure = Invoke-TestRegistrationFault -Name 'verification-query-failure' -Fault QueryAfterRegistration
+    Assert-Test ($verificationQueryFailure.Error -match 'task query RPC failure' -and $verificationQueryFailure.Tasks.Count -eq 2 -and @($verificationQueryFailure.Report.RollbackErrors).Count -eq 2 -and (Test-Path -LiteralPath $verificationQueryFailure.Paths.ResumeState)) 'registration verification query failure remains fail-closed with rollback evidence'
+    $registrationReportFailure = Invoke-TestRegistrationFault -Name 'report-failure' -Fault Report
+    Assert-Test ($registrationReportFailure.Error -match 'registration report write failure' -and $registrationReportFailure.Tasks.Count -eq 0 -and -not (Test-Path -LiteralPath $registrationReportFailure.Paths.ResumeBootstrap) -and (Test-Path -LiteralPath $registrationReportFailure.Paths.ResumeState)) 'registration report failure rolls back tasks and bootstrap while preserving state'
+    $preexisting = Invoke-TestRegistrationFault -Name 'preexisting' -Fault State -SeedPreexistingTasks
+    Assert-Test ($preexisting.Error -and $preexisting.Tasks.Count -eq 2 -and $preexisting.Tasks[$preexisting.Paths.ResumeTask].Arguments -eq 'PREEXISTING-SYSTEM' -and -not (@($preexisting.Events) -match '^delete-')) 'registration never deletes preexisting unowned tasks'
+
+    # Cleanup is fail-closed for query, delete, verification, file, report, and repeated-call paths.
+    $removalSuccess = Invoke-TestRemovalFault -Name 'success'
+    Assert-Test (-not $removalSuccess.Error -and $removalSuccess.Result.Success -and $removalSuccess.Tasks.Count -eq 0 -and -not (Test-Path -LiteralPath $removalSuccess.Paths.ResumeState) -and -not (Test-Path -LiteralPath $removalSuccess.Paths.ResumeBootstrap) -and $removalSuccess.Report.Success) 'resume cleanup success removes tasks, state, bootstrap and writes evidence'
+    $missingProbe = { param($TaskName) return $false }
+    $repeatRemoval = Remove-AcceptanceResume -Paths $removalSuccess.Paths -TaskExistenceProbe $missingProbe
+    Assert-Test ($repeatRemoval.Success -and $repeatRemoval.State -eq 'Missing' -and $repeatRemoval.Bootstrap -eq 'Missing') 'resume cleanup is idempotent on repeated invocation'
+    $keepState = Invoke-TestRemovalFault -Name 'keep-state' -KeepState
+    Assert-Test (-not $keepState.Error -and $keepState.Result.Success -and (Test-Path -LiteralPath $keepState.Paths.ResumeState) -and -not (Test-Path -LiteralPath $keepState.Paths.ResumeBootstrap) -and $keepState.Result.State -eq 'Kept') 'KeepState retains only state after strict task and bootstrap cleanup'
+    foreach ($removalFault in @('Query','Timeout','NonZero','TaskStillExists','StateDelete','StateStillExists','BootstrapDelete','BootstrapStillExists')) {
+        $removalFailure = Invoke-TestRemovalFault -Name $removalFault -Fault $removalFault
+        Assert-Test ($removalFailure.Error -and $removalFailure.Report -and -not $removalFailure.Report.Success -and (Test-Path -LiteralPath $removalFailure.Paths.ResumeState)) "resume cleanup $removalFault failure preserves state and failure evidence"
+    }
+    $cleanupReportFailure = Invoke-TestRemovalFault -Name 'report-failure' -Fault Report
+    Assert-Test ($cleanupReportFailure.Error -match 'cleanup report write failed' -and (Test-Path -LiteralPath $cleanupReportFailure.Paths.ResumeState) -and $cleanupReportFailure.Tasks.Count -eq 0 -and -not (Test-Path -LiteralPath $cleanupReportFailure.Paths.ResumeBootstrap)) 'cleanup report write failure restores state and cannot report success'
+
+    # Final PASS is published only after evidence and resume cleanup complete. Summary failures are retried as FAIL.
+    $lifecycleEvents = New-Object Collections.ArrayList
+    $summaryFactory = {
+        param($Status, $ErrorText)
+        [PSCustomObject]@{ Status = $Status; Error = $ErrorText }
+    }
+    $lifecycleSuccess = Complete-VmAcceptanceLifecycle -PriorError $null `
+        -EvidenceWriter { [void]$lifecycleEvents.Add('evidence') } `
+        -FinalResumeCleanup { [void]$lifecycleEvents.Add('cleanup') } `
+        -SummaryFactory $summaryFactory `
+        -SummaryWriter { param($Summary) [void]$lifecycleEvents.Add("summary-$($Summary.Status)") }
+    Assert-Test ($lifecycleSuccess.Status -eq 'PASS' -and $lifecycleSuccess.ExitCode -eq 0 -and $lifecycleSuccess.SummaryWritten -and ((@($lifecycleEvents) -join ',') -eq 'evidence,cleanup,summary-PASS')) 'final lifecycle publishes PASS only after evidence and resume cleanup'
+
+    $cleanupLifecycle = Complete-VmAcceptanceLifecycle -PriorError $null `
+        -EvidenceWriter { } -FinalResumeCleanup { throw 'INJECTED final cleanup failure' } `
+        -SummaryFactory $summaryFactory -SummaryWriter { param($Summary) $script:capturedCleanupSummary = $Summary }
+    Assert-Test ($cleanupLifecycle.Status -eq 'FAIL' -and $cleanupLifecycle.ExitCode -eq 1 -and $cleanupLifecycle.SummaryWritten -and $capturedCleanupSummary.Status -eq 'FAIL' -and $capturedCleanupSummary.Error -match 'final resume cleanup failed') 'final cleanup failure writes FAIL summary and returns nonzero exit'
+
+    $evidenceCleanupCalls = 0
+    $evidenceLifecycle = Complete-VmAcceptanceLifecycle -PriorError $null `
+        -EvidenceWriter { throw 'INJECTED final evidence failure' } -FinalResumeCleanup { $script:evidenceCleanupCalls++ } `
+        -SummaryFactory $summaryFactory -SummaryWriter { param($Summary) $script:capturedEvidenceSummary = $Summary }
+    Assert-Test ($evidenceLifecycle.Status -eq 'FAIL' -and $evidenceLifecycle.ExitCode -eq 1 -and $evidenceCleanupCalls -eq 1 -and $capturedEvidenceSummary.Status -eq 'FAIL' -and $capturedEvidenceSummary.Error -match 'final evidence write failed') 'final evidence failure still attempts cleanup and writes FAIL summary'
+
+    $priorErrorCleanupCalls = 0
+    $priorErrorLifecycle = Complete-VmAcceptanceLifecycle -PriorError 'INJECTED prior run failure' `
+        -EvidenceWriter { } -FinalResumeCleanup { $script:priorErrorCleanupCalls++ } `
+        -SummaryFactory $summaryFactory -SummaryWriter { param($Summary) $script:capturedPriorErrorSummary = $Summary }
+    Assert-Test ($priorErrorLifecycle.Status -eq 'FAIL' -and $priorErrorLifecycle.ExitCode -eq 1 -and $priorErrorCleanupCalls -eq 1 -and $capturedPriorErrorSummary.Error -match 'prior run failure') 'prior run failure still attempts final resume cleanup before FAIL summary'
+
+    $summaryWriteAttempts = 0; $persistedSummaries = New-Object Collections.ArrayList
+    $summaryRetryLifecycle = Complete-VmAcceptanceLifecycle -PriorError $null `
+        -EvidenceWriter { } -FinalResumeCleanup { } -SummaryFactory $summaryFactory `
+        -SummaryWriter {
+            param($Summary)
+            $script:summaryWriteAttempts++
+            if ($script:summaryWriteAttempts -eq 1) { throw 'INJECTED PASS summary write failure' }
+            [void]$persistedSummaries.Add($Summary)
+        }
+    Assert-Test ($summaryRetryLifecycle.Status -eq 'FAIL' -and $summaryRetryLifecycle.ExitCode -eq 1 -and $summaryRetryLifecycle.SummaryWritten -and $summaryWriteAttempts -eq 2 -and $persistedSummaries.Count -eq 1 -and $persistedSummaries[0].Status -eq 'FAIL') 'PASS summary write failure retries only as FAIL and returns nonzero exit'
+
+    $summaryHardFailure = Complete-VmAcceptanceLifecycle -PriorError $null `
+        -EvidenceWriter { } -FinalResumeCleanup { } -SummaryFactory $summaryFactory `
+        -SummaryWriter { param($Summary) throw 'INJECTED persistent summary failure' }
+    Assert-Test ($summaryHardFailure.Status -eq 'FAIL' -and $summaryHardFailure.ExitCode -eq 1 -and -not $summaryHardFailure.SummaryWritten -and $summaryHardFailure.Error -match 'FAIL summary write failed') 'persistent summary failure cannot leave PASS or zero exit'
+
+    # The same outer finally pattern used by vm-final releases the instance lock after each lifecycle outcome.
+    $lifecycleLockRoot = Join-Path $testRoot 'lifecycle-lock'
+    foreach ($fault in @('cleanup', 'summary')) {
+        $lifecycleLock = Enter-AcceptanceInstanceLock -ControlRoot $lifecycleLockRoot
+        try {
+            if ($fault -eq 'cleanup') {
+                [void](Complete-VmAcceptanceLifecycle -PriorError $null -EvidenceWriter { } -FinalResumeCleanup { throw 'cleanup' } -SummaryFactory $summaryFactory -SummaryWriter { param($Summary) })
+            }
+            else {
+                [void](Complete-VmAcceptanceLifecycle -PriorError $null -EvidenceWriter { } -FinalResumeCleanup { } -SummaryFactory $summaryFactory -SummaryWriter { param($Summary) throw 'summary' })
+            }
+        }
+        finally { Exit-AcceptanceInstanceLock -Lock $lifecycleLock }
+        $reacquired = Enter-AcceptanceInstanceLock -ControlRoot $lifecycleLockRoot
+        Exit-AcceptanceInstanceLock -Lock $reacquired
+    }
+    Assert-Test (-not (Test-Path -LiteralPath (Join-Path $lifecycleLockRoot '.acceptance.lock'))) 'instance lock is released after final cleanup and summary failure paths'
 
     # Locked owned path produces LOCKED_PATH evidence and resumable state, without rebooting.
     $lockedRoot = Join-Path $testRoot 'locked-root'; New-Item -ItemType Directory -Path $lockedRoot -Force | Out-Null
@@ -186,9 +587,14 @@ try {
     $lockedFile = Join-Path $lockedRoot 'locked.txt'; Set-Content -LiteralPath $lockedFile -Value 'locked'
     $lockedAfter = New-TestSnapshot (Get-AcceptanceFileState -Roots @($lockedRoot)); $lockedDelta=Compare-AcceptanceSnapshot $lockedBefore $lockedAfter
     $handle=New-Object IO.FileStream($lockedFile,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)
-    try { $lockedReset=Reset-AcceptanceEnvironment -Baseline $lockedBefore -Current $lockedAfter -Delta $lockedDelta -ProjectRoot $ProjectRoot -ControlRoot (Join-Path $testRoot 'control-d') -ResultRoot (Join-Path $testRoot 'results-d') -AllowedCleanupRoots @($lockedRoot) -ProtectedProcessIds @($PID) -Ownership (New-AcceptanceOwnership -PathRoots @($lockedRoot)) }
+    try {
+        $lockedReset=Reset-AcceptanceEnvironment -Baseline $lockedBefore -Current $lockedAfter -Delta $lockedDelta -ProjectRoot $ProjectRoot -ControlRoot (Join-Path $testRoot 'control-d') -ResultRoot (Join-Path $testRoot 'results-d') -AllowedCleanupRoots @($lockedRoot) -ProtectedProcessIds @($PID) -Ownership (New-AcceptanceOwnership -PathRoots @($lockedRoot))
+        $lockedRetry=Reset-AcceptanceEnvironment -Baseline $lockedBefore -Current $lockedAfter -Delta $lockedDelta -ProjectRoot $ProjectRoot -ControlRoot (Join-Path $testRoot 'control-d') -ResultRoot (Join-Path $testRoot 'results-d') -AllowedCleanupRoots @($lockedRoot) -ProtectedProcessIds @($PID) -Ownership (New-AcceptanceOwnership -PathRoots @($lockedRoot))
+    }
     finally { $handle.Dispose() }
-    Assert-Test (-not $lockedReset.Success -and (@($lockedReset.Errors) -match '^LOCKED_PATH:')) 'locked path produces resumable cleanup failure'
+    Assert-Test (-not $lockedReset.Success -and (@($lockedReset.Errors) -match '^LOCKED_PATH:') -and -not $lockedRetry.Success -and (@($lockedRetry.Errors) -match '^LOCKED_PATH:')) 'locked path and repeated pending cleanup produce resumable LOCKED_PATH evidence'
+    $unlockedRetry=Reset-AcceptanceEnvironment -Baseline $lockedBefore -Current $lockedAfter -Delta $lockedDelta -ProjectRoot $ProjectRoot -ControlRoot (Join-Path $testRoot 'control-d') -ResultRoot (Join-Path $testRoot 'results-d') -AllowedCleanupRoots @($lockedRoot) -ProtectedProcessIds @($PID) -Ownership (New-AcceptanceOwnership -PathRoots @($lockedRoot))
+    Assert-Test ($unlockedRetry.Success -and -not (Test-Path -LiteralPath $lockedFile)) 'pending cleanup succeeds after locked path is released'
 
     # Stage timeout preserves partial stdout, stderr, and result metadata.
     $stageEvidence=Join-Path $testRoot 'stage-evidence';New-Item -ItemType Directory -Path $stageEvidence -Force|Out-Null
@@ -203,13 +609,22 @@ Start-Sleep -Seconds 30
     $timeoutResult=Get-Content (Join-Path $stageEvidence 'timeout-proof.result.json') -Raw -Encoding UTF8|ConvertFrom-Json
     Assert-Test ($timeoutThrown -and $timeoutResult.TimedOut -and (Get-Content (Join-Path $stageEvidence 'timeout-proof.stdout.txt') -Raw) -match 'STDOUT-BEFORE-TIMEOUT' -and (Get-Content (Join-Path $stageEvidence 'timeout-proof.stderr.txt') -Raw) -match 'STDERR-BEFORE-TIMEOUT') 'timeout preserves stdout stderr and metadata'
 
+    $capturedTimeoutHelper=Join-Path $testRoot 'captured-timeout-helper.ps1'; @'
+Write-Output 'CAPTURED-STDOUT-BEFORE-TIMEOUT'
+[Console]::Error.WriteLine('CAPTURED-STDERR-BEFORE-TIMEOUT')
+Start-Sleep -Seconds 30
+'@.TrimStart() | Set-Content -LiteralPath $capturedTimeoutHelper -Encoding UTF8
+    $capturedTimeout=Invoke-AcceptanceCapturedCommand -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$capturedTimeoutHelper) -TimeoutSec 1
+    Assert-Test ($capturedTimeout.TimedOut -and $capturedTimeout.StdOut -match 'CAPTURED-STDOUT-BEFORE-TIMEOUT' -and $capturedTimeout.StdErr -match 'CAPTURED-STDERR-BEFORE-TIMEOUT') 'captured command timeout preserves stdout stderr evidence'
+
     # Real environment must be byte-identical to the baseline captured before any test ran.
     Assert-Test ([Environment]::GetEnvironmentVariable('Path', 'User') -ceq $realEnvBaseline.UserPath) 'real user PATH unchanged across all tests'
     Assert-Test ([Environment]::GetEnvironmentVariable('Path', 'Machine') -ceq $realEnvBaseline.MachinePath) 'real machine PATH unchanged across all tests'
     Assert-Test ($env:Path -ceq $realEnvBaseline.ProcessPath) 'real process PATH unchanged across all tests'
     $settingsExistsNow = Test-Path -LiteralPath $realSettingsPath
+    $settingsLengthNow = if ($settingsExistsNow) { (Get-Item -LiteralPath $realSettingsPath -Force).Length } else { 0 }
     $settingsHashNow = if ($settingsExistsNow) { (Get-FileHash -LiteralPath $realSettingsPath -Algorithm SHA256).Hash } else { $null }
-    Assert-Test (($settingsExistsNow -eq $realEnvBaseline.SettingsExists) -and ($settingsHashNow -eq $realEnvBaseline.SettingsHash)) 'real settings.json unchanged across all tests'
+    Assert-Test (($settingsExistsNow -eq $realEnvBaseline.SettingsExists) -and ($settingsLengthNow -eq $realEnvBaseline.SettingsLength) -and ($settingsHashNow -eq $realEnvBaseline.SettingsHash)) 'real settings.json unchanged across all tests'
 
     Write-Host "[vm-test] PASS: $($passes.Count) functional checks" -ForegroundColor Green
 }

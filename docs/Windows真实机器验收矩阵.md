@@ -9,7 +9,7 @@
 本矩阵下方标 MANUAL/"必须"的场景（如 WIN-REAL-001 干净安装、WIN-REAL-004 官方不可达 fallback、WIN-REAL-005 无 winget、WIN-REAL-008 中文/空格路径、WIN-REAL-010 卸载恢复）现已由独立的 VM ConPTY 验收体系在专用 Win11 VMware 内用提示驱动交互自动化覆盖，不再仅靠手工双击。
 
 - 入口与流程：`docs/验收与交接体系.md` 第 11 章
-- 场景定义：`scripts/data/interactive-acceptance-scenarios.json`（15 TestSafe + 7 Live）
+- 场景定义：`scripts/data/interactive-acceptance-scenarios.json`（16 TestSafe + 8 Live）
 - 防回归守卫：`scripts/check.ps1` 的 "Single-user ConPTY VM acceptance anti-regression" 块
 
 本矩阵仍作为场景定义来源和真机补充验收清单保留；手工验收列在 VM 自动化覆盖后用于核对真实 UAC/安全桌面等无法脚本化的体验。
@@ -280,4 +280,4 @@
 
 - `docs/验收与交接体系.md` — 完整验收体系说明（第 11 章：VM 内全自动人工交互验收）
 - `docs/发布前验收清单.md` — 发布前验收命令
-- `docs/v1.3.2-rc-验收与修复交接.md` — 当前版本验收状态
+- `docs/v1.3.2-rc-验收与修复交接.md` — 历史 v1.3.2-rc 验收状态
