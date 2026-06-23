@@ -109,6 +109,12 @@ function Test-VmAutomaticRestartAllowed {
     return $AcceptanceMode -eq 'Live' -and $RealInstallAcknowledged -and $RestartAcknowledged
 }
 
+function Get-VmAcceptanceCollectionCount {
+    param([AllowNull()][object]$Value)
+    if ($null -eq $Value) { return 0 }
+    return @($Value).Count
+}
+
 function Invoke-VmAuthorizedRestart {
     param(
         $ResumeState,
@@ -545,7 +551,7 @@ try {
     else {
         if ($Mode -eq "Live") {
             $preexistingRequiredCleanCommands = @("claude", "node", "npm") | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue }
-            if ($preexistingRequiredCleanCommands.Count -gt 0) {
+            if ((Get-VmAcceptanceCollectionCount $preexistingRequiredCleanCommands) -gt 0) {
                 throw "Live baseline must start without claude/node/npm: $($preexistingRequiredCleanCommands -join ', ')"
             }
         }
@@ -583,7 +589,7 @@ try {
         }
         if ($Mode -eq 'Live') {
             $postStaticCommands = @('claude', 'node', 'npm') | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue }
-            if ($postStaticCommands.Count -gt 0) { throw "Static validation polluted the Live clean-install baseline: $($postStaticCommands -join ', ')" }
+            if ((Get-VmAcceptanceCollectionCount $postStaticCommands) -gt 0) { throw "Static validation polluted the Live clean-install baseline: $($postStaticCommands -join ', ')" }
         }
         $staticGuardActive = $false
         if ($staticGuardBefore.SettingsBytes) { [Array]::Clear($staticGuardBefore.SettingsBytes, 0, $staticGuardBefore.SettingsBytes.Length) }

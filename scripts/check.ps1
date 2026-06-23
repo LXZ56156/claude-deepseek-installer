@@ -5557,6 +5557,75 @@ if ($acceptanceFunctionalText -match 'SetEnvironmentVariable\(''Path'',\$oldUser
     $acceptanceFunctionalText -notmatch 'failure preserves state and failure evidence') {
     throw "Functional acceptance must not write real user PATH and must prove TestSafe cannot restart"
 }
+foreach ($forbiddenScalarCount in @('$preexistingRequiredCleanCommands.Count', '$postStaticCommands.Count')) {
+    if ($acceptanceOrchestratorText.Contains($forbiddenScalarCount)) {
+        throw "VM final acceptance must not use scalar-unsafe command collection count: $forbiddenScalarCount"
+    }
+}
+if ($acceptanceOrchestratorText -notmatch 'function\s+Get-VmAcceptanceCollectionCount' -or
+    $acceptanceOrchestratorText -notmatch 'Get-VmAcceptanceCollectionCount\s+\$preexistingRequiredCleanCommands' -or
+    $acceptanceOrchestratorText -notmatch 'Get-VmAcceptanceCollectionCount\s+\$postStaticCommands') {
+    throw "VM final acceptance must count Live command collections through Get-VmAcceptanceCollectionCount"
+}
+foreach ($strictCountTest in @(
+    'preexisting clean command count handles 0 under StrictMode',
+    'preexisting clean command count handles 1 under StrictMode',
+    'preexisting clean command count handles many under StrictMode',
+    'post static command count handles 0 under StrictMode',
+    'post static command count handles 1 under StrictMode',
+    'post static command count handles many under StrictMode'
+)) {
+    if ($acceptanceFunctionalText -notmatch [regex]::Escape($strictCountTest)) {
+        throw "VM acceptance functional tests must cover StrictMode scalar collection count case: $strictCountTest"
+    }
+}
+function Get-VmFinalPipelineCountRisk {
+    param([string]$Path, [string]$Text)
+    $riskyCommands = @('Where-Object', 'Select-Object', 'Select-String', 'Get-ChildItem', 'ConvertFrom-Json', 'ForEach-Object', 'Compare-Object', 'Sort-Object', 'Group-Object')
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -gt 0) { throw "VM final acceptance parse failed during scalar .Count scan: $($parseErrors[0].Message)" }
+    $riskyAssignments = @{}
+    foreach ($assignment in @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true))) {
+        if ($assignment.Left -isnot [System.Management.Automation.Language.VariableExpressionAst]) { continue }
+        if ($assignment.Right -is [System.Management.Automation.Language.ArrayExpressionAst]) { continue }
+        $assignmentText = $Text.Substring($assignment.Extent.StartOffset, $assignment.Extent.EndOffset - $assignment.Extent.StartOffset)
+        if ($assignmentText -match '^\s*\[array\]') { continue }
+        if ($assignmentText -match '^\s*\$[A-Za-z0-9_:]+\s*=\s*@\(' -and
+            $assignmentText -notmatch '^\s*\$[A-Za-z0-9_:]+\s*=\s*@\([^\r\n]*\)\s*\|') { continue }
+        $pipeline = $assignment.Right.FindAll({ param($node) $node -is [System.Management.Automation.Language.PipelineAst] -and $node.PipelineElements.Count -gt 1 }, $true)
+        if (@($pipeline).Count -eq 0) { continue }
+        $hasRiskyCommand = $false
+        foreach ($commandAst in @($assignment.Right.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true))) {
+            if ($riskyCommands -contains $commandAst.GetCommandName()) { $hasRiskyCommand = $true; break }
+        }
+        if ($hasRiskyCommand) {
+            $riskyAssignments[$assignment.Left.VariablePath.UserPath] = $assignment.Extent.StartLineNumber
+        }
+    }
+    $risks = New-Object Collections.ArrayList
+    foreach ($member in @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.MemberExpressionAst] }, $true))) {
+        if ($member.Member -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { continue }
+        if ($member.Member.Value -ne 'Count') { continue }
+        if ($member.Expression -isnot [System.Management.Automation.Language.VariableExpressionAst]) { continue }
+        $variableName = $member.Expression.VariablePath.UserPath
+        if ($riskyAssignments.ContainsKey($variableName)) {
+            [void]$risks.Add([PSCustomObject]@{
+                File = $Path
+                CountLine = $member.Extent.StartLineNumber
+                Variable = '$' + $variableName
+                AssignmentLine = $riskyAssignments[$variableName]
+            })
+        }
+    }
+    return @($risks)
+}
+$vmFinalCountRisks = @(Get-VmFinalPipelineCountRisk -Path 'scripts\vm-final-acceptance.ps1' -Text $acceptanceOrchestratorText)
+if ($vmFinalCountRisks.Count -gt 0) {
+    $riskDetails = @($vmFinalCountRisks | ForEach-Object { "$($_.File):$($_.CountLine) $($_.Variable).Count after pipeline assignment at line $($_.AssignmentLine)" }) -join "`n"
+    throw "VM final acceptance has possible scalar .Count risk:`n$riskDetails"
+}
 if ($acceptanceEnvironmentText -notmatch 'Assert-AcceptanceResumeState' -or
     $acceptanceEnvironmentText -notmatch "SchemaVersion'.*integer 3" -or
     $acceptanceEnvironmentText -notmatch 'Test-AcceptanceScheduledTaskExists' -or

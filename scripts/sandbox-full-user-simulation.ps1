@@ -1527,7 +1527,7 @@ try {
                 $backupCandidates += Get-ChildItem -Path $scanDir -Recurse -File -Include "*.bak","*.backup","settings.json.*" -ErrorAction SilentlyContinue
             }
         }
-        $nonEmptyBackups = $backupCandidates | Where-Object { $_.Length -gt 0 }
+        $nonEmptyBackups = @($backupCandidates | Where-Object { $_.Length -gt 0 })
         if ($nonEmptyBackups.Count -gt 0) {
             Write-SandboxPass "O2. Corrupted JSON backed up ($($nonEmptyBackups.Count) non-empty backup(s))"
         } else {

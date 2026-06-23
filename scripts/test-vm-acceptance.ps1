@@ -344,6 +344,23 @@ try {
     Assert-Test (-not (Test-Path -LiteralPath $faultBin)) 'fault-bin removed after stop'
     Assert-Test (($env:Path -ceq $oldProcessPath) -and ([Environment]::GetEnvironmentVariable('Path', 'User') -ceq $oldUserPath)) 'real PATH fully unchanged across fault test'
 
+    function Get-TestCollapsedCommandMatches {
+        param([string[]]$Available)
+        return @('claude', 'node', 'npm') | Where-Object { $_ -in $Available }
+    }
+    $preexistingZero = Get-TestCollapsedCommandMatches -Available @()
+    $preexistingOne = Get-TestCollapsedCommandMatches -Available @('node')
+    $preexistingMany = Get-TestCollapsedCommandMatches -Available @('claude', 'npm')
+    Assert-Test ((Get-VmAcceptanceCollectionCount $preexistingZero) -eq 0) 'preexisting clean command count handles 0 under StrictMode'
+    Assert-Test ((Get-VmAcceptanceCollectionCount $preexistingOne) -eq 1) 'preexisting clean command count handles 1 under StrictMode'
+    Assert-Test ((Get-VmAcceptanceCollectionCount $preexistingMany) -eq 2) 'preexisting clean command count handles many under StrictMode'
+    $postStaticZero = Get-TestCollapsedCommandMatches -Available @()
+    $postStaticOne = Get-TestCollapsedCommandMatches -Available @('claude')
+    $postStaticMany = Get-TestCollapsedCommandMatches -Available @('node', 'npm')
+    Assert-Test ((Get-VmAcceptanceCollectionCount $postStaticZero) -eq 0) 'post static command count handles 0 under StrictMode'
+    Assert-Test ((Get-VmAcceptanceCollectionCount $postStaticOne) -eq 1) 'post static command count handles 1 under StrictMode'
+    Assert-Test ((Get-VmAcceptanceCollectionCount $postStaticMany) -eq 2) 'post static command count handles many under StrictMode'
+
     # Resume state round-trip preserves parameters and all previous results without registering real tasks.
     $resumePaths = Get-AcceptanceControlPaths -ControlRoot (Join-Path $testRoot 'resume-control') -RunId '20260623-120000-001'
     New-Item -ItemType Directory -Path $resumePaths.Run -Force | Out-Null

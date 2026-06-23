@@ -7,7 +7,7 @@
 ## Active Work
 
 - **Branch**: `fix/v1.3.3-native-path-doctor-ux`
-- **Status**: VM acceptance final closure implemented on host: transactional resume registration/cleanup, strict SchemaVersion 3 prefix validation, UTF-8 ConPTY driver, static machine-state guard, transactional final summary, isolated TestSafe release output, redacted release API-key scan diagnostics, scenario/step final failureText scan, evidence-gated resume cleanup, release StrictMode scalar Count fix, 113 functional checks pass, and Full/Release/Hardcore validations pass. Current non-dedicated host `vm-final -Mode TestSafe` is blocked before scenarios by active `.claude`/node noise; previous isolated TestSafe interactive scenarios pass. Dedicated VM Live and real reboot remain pending.
+- **Status**: VM acceptance final closure implemented on host: transactional resume registration/cleanup, strict SchemaVersion 3 prefix validation, UTF-8 ConPTY driver, static machine-state guard, transactional final summary, isolated TestSafe release output, redacted release API-key scan diagnostics, scenario/step final failureText scan, evidence-gated resume cleanup, release and Live command-collection StrictMode scalar Count fixes, 119 functional checks pass, and Full/Release/Hardcore validations pass. Current non-dedicated host `vm-final -Mode TestSafe` is blocked before scenarios by active `.claude`/node noise; previous isolated TestSafe interactive scenarios pass. Dedicated VM Live and real reboot remain pending.
 - **Next**: 在专用 Win11 VMware 验收机执行 TestSafe final-equivalence、Live（8 场景）和真实重启续跑；在该机复验 vm-final final-equivalence（主机无其他 Claude 会话时不复现噪声）。Do not merge/tag/release until VM Live + real-reboot resume pass.
 - **Latest commit**: run `git log -1 --oneline`; this file does not self-reference a commit SHA because that would change the commit itself.
 
@@ -19,6 +19,7 @@
 
 | 日期 | 内容 | Commit |
 |------|------|--------|
+| 2026-06-23 | Live StrictMode scalar command-count closure — safe 0/1/N helper, same-class scan fixes, 119 functional checks | 本提交 |
 | 2026-06-23 | Remote review closure — API Key scan redaction, scenario/step final failureText scan, evidence-gated resume cleanup, release StrictMode scalar Count fix, 113 functional checks | 本提交 |
 | 2026-06-23 | VM acceptance closure — transactional lifecycle, strict resume prefix schema, UTF-8 ConPTY driver, winget baseline evidence, static state guard, isolated release output, 112 functional checks, 16 TestSafe interactive scenarios | 本提交 |
 | 2026-06-23 | Resume follow-up — fail-closed task cleanup, schema gate, checkpoint lifecycle, control-flow test, complete reboot command | 本提交 |
