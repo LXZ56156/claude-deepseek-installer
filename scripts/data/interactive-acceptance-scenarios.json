@@ -57,7 +57,7 @@
           { "expect": "请输入 Y 确认已阅读并同意", "send": "Y\r", "timeoutSec": 30 },
           { "expect": "请输入选项编号 \\(1-6，直接回车默认选 1\\)", "send": "5\r", "timeoutSec": 30 },
           { "expect": "请输入选项编号 \\(1-3\\)", "send": "1\r", "timeoutSec": 30 },
-          { "expect": "API Key", "sendSecret": "dummy", "timeoutSec": 60 },
+          { "expect": "(?m)^API Key\\s*[:：]", "sendSecret": "dummy", "timeoutSec": 60 },
           { "expect": "按回车继续，输入 R 重新粘贴，输入 Q 取消", "send": "\r", "timeoutSec": 30 },
           { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 90 }
         ],

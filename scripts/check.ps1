@@ -5827,6 +5827,21 @@ if (@($testSafeScenarioIds).Count -ne 16 -or @($requiredTestSafeIds | Where-Obje
 if (@($liveScenarioIds).Count -ne 8 -or @($requiredLiveIds | Where-Object { $_ -notin $liveScenarioIds }).Count -gt 0) {
     throw "Live interactive scenario set is incomplete or no longer exactly 8 scenarios"
 }
+$configureSecretScenario = @($acceptanceScenarioDocument.scenarioSets.TestSafe | Where-Object { $_.id -eq 'configure-secret-input' })
+if ($configureSecretScenario.Count -ne 1) {
+    throw "TestSafe configure-secret-input scenario must exist exactly once"
+}
+$configureSecretSendSecretSteps = @($configureSecretScenario[0].steps | Where-Object { $_.PSObject.Properties.Name -contains 'sendSecret' })
+if ($configureSecretSendSecretSteps.Count -ne 1) {
+    throw "configure-secret-input must contain exactly one sendSecret step"
+}
+$configureSecretPromptRegex = [string]$configureSecretSendSecretSteps[0].expect
+if ($configureSecretPromptRegex -eq 'API Key') {
+    throw "configure-secret-input sendSecret step must not use broad 'API Key' regex"
+}
+if ($configureSecretPromptRegex -ne '(?m)^API Key\s*[:：]') {
+    throw "configure-secret-input sendSecret step must match the actual Read-Host prompt: (?m)^API Key\s*[:：]"
+}
 foreach ($scenario in @($acceptanceScenarioDocument.scenarioSets.TestSafe) + @($acceptanceScenarioDocument.scenarioSets.Live)) {
     if (-not $scenario.id -or -not $scenario.entry -or [int]$scenario.timeoutSec -le 0 -or @($scenario.steps).Count -eq 0) {
         throw "Invalid interactive scenario definition: $($scenario.id)"
