@@ -5804,6 +5804,18 @@ if ($acceptanceRunnerText -match $parenthesizedStatementAssignmentPattern) {
 if ($acceptanceRunnerText -match $responderCountParenthesizedIfPattern) {
     throw "interactive-user-acceptance.ps1 responder counts must use plain if/else assignment"
 }
+if ($acceptanceRunnerText -notmatch 'function Get-ScenarioEntryMode' -or
+    $acceptanceRunnerText -notmatch 'function Get-ScenarioEntryArgs' -or
+    $acceptanceRunnerText -notmatch 'function New-ScenarioCommandLine' -or
+    $acceptanceRunnerText -notmatch 'entryMode' -or
+    $acceptanceRunnerText -notmatch 'entryArgs must be a JSON string array' -or
+    $acceptanceRunnerText -notmatch 'entryArgs must not contain newlines' -or
+    $acceptanceRunnerText -notmatch 'entryArgs are only supported for powershell entryMode' -or
+    $acceptanceRunnerText -notmatch '\[IO\.Path\]::GetExtension\(\$EntryRelative\)\s+-ne\s+"\.ps1"' -or
+    $acceptanceRunnerText -notmatch 'Scenario entry is not a safe package-relative path' -or
+    $acceptanceRunnerText -notmatch 'ConvertTo-WindowsCommandLineArgument \(\[string\]\$_\)') {
+    throw "interactive-user-acceptance.ps1 must keep safe powershell entryMode with .ps1, entryArgs, unsafe-path, newline, and per-argument quoting gates"
+}
 
 if ($acceptanceAllText -match '(?i)New-LocalUser|Remove-LocalUser|Windows\s*Sandbox|WindowsSandbox|\bVNC\b|SendKeys|VMware\s+snapshot|Checkpoint-VM') {
     throw "VM acceptance must remain single-user and must not depend on Sandbox, VNC, SendKeys, or VM snapshots"
@@ -6122,6 +6134,55 @@ if (@($testSafeScenarioIds).Count -ne 16 -or @($requiredTestSafeIds | Where-Obje
 }
 if (@($liveScenarioIds).Count -ne 8 -or @($requiredLiveIds | Where-Object { $_ -notin $liveScenarioIds }).Count -gt 0) {
     throw "Live interactive scenario set is incomplete or no longer exactly 8 scenarios"
+}
+$doctorMockScenarioIds = @(
+    'doctor-mock-200', 'doctor-mock-401', 'doctor-mock-402', 'doctor-mock-429', 'doctor-mock-503',
+    'doctor-mock-timeout', 'doctor-mock-dns'
+)
+$doctorMockRequiredText = @{
+    'doctor-mock-200' = @('200 OK')
+    'doctor-mock-401' = @('API Key 验证失败')
+    'doctor-mock-402' = @('余额')
+    'doctor-mock-429' = @('HTTP 429', 'API 请求频率限制')
+    'doctor-mock-503' = @('HTTP 503', 'DeepSeek 服务暂不可用')
+    'doctor-mock-timeout' = @('连接超时')
+    'doctor-mock-dns' = @('DNS 解析失败')
+}
+foreach ($scenarioId in $doctorMockScenarioIds) {
+    $scenario = @($acceptanceScenarioDocument.scenarioSets.TestSafe | Where-Object { $_.id -eq $scenarioId } | Select-Object -First 1)
+    if ($scenario.Count -eq 0) { throw "doctor mock scenario missing: $scenarioId" }
+    $scenario = $scenario[0]
+    $entryArgs = if ($scenario.PSObject.Properties.Name -contains 'entryArgs') { @($scenario.entryArgs) } else { @() }
+    $environmentNames = if ($scenario.PSObject.Properties.Name -contains 'environment') { @($scenario.environment.PSObject.Properties.Name) } else { @() }
+    $requiredTexts = if ($scenario.PSObject.Properties.Name -contains 'required') { @($scenario.required) } else { @() }
+    if ([string]$scenario.entry -ne 'doctor.ps1' -or
+        [string]$scenario.entryMode -ne 'powershell' -or
+        $entryArgs -notcontains '-ShareSafe' -or
+        $entryArgs -notcontains '-NoOpenReport' -or
+        $entryArgs -contains '-SkipApiTest' -or
+        $environmentNames -notcontains 'CCDI_TEST_API_STATUS') {
+        throw "$scenarioId must run doctor.ps1 via powershell -ShareSafe -NoOpenReport with CCDI_TEST_API_STATUS and without -SkipApiTest"
+    }
+    foreach ($requiredText in @($doctorMockRequiredText[$scenarioId])) {
+        if ($requiredTexts -notcontains $requiredText) {
+            throw "$scenarioId required output missing static gate text: $requiredText"
+        }
+    }
+}
+$diagnosticLauncherScenario = @($acceptanceScenarioDocument.scenarioSets.TestSafe | Where-Object { $_.id -eq 'diagnostic-launcher' } | Select-Object -First 1)
+if ($diagnosticLauncherScenario.Count -eq 0) { throw "diagnostic-launcher scenario missing" }
+$diagnosticLauncherScenario = $diagnosticLauncherScenario[0]
+$diagnosticRequired = if ($diagnosticLauncherScenario.PSObject.Properties.Name -contains 'required') { @($diagnosticLauncherScenario.required) } else { @() }
+$diagnosticForbidden = if ($diagnosticLauncherScenario.PSObject.Properties.Name -contains 'forbidden') { @($diagnosticLauncherScenario.forbidden) } else { @() }
+if ([string]$diagnosticLauncherScenario.entry -ne '一键诊断.cmd' -or
+    $diagnosticRequired -notcontains 'DeepSeek API 测试' -or
+    $diagnosticRequired -notcontains '已按参数跳过') {
+    throw "diagnostic-launcher must cover the safe 一键诊断.cmd API-skip behavior"
+}
+foreach ($forbiddenDiagnosticOutput in @('200 OK', 'API Key 验证失败', 'HTTP 429', 'HTTP 503', '连接超时', 'DNS 解析失败')) {
+    if ($diagnosticForbidden -notcontains $forbiddenDiagnosticOutput) {
+        throw "diagnostic-launcher must forbid mock API output: $forbiddenDiagnosticOutput"
+    }
 }
 $officialOnlyLiveScenarioIds = @('live-official-success', 'live-real-api-and-diagnostic')
 foreach ($scenarioId in $officialOnlyLiveScenarioIds) {

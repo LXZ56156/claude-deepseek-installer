@@ -287,6 +287,75 @@ function Send-ScenarioInput {
     }
 }
 
+function Get-ScenarioEntryMode {
+    param($Scenario)
+
+    $mode = "cmd"
+    if ($Scenario.PSObject.Properties.Name -contains "entryMode") {
+        $mode = [string]$Scenario.entryMode
+    }
+    if ($mode -notin @("cmd", "powershell")) {
+        throw "Unsupported scenario entryMode '$mode' for scenario $($Scenario.id)"
+    }
+    return $mode
+}
+
+function Get-ScenarioEntryArgs {
+    param($Scenario)
+
+    if ($Scenario.PSObject.Properties.Name -notcontains "entryArgs") { return @() }
+    if ($null -eq $Scenario.entryArgs -or $Scenario.entryArgs -is [string]) {
+        throw "Scenario entryArgs must be a JSON string array: $($Scenario.id)"
+    }
+
+    $args = New-Object System.Collections.ArrayList
+    foreach ($arg in @($Scenario.entryArgs)) {
+        if ($null -eq $arg -or -not ($arg -is [string])) {
+            throw "Scenario entryArgs must contain only strings: $($Scenario.id)"
+        }
+        $argText = [string]$arg
+        if ($argText -match "[`r`n]") {
+            throw "Scenario entryArgs must not contain newlines: $($Scenario.id)"
+        }
+        [void]$args.Add($argText)
+    }
+    return @($args)
+}
+
+function New-ScenarioCommandLine {
+    param(
+        $Scenario,
+        [string]$EntryRelative
+    )
+
+    $entryMode = Get-ScenarioEntryMode -Scenario $Scenario
+    if ($entryMode -eq "cmd") {
+        if ($Scenario.PSObject.Properties.Name -contains "entryArgs" -and @($Scenario.entryArgs).Count -gt 0) {
+            throw "entryArgs are only supported for powershell entryMode: $($Scenario.id)"
+        }
+        return (ConvertTo-WindowsCommandLineArgument $env:ComSpec) + " /d /s /c call " + (ConvertTo-WindowsCommandLineArgument $EntryRelative)
+    }
+
+    if ([IO.Path]::GetExtension($EntryRelative) -ne ".ps1") {
+        throw "powershell entryMode requires a .ps1 entry: $EntryRelative"
+    }
+
+    $fileArgument = $EntryRelative
+    if (-not ($fileArgument.StartsWith(".\", [StringComparison]::Ordinal) -or $fileArgument.StartsWith("./", [StringComparison]::Ordinal))) {
+        $fileArgument = ".\" + $fileArgument
+    }
+
+    $parts = New-Object System.Collections.ArrayList
+    foreach ($part in @("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $fileArgument)) {
+        [void]$parts.Add($part)
+    }
+    foreach ($arg in @(Get-ScenarioEntryArgs -Scenario $Scenario)) {
+        [void]$parts.Add($arg)
+    }
+
+    return (@($parts) | ForEach-Object { ConvertTo-WindowsCommandLineArgument ([string]$_) }) -join " "
+}
+
 function Invoke-ConPtyScenario {
     param(
         $Scenario,
@@ -309,7 +378,7 @@ function Invoke-ConPtyScenario {
         }
     }
     $entryRelative = [string]$Scenario.entry
-    if ([IO.Path]::IsPathRooted($entryRelative) -or $entryRelative -match '[&|<>^()%!]' ) { throw "Scenario entry is not a safe package-relative path: $entryRelative" }
+    if ([IO.Path]::IsPathRooted($entryRelative) -or $entryRelative -match '[&|<>^()%!]' -or $entryRelative -match "[`r`n]") { throw "Scenario entry is not a safe package-relative path: $entryRelative" }
     $releaseFull = [IO.Path]::GetFullPath($scenarioReleaseRoot).TrimEnd('\')
     $entryPath = [IO.Path]::GetFullPath((Join-Path $releaseFull $entryRelative))
     if (-not $entryPath.StartsWith($releaseFull + '\', [StringComparison]::OrdinalIgnoreCase)) { throw "Scenario entry escapes the package root: $entryRelative" }
@@ -332,9 +401,9 @@ function Invoke-ConPtyScenario {
     $failurePatterns = Get-ScenarioFailurePatterns -Scenario $Scenario -GlobalFailurePatterns @('脚本执行过程中发生未预期的错误', 'TIMEOUT:')
 
     try {
-        # The process working directory is already the package root. Using the relative
-        # entry avoids cmd.exe expanding metacharacters from an arbitrary extraction path.
-        $commandLine = (ConvertTo-WindowsCommandLineArgument $env:ComSpec) + " /d /s /c call " + (ConvertTo-WindowsCommandLineArgument $entryRelative)
+        # The process working directory is already the package root. Keep entries
+        # package-relative, and quote each executable/argument independently.
+        $commandLine = New-ScenarioCommandLine -Scenario $Scenario -EntryRelative $entryRelative
         $process = [Ccdi.Acceptance.ConPtyProcess]::Start($commandLine, $scenarioReleaseRoot, 160, 50)
         Add-InteractionEvent -Events $events -Type "start" -Rule ([string]$Scenario.id) -Value "PID=$($process.ProcessId); JobAssigned=$($process.JobAssigned)"
         $scenarioDeadline = $startedAt.AddSeconds([int]$Scenario.timeoutSec)

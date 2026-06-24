@@ -66,84 +66,98 @@
       },
       {
         "id": "doctor-mock-200",
-        "entry": "一键诊断.cmd",
+        "entry": "doctor.ps1",
+        "entryMode": "powershell",
+        "entryArgs": ["-ShareSafe", "-NoOpenReport"],
         "setupDummyConfig": true,
         "timeoutSec": 240,
         "environment": { "CCDI_TEST_API_STATUS": "200" },
         "steps": [
-          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 210 }
+          { "expect": "200 OK", "send": null, "timeoutSec": 210 }
         ],
         "required": ["200 OK"],
         "expectedExitCodes": [0]
       },
       {
         "id": "doctor-mock-401",
-        "entry": "一键诊断.cmd",
+        "entry": "doctor.ps1",
+        "entryMode": "powershell",
+        "entryArgs": ["-ShareSafe", "-NoOpenReport"],
         "setupDummyConfig": true,
         "timeoutSec": 240,
         "environment": { "CCDI_TEST_API_STATUS": "401" },
         "steps": [
-          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 210 }
+          { "expect": "API Key 验证失败", "send": null, "timeoutSec": 210 }
         ],
         "required": ["API Key 验证失败"],
         "expectedExitCodes": [0]
       },
       {
         "id": "doctor-mock-402",
-        "entry": "一键诊断.cmd",
+        "entry": "doctor.ps1",
+        "entryMode": "powershell",
+        "entryArgs": ["-ShareSafe", "-NoOpenReport"],
         "setupDummyConfig": true,
         "timeoutSec": 240,
         "environment": { "CCDI_TEST_API_STATUS": "402" },
         "steps": [
-          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 210 }
+          { "expect": "余额", "send": null, "timeoutSec": 210 }
         ],
         "required": ["余额"],
         "expectedExitCodes": [0]
       },
       {
         "id": "doctor-mock-429",
-        "entry": "一键诊断.cmd",
+        "entry": "doctor.ps1",
+        "entryMode": "powershell",
+        "entryArgs": ["-ShareSafe", "-NoOpenReport"],
         "setupDummyConfig": true,
         "timeoutSec": 240,
         "environment": { "CCDI_TEST_API_STATUS": "429" },
         "steps": [
-          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 210 }
+          { "expect": "HTTP 429", "send": null, "timeoutSec": 210 }
         ],
         "required": ["HTTP 429", "API 请求频率限制"],
         "expectedExitCodes": [0]
       },
       {
         "id": "doctor-mock-503",
-        "entry": "一键诊断.cmd",
+        "entry": "doctor.ps1",
+        "entryMode": "powershell",
+        "entryArgs": ["-ShareSafe", "-NoOpenReport"],
         "setupDummyConfig": true,
         "timeoutSec": 240,
         "environment": { "CCDI_TEST_API_STATUS": "503" },
         "steps": [
-          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 210 }
+          { "expect": "HTTP 503", "send": null, "timeoutSec": 210 }
         ],
         "required": ["HTTP 503", "DeepSeek 服务暂不可用"],
         "expectedExitCodes": [0]
       },
       {
         "id": "doctor-mock-timeout",
-        "entry": "一键诊断.cmd",
+        "entry": "doctor.ps1",
+        "entryMode": "powershell",
+        "entryArgs": ["-ShareSafe", "-NoOpenReport"],
         "setupDummyConfig": true,
         "timeoutSec": 240,
         "environment": { "CCDI_TEST_API_STATUS": "timeout" },
         "steps": [
-          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 210 }
+          { "expect": "连接超时", "send": null, "timeoutSec": 210 }
         ],
         "required": ["连接超时"],
         "expectedExitCodes": [0]
       },
       {
         "id": "doctor-mock-dns",
-        "entry": "一键诊断.cmd",
+        "entry": "doctor.ps1",
+        "entryMode": "powershell",
+        "entryArgs": ["-ShareSafe", "-NoOpenReport"],
         "setupDummyConfig": true,
         "timeoutSec": 240,
         "environment": { "CCDI_TEST_API_STATUS": "dns" },
         "steps": [
-          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 210 }
+          { "expect": "DNS 解析失败", "send": null, "timeoutSec": 210 }
         ],
         "required": ["DNS 解析失败"],
         "expectedExitCodes": [0]
@@ -189,7 +203,8 @@
         "steps": [
           { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 210 }
         ],
-        "required": ["诊断"],
+        "required": ["诊断", "DeepSeek API 测试", "已按参数跳过"],
+        "forbidden": ["200 OK", "API Key 验证失败", "HTTP 429", "HTTP 503", "连接超时", "DNS 解析失败"],
         "expectedExitCodes": [0]
       },
       {

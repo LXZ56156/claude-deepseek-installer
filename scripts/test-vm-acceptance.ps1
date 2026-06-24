@@ -660,6 +660,93 @@ try {
         Assert-Test $startHereContinuationOk 'Start-Here restart statuses perform fixed-path postcheck instead of skipping configuration'
 
         $scenarioDoc = Get-Content -LiteralPath (Join-Path $ProjectRoot 'scripts\data\interactive-acceptance-scenarios.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $doctorMockScenarioIds = @(
+            'doctor-mock-200', 'doctor-mock-401', 'doctor-mock-402', 'doctor-mock-429', 'doctor-mock-503',
+            'doctor-mock-timeout', 'doctor-mock-dns'
+        )
+        $doctorMockScenarios = @($scenarioDoc.scenarioSets.TestSafe | Where-Object { $_.id -in $doctorMockScenarioIds })
+        Assert-Test ($doctorMockScenarios.Count -eq $doctorMockScenarioIds.Count) 'doctor mock scenarios are all present'
+        $doctorMockRoutingOk = $true
+        foreach ($doctorMockScenario in $doctorMockScenarios) {
+            $doctorMockArgs = if ($doctorMockScenario.PSObject.Properties.Name -contains 'entryArgs') { @($doctorMockScenario.entryArgs) } else { @() }
+            $doctorMockEnvNames = if ($doctorMockScenario.PSObject.Properties.Name -contains 'environment') { @($doctorMockScenario.environment.PSObject.Properties.Name) } else { @() }
+            if ([string]$doctorMockScenario.entry -ne 'doctor.ps1' -or
+                [string]$doctorMockScenario.entryMode -ne 'powershell' -or
+                $doctorMockArgs -notcontains '-ShareSafe' -or
+                $doctorMockArgs -notcontains '-NoOpenReport' -or
+                $doctorMockArgs -contains '-SkipApiTest' -or
+                $doctorMockEnvNames -notcontains 'CCDI_TEST_API_STATUS') {
+                $doctorMockRoutingOk = $false
+            }
+        }
+        Assert-Test $doctorMockRoutingOk 'doctor mock scenarios run doctor.ps1 directly without SkipApiTest'
+        $diagnosticLauncherScenario = @($scenarioDoc.scenarioSets.TestSafe | Where-Object { $_.id -eq 'diagnostic-launcher' })[0]
+        $diagnosticRequired = @($diagnosticLauncherScenario.required)
+        $diagnosticForbidden = @($diagnosticLauncherScenario.forbidden)
+        $diagnosticCmdName = [string]::Concat([char]0x4E00, [char]0x952E, [char]0x8BCA, [char]0x65AD, '.cmd')
+        $apiSkipText = [string]::Concat([char]0x5DF2, [char]0x6309, [char]0x53C2, [char]0x6570, [char]0x8DF3, [char]0x8FC7)
+        Assert-Test ([string]$diagnosticLauncherScenario.entry -eq $diagnosticCmdName -and $diagnosticRequired -contains $apiSkipText -and $diagnosticForbidden -contains '200 OK' -and $diagnosticForbidden -contains 'HTTP 429') 'diagnostic launcher scenario still covers safe API skip behavior'
+
+        $interactiveRunnerPath = Join-Path $ProjectRoot 'scripts\interactive-user-acceptance.ps1'
+        $runnerTokens = $null
+        $runnerErrors = $null
+        $interactiveRunnerAst = [System.Management.Automation.Language.Parser]::ParseFile($interactiveRunnerPath, [ref]$runnerTokens, [ref]$runnerErrors)
+        Assert-Test ($runnerErrors.Count -eq 0) 'interactive runner parses for command-builder extraction'
+        $commandBuilderHelpers = @(
+            'ConvertTo-WindowsCommandLineArgument',
+            'Get-ScenarioEntryMode',
+            'Get-ScenarioEntryArgs',
+            'New-ScenarioCommandLine'
+        )
+        $runnerFunctionAsts = @($interactiveRunnerAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $commandBuilderHelpers -contains $node.Name
+        }, $true))
+        $builderTextParts = New-Object Collections.ArrayList
+        foreach ($helperName in $commandBuilderHelpers) {
+            $helperAst = @($runnerFunctionAsts | Where-Object { $_.Name -eq $helperName } | Select-Object -First 1)
+            Assert-Test ($helperAst.Count -eq 1) "interactive runner helper exists: $helperName"
+            [void]$builderTextParts.Add($helperAst[0].Extent.Text)
+        }
+        $builderHelperText = ($builderTextParts.ToArray() -join "`r`n")
+        $builderProbe = [scriptblock]::Create($builderHelperText + @'
+
+$powerShellScenario = [PSCustomObject]@{
+    id = 'powershell-probe'
+    entryMode = 'powershell'
+    entryArgs = @('-ShareSafe', 'two words', 'literal & value')
+}
+$powerShellLine = New-ScenarioCommandLine -Scenario $powerShellScenario -EntryRelative 'doctor.ps1'
+$cmdScenario = [PSCustomObject]@{ id = 'cmd-probe'; entryMode = 'cmd' }
+$cmdLine = New-ScenarioCommandLine -Scenario $cmdScenario -EntryRelative 'launcher.cmd'
+$newlineRejected = $false
+try {
+    [void](New-ScenarioCommandLine -Scenario ([PSCustomObject]@{ id = 'newline-probe'; entryMode = 'powershell'; entryArgs = @("bad`narg") }) -EntryRelative 'doctor.ps1')
+}
+catch { $newlineRejected = $true }
+$cmdArgsRejected = $false
+try {
+    [void](New-ScenarioCommandLine -Scenario ([PSCustomObject]@{ id = 'cmd-args-probe'; entryMode = 'cmd'; entryArgs = @('-ignored') }) -EntryRelative 'launcher.cmd')
+}
+catch { $cmdArgsRejected = $true }
+$nonPs1Rejected = $false
+try {
+    [void](New-ScenarioCommandLine -Scenario ([PSCustomObject]@{ id = 'non-ps1-probe'; entryMode = 'powershell'; entryArgs = @() }) -EntryRelative 'launcher.cmd')
+}
+catch { $nonPs1Rejected = $true }
+[PSCustomObject]@{
+    PowerShellLine = $powerShellLine
+    CmdLine = $cmdLine
+    NewlineRejected = $newlineRejected
+    CmdArgsRejected = $cmdArgsRejected
+    NonPs1Rejected = $nonPs1Rejected
+}
+'@)
+        $builderProbeResult = & $builderProbe
+        Assert-Test ($builderProbeResult.PowerShellLine -match '^powershell\.exe -NoProfile -ExecutionPolicy Bypass -File \.\\doctor\.ps1 -ShareSafe "two words" "literal & value"$' -and $builderProbeResult.PowerShellLine -notmatch '/d /s /c call') 'runner powershell entryMode builds a direct quoted command line'
+        Assert-Test ($builderProbeResult.NewlineRejected -and $builderProbeResult.CmdArgsRejected -and $builderProbeResult.NonPs1Rejected) 'runner powershell entryMode rejects unsafe args and non-ps1 entries'
+        Assert-Test ($builderProbeResult.CmdLine -match '/d /s /c call launcher\.cmd') 'runner cmd entryMode keeps existing launcher command path'
+
         $fallbackScenario = @($scenarioDoc.scenarioSets.Live | Where-Object { $_.id -eq 'live-official-fallback-success' })[0]
         $fallbackFailureText = @($fallbackScenario.failureText)
         $fallbackFailureTextJoined = $fallbackFailureText -join '|'
