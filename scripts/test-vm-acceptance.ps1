@@ -374,6 +374,32 @@ try {
     Assert-Test (-not (Test-Path -LiteralPath $faultBin)) 'fault-bin removed after stop'
     Assert-Test (($env:Path -ceq $oldProcessPath) -and ([Environment]::GetEnvironmentVariable('Path', 'User') -ceq $oldUserPath)) 'real PATH fully unchanged across fault test'
 
+    $fakeWingetDir = Join-Path $testRoot 'fake-winget'
+    New-Item -ItemType Directory -Path $fakeWingetDir -Force | Out-Null
+    $fakeWinget = Join-Path $fakeWingetDir 'winget.cmd'
+    "@echo off`r`necho MOCK-WINGET %*`r`nexit /b 0" | Set-Content -LiteralPath $fakeWinget -Encoding ASCII
+    $fakeWingetResolver = { [PSCustomObject]@{ Source = $fakeWinget } }.GetNewClosure()
+    $scenarioDocument = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'data\interactive-acceptance-scenarios.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($requiredInstallNodeScenarioId in @('live-npm-missing', 'live-install-command-anomaly-postcheck-usable')) {
+        $sourceScenario = @($scenarioDocument.scenarioSets.Live | Where-Object { [string]$_.id -eq $requiredInstallNodeScenarioId } | Select-Object -First 1)
+        Assert-Test (($sourceScenario.Count -eq 1) -and ($sourceScenario[0].PSObject.Properties.Name -contains 'setup') -and ($sourceScenario[0].setup.PSObject.Properties.Name -contains 'installNodeForFault') -and [bool]$sourceScenario[0].setup.installNodeForFault) "$requiredInstallNodeScenarioId declares installNodeForFault setup"
+        $nodeSetupPath = @{
+            Process = $oldProcessPath
+            User = $oldUserPath
+            Machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+        }
+        $nodeSetupAdapter = New-VmSandboxPathAdapter -State $nodeSetupPath -NpmSource $fakeNpm
+        $nodeSetupScenario = [PSCustomObject]@{ setup = [PSCustomObject]@{ installNodeForFault = $true } }
+        $nodeSetupState = Start-LiveScenarioSetup -Scenario $nodeSetupScenario -SceneDir (Join-Path $testRoot "node-setup-$requiredInstallNodeScenarioId") -PathAdapter $nodeSetupAdapter -WingetResolver $fakeWingetResolver
+        try {
+            Assert-Test (@($nodeSetupState.OwnedWingetPackages) -contains 'OpenJS.NodeJS.LTS') "$requiredInstallNodeScenarioId setup records owned Node winget package without real install"
+            Assert-Test ((Get-VmAdapterPath -Adapter $nodeSetupAdapter -Layer Process) -match [regex]::Escape((Join-Path $env:ProgramFiles 'nodejs'))) "$requiredInstallNodeScenarioId setup injects fixed Node path into sandbox process PATH"
+            Assert-Test (($env:Path -ceq $oldProcessPath) -and ([Environment]::GetEnvironmentVariable('Path', 'User') -ceq $oldUserPath)) "$requiredInstallNodeScenarioId setup leaves real PATH unchanged"
+        }
+        finally { Stop-LiveScenarioSetup -State $nodeSetupState }
+        Assert-Test ((Get-VmAdapterPath -Adapter $nodeSetupAdapter -Layer Process) -ceq $oldProcessPath) "$requiredInstallNodeScenarioId sandbox process PATH restored after Node setup"
+    }
+
     function Get-TestCollapsedCommandMatches {
         param([string[]]$Available)
         return @('claude', 'node', 'npm') | Where-Object { $_ -in $Available }
@@ -1067,6 +1093,15 @@ Start-Sleep -Seconds 30
 '@.TrimStart() | Set-Content -LiteralPath $capturedTimeoutHelper -Encoding UTF8
     $capturedTimeout=Invoke-AcceptanceCapturedCommand -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$capturedTimeoutHelper) -TimeoutSec 1
     Assert-Test ($capturedTimeout.TimedOut -and $capturedTimeout.StdOut -match 'CAPTURED-STDOUT-BEFORE-TIMEOUT' -and $capturedTimeout.StdErr -match 'CAPTURED-STDERR-BEFORE-TIMEOUT') 'captured command timeout preserves stdout stderr evidence'
+
+    $capturedNineHundredError = $null
+    $capturedNineHundred = $null
+    try {
+        $capturedNineHundred = Invoke-AcceptanceCapturedCommand -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-Command','exit 0') -TimeoutSec 900
+    }
+    catch { $capturedNineHundredError = $_.Exception.Message }
+    Assert-Test ([string]::IsNullOrWhiteSpace($capturedNineHundredError)) 'captured command accepts 900 second timeout without parameter binding failure'
+    Assert-Test ((-not $capturedNineHundred.TimedOut) -and $capturedNineHundred.ExitCode -eq 0) 'captured command 900 second safe command exits 0 without timeout'
 
     # Real environment must be byte-identical to the baseline captured before any test ran.
     Assert-Test ([Environment]::GetEnvironmentVariable('Path', 'User') -ceq $realEnvBaseline.UserPath) 'real user PATH unchanged across all tests'

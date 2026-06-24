@@ -14,7 +14,7 @@ function Invoke-AcceptanceCapturedCommand {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
         [string[]]$ArgumentList = @(),
-        [ValidateRange(1, 300)][int]$TimeoutSec = 15
+        [ValidateRange(1, 1800)][int]$TimeoutSec = 15
     )
 
     $startInfo = New-Object Diagnostics.ProcessStartInfo

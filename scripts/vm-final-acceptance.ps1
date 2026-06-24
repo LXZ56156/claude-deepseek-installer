@@ -371,8 +371,11 @@ function Resolve-VmAdapterNpm {
 }
 
 function Start-LiveScenarioSetup {
-    param($Scenario, [string]$SceneDir, $PathAdapter)
+    param($Scenario, [string]$SceneDir, $PathAdapter, [scriptblock]$WingetResolver)
     if (-not $PathAdapter) { $PathAdapter = New-VmPathAdapter }
+    if (-not $WingetResolver) {
+        $WingetResolver = { Get-Command winget.exe -ErrorAction Stop | Select-Object -First 1 }
+    }
     $state = [ordered]@{
         HostsBytes = $null; RenamedFiles = @(); AddedPath = $null; FaultBin = $null
         ProcessPathBefore = Get-VmAdapterPath -Adapter $PathAdapter -Layer Process
@@ -391,7 +394,7 @@ function Start-LiveScenarioSetup {
         Clear-DnsClientCache
     }
     if ($setup.PSObject.Properties.Name -contains "installNodeForFault" -and $setup.installNodeForFault) {
-        $wingetCommand = Get-Command winget.exe -ErrorAction Stop | Select-Object -First 1
+        $wingetCommand = & $WingetResolver
         $probe = Invoke-AcceptanceCapturedCommand -FilePath ([string]$wingetCommand.Source) -ArgumentList @(
             'install', '--id', 'OpenJS.NodeJS.LTS', '--exact', '--silent', '--disable-interactivity',
             '--accept-package-agreements', '--accept-source-agreements'

@@ -6086,6 +6086,51 @@ if ($acceptanceEnvironmentText -notmatch '\$stdoutTask\.Wait\(2000\)' -or
     $acceptanceEnvironmentText -notmatch 'TimeoutSec 180') {
     throw "Acceptance captured commands must preserve timeout stdout/stderr and give winget inventory a realistic bounded timeout"
 }
+$capturedCommandRangeMatch = [regex]::Match(
+    $acceptanceEnvironmentText,
+    'function\s+Invoke-AcceptanceCapturedCommand\s*\{[\s\S]*?\[ValidateRange\(\s*(\d+)\s*,\s*(\d+)\s*\)\]\s*\[int\]\$TimeoutSec'
+)
+if (-not $capturedCommandRangeMatch.Success) {
+    throw "Invoke-AcceptanceCapturedCommand TimeoutSec must keep an explicit ValidateRange"
+}
+$capturedCommandTimeoutLower = [int]$capturedCommandRangeMatch.Groups[1].Value
+$capturedCommandTimeoutUpper = [int]$capturedCommandRangeMatch.Groups[2].Value
+if ($capturedCommandTimeoutLower -ne 1 -or $capturedCommandTimeoutUpper -lt 1800) {
+    throw "Invoke-AcceptanceCapturedCommand TimeoutSec ValidateRange must be 1..at least 1800; found $capturedCommandTimeoutLower..$capturedCommandTimeoutUpper"
+}
+$vmFinalTokens = $null
+$vmFinalParseErrors = $null
+$vmFinalAst = [System.Management.Automation.Language.Parser]::ParseFile($acceptancePaths.Orchestrator, [ref]$vmFinalTokens, [ref]$vmFinalParseErrors)
+if ($vmFinalParseErrors.Count -gt 0) {
+    throw "vm-final-acceptance.ps1 parse failed during captured-command timeout scan: $($vmFinalParseErrors[0].Message)"
+}
+$capturedCommandTimeoutCalls = New-Object Collections.ArrayList
+foreach ($commandAst in @($vmFinalAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Invoke-AcceptanceCapturedCommand' }, $true))) {
+    for ($i = 0; $i -lt $commandAst.CommandElements.Count; $i++) {
+        $element = $commandAst.CommandElements[$i]
+        if ($element -isnot [System.Management.Automation.Language.CommandParameterAst] -or $element.ParameterName -ne 'TimeoutSec') { continue }
+        if ($i + 1 -ge $commandAst.CommandElements.Count) {
+            throw "Invoke-AcceptanceCapturedCommand has -TimeoutSec without a value at line $($element.Extent.StartLineNumber)"
+        }
+        $valueText = $commandAst.CommandElements[$i + 1].Extent.Text.Trim()
+        if ($valueText -notmatch '^\d+$') { continue }
+        [void]$capturedCommandTimeoutCalls.Add([PSCustomObject]@{
+            TimeoutSec = [int]$valueText
+            Line = $commandAst.CommandElements[$i + 1].Extent.StartLineNumber
+        })
+    }
+}
+if ($capturedCommandTimeoutCalls.Count -eq 0) {
+    throw "vm-final-acceptance.ps1 must have explicit numeric Invoke-AcceptanceCapturedCommand -TimeoutSec call sites"
+}
+$capturedCommandTimeoutOverflow = @($capturedCommandTimeoutCalls | Where-Object { $_.TimeoutSec -gt $capturedCommandTimeoutUpper })
+if ($capturedCommandTimeoutOverflow.Count -gt 0) {
+    $overflowDetails = @($capturedCommandTimeoutOverflow | ForEach-Object { "line $($_.Line): TimeoutSec $($_.TimeoutSec) > ValidateRange upper $capturedCommandTimeoutUpper" }) -join "`n"
+    throw "Invoke-AcceptanceCapturedCommand timeout exceeds its ValidateRange:`n$overflowDetails"
+}
+if (@($capturedCommandTimeoutCalls | Where-Object { $_.TimeoutSec -eq 900 }).Count -eq 0) {
+    throw "Live setup must keep its current 900s Invoke-AcceptanceCapturedCommand timeout visible to the range gate"
+}
 if (-not $acceptanceEnvironmentText.Contains('_git_cache\.json') -or
     -not $acceptanceEnvironmentText.Contains('(-not [bool]$beforeFiles[$_].Exists -and [bool]$afterFiles[$_].Exists)')) {
     throw "Acceptance baseline must ignore Claude volatile git cache and classify Exists false-to-true as a created path"
@@ -6097,9 +6142,18 @@ if ($acceptanceEnvironmentText -notmatch "NewWingetPackages.*\^__" -or
 }
 if ($acceptanceOrchestratorText -match '&\s*winget\.exe\s+install' -or
     $acceptanceOrchestratorText -notmatch "(?s)Invoke-AcceptanceCapturedCommand.*?install.*?TimeoutSec 900" -or
+    $acceptanceOrchestratorText -notmatch '\[scriptblock\]\$WingetResolver' -or
     $acceptanceOrchestratorText -notmatch 'Get-VmNodeProcessPathAfterInstall' -or
     $acceptanceOrchestratorText -notmatch 'Join-Path\s+\$env:APPDATA\s+''npm''') {
     throw "Live Node setup must use the bounded captured-command helper"
+}
+if ($acceptanceFunctionalText -notmatch 'captured command accepts 900 second timeout without parameter binding failure' -or
+    $acceptanceFunctionalText -notmatch 'captured command 900 second safe command exits 0 without timeout' -or
+    $acceptanceFunctionalText -notmatch 'fake-winget' -or
+    $acceptanceFunctionalText -notmatch 'WingetResolver' -or
+    $acceptanceFunctionalText -notmatch 'live-npm-missing' -or
+    $acceptanceFunctionalText -notmatch 'live-install-command-anomaly-postcheck-usable') {
+    throw "VM acceptance functional tests must cover 900s captured-command binding and mocked installNodeForFault Live setup"
 }
 . $acceptancePaths.Environment
 $syntheticBefore = [PSCustomObject]@{
