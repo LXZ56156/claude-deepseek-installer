@@ -442,6 +442,19 @@ try {
         New-Item -ItemType Directory -Path $fakeNodeDir -Force | Out-Null
         New-Item -ItemType File -Path (Join-Path $fakeNodeDir 'node.exe') -Force | Out-Null
         "@echo off`r`necho 10.2.4`r`nexit /b 0`r`n" | Set-Content -LiteralPath (Join-Path $fakeNodeDir 'npm.cmd') -Encoding ASCII
+
+        $env:Path = "$fakeNodeDir;$fakeNodeDir;$oldProcessPath"
+        Refresh-CurrentProcessPath
+        $refreshPathAfterFirst = $env:Path
+        $refreshCountAfterFirst = @($env:Path -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+        for ($refreshIndex = 0; $refreshIndex -lt 20; $refreshIndex++) {
+            Refresh-CurrentProcessPath
+        }
+        $refreshCountAfterRepeated = @($env:Path -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+        $fakeNodeEntryCount = @($env:Path -split ';' | Where-Object { $_ -eq $fakeNodeDir }).Count
+        Assert-Test (($env:Path.Length -eq $refreshPathAfterFirst.Length) -and ($refreshCountAfterRepeated -eq $refreshCountAfterFirst) -and ($fakeNodeEntryCount -eq 1)) 'Refresh-CurrentProcessPath stays idempotent after repeated calls'
+        $env:Path = $oldProcessPath
+
         $env:CCDI_MOCK_CLAUDE = 'missing'
         $env:CCDI_MOCK_OFFICIAL = 'unreachable'
         $env:CCDI_MOCK_WINGET = 'ok'
@@ -487,7 +500,8 @@ try {
         $fallbackFailureText = @($fallbackScenario.failureText)
         $fallbackFailureTextJoined = $fallbackFailureText -join '|'
         $fallbackFailureTextOk = (
-            ($fallbackFailureText.Count -ge 7) -and
+            ($fallbackFailureText.Count -ge 13) -and
+            ($fallbackFailureTextJoined -match 'PowerShell') -and
             ($fallbackFailureTextJoined -match 'Node\.js') -and
             ($fallbackFailureTextJoined -match 'npm')
         )

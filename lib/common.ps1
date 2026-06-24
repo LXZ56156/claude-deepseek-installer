@@ -1593,9 +1593,41 @@ function Refresh-CurrentProcessPath {
     try {
         $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
         $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-        $combined = @()
-        if ($userPath) { $combined += $userPath }
-        if ($machinePath) { $combined += $machinePath }
+        $processPath = $env:Path
+        $combined = New-Object System.Collections.ArrayList
+        $seen = @{}
+
+        function _addPathEntry {
+            param(
+                [string]$Entry,
+                [switch]$MustExist
+            )
+            if ([string]::IsNullOrWhiteSpace($Entry)) { return }
+
+            $trimmed = $Entry.Trim()
+            if ([string]::IsNullOrWhiteSpace($trimmed)) { return }
+            $expanded = [Environment]::ExpandEnvironmentVariables($trimmed)
+            if ($MustExist -and -not (Test-Path -LiteralPath $expanded -PathType Container)) { return }
+
+            try {
+                $normalized = [System.IO.Path]::GetFullPath($expanded).TrimEnd('\').ToLowerInvariant()
+            }
+            catch {
+                $normalized = $expanded.Trim().TrimEnd('\').ToLowerInvariant()
+            }
+            if ([string]::IsNullOrWhiteSpace($normalized) -or $seen.ContainsKey($normalized)) { return }
+
+            $seen[$normalized] = $true
+            [void]$combined.Add($trimmed)
+        }
+
+        function _addPathList {
+            param([AllowNull()][string]$PathValue)
+            if ([string]::IsNullOrWhiteSpace($PathValue)) { return }
+            foreach ($entry in @($PathValue -split ';')) {
+                _addPathEntry -Entry $entry
+            }
+        }
 
         # 追加常见 node/npm 路径（winget 安装后可能尚未在注册表 PATH 中）
         $extraPaths = @()
@@ -1613,13 +1645,15 @@ function Refresh-CurrentProcessPath {
         if (Test-Path $nativeClaudeBin) {
             $extraPaths += $nativeClaudeBin
         }
-        foreach ($p in $extraPaths) {
-            if ($p -and (Test-Path $p) -and $p -notin $combined) {
-                $combined += $p
-            }
-        }
 
-        $env:Path = ($combined -join ";") + ";" + $env:Path
+        _addPathList -PathValue $userPath
+        _addPathList -PathValue $machinePath
+        foreach ($p in $extraPaths) {
+            _addPathEntry -Entry $p -MustExist
+        }
+        _addPathList -PathValue $processPath
+
+        $env:Path = ($combined -join ";")
         Write-Log "DEBUG" "PATH 已刷新（合并 Machine + User + 常见 node/npm + Native Install .local\bin 路径到当前进程）"
     }
     catch {

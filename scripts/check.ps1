@@ -2706,6 +2706,18 @@ if ($claudeInstallText -notmatch '\.local\\bin.*claude\.exe' -and $claudeInstall
 if ($commonText -notmatch '\.local\\bin' -and $commonText -notmatch '\.local/bin') {
     throw "Refresh-CurrentProcessPath must include .local\bin in extraPaths"
 }
+$refreshFuncText = if ($commonText -match '(?s)function Refresh-CurrentProcessPath\s*\{.*?\n(?=\n#\s*=+|\nfunction [A-Za-z0-9_-]+|\z)') {
+    $matches[0]
+} else { "" }
+if ($refreshFuncText -match '\+\s*";"\s*\+\s*\$env:Path') {
+    throw "Refresh-CurrentProcessPath must not append the old process PATH wholesale; split and de-duplicate entries"
+}
+if ($refreshFuncText -notmatch '\$seen\s*=\s*@\{\}' -or
+    $refreshFuncText -notmatch 'GetFullPath' -or
+    $refreshFuncText -notmatch '\$seen\.ContainsKey\(\$normalized\)' -or
+    $refreshFuncText -notmatch '_addPathList\s+-PathValue\s+\$processPath') {
+    throw "Refresh-CurrentProcessPath must normalize and de-duplicate User/Machine/Process PATH entries"
+}
 
 # 3. Install-ClaudeCodeAuto: all installation success branches (near result.Success = $true) must use .Usable not .Exists
 # Extract all code blocks around "result.Success = $true" in the function
@@ -5920,6 +5932,12 @@ $liveRestartFailureTexts = @(
     '已跳过后续配置步骤',
     '必要运行环境已安装，但当前窗口还没有识别到最新命令',
     '请关闭此窗口后重新双击',
+    '请关闭当前窗口',
+    '重新打开 PowerShell',
+    '重新打开终端',
+    '请关闭窗口重新打开后重试',
+    '新打开的 PowerShell 还没有确认可用',
+    '关闭并重新打开终端',
     'Node.js 安装失败',
     'npm 不可用',
     '安装未完成'
