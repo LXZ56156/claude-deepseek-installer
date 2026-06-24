@@ -1504,10 +1504,16 @@ if ($ready.Ready) {
     # Create mock Node.js + npm in sandbox PATH; verify detection works.
     $mockNodeDir = Join-Path $tempRoot "mock-node"
     New-Item -ItemType Directory -Path $mockNodeDir -Force | Out-Null
-    "@echo off`r`necho v20.11.0" | Out-File -FilePath (Join-Path $mockNodeDir "node.cmd") -Encoding ASCII
-    "@echo off`r`necho 10.2.4" | Out-File -FilePath (Join-Path $mockNodeDir "npm.cmd") -Encoding ASCII
+    $mockNodeExe = Join-Path $mockNodeDir "node.exe"
+    $mockNpmCmd = Join-Path $mockNodeDir "npm.cmd"
+    New-Item -ItemType File -Path $mockNodeExe -Force | Out-Null
+    "@echo off`r`necho 10.2.4" | Out-File -FilePath $mockNpmCmd -Encoding ASCII
     $scenarioCEnv = New-SimEnvironment -ProfileDir $testProfile -DesktopDir $testDesktop -DummyKey $DummyApiKey -ApiStatus "200"
     $scenarioCEnv["PATH"] = "$mockNodeDir;$env:PATH"
+    $scenarioCEnv["CCDI_MOCK_NODE_EXE"] = $mockNodeExe
+    $scenarioCEnv["CCDI_MOCK_NPM_CMD"] = $mockNpmCmd
+    $scenarioCEnv["CCDI_MOCK_NODE_VERSION"] = "v20.11.0"
+    $scenarioCEnv["CCDI_MOCK_NPM_VERSION"] = "10.2.4"
     $scenarioCScript = @'
 $scriptRoot = "{0}"
 . "$scriptRoot\lib\bootstrap.ps1"
@@ -1516,8 +1522,12 @@ $nodeInfo = Test-NodeJsInstalled
 $npmInfo = Test-NpmInstalled
 Write-Output "SCENARIO_C_NODE_INSTALLED=$($nodeInfo.Installed)"
 Write-Output "SCENARIO_C_NODE_VERSION=$($nodeInfo.Version)"
+Write-Output "SCENARIO_C_NODE_PATH=$($nodeInfo.Path)"
+Write-Output "SCENARIO_C_NODE_SOURCE=$($nodeInfo.Source)"
 Write-Output "SCENARIO_C_NPM_INSTALLED=$($npmInfo.Installed)"
 Write-Output "SCENARIO_C_NPM_VERSION=$($npmInfo.Version)"
+Write-Output "SCENARIO_C_NPM_PATH=$($npmInfo.Path)"
+Write-Output "SCENARIO_C_NPM_SOURCE=$($npmInfo.Source)"
 # Verify npm mirror network check (TestSafe skips real network)
 $netCheck = Test-NpmMirrorClaudeCodeNetwork
 Write-Output "SCENARIO_C_NET_CHECK=$($netCheck.Success)"
@@ -1537,6 +1547,12 @@ Write-Output "SCENARIO_C_MIRROR_STATUS=$($mirrorInstall.Status)"
     }
     if ($scenarioCRun.Combined -notmatch 'SCENARIO_C_NPM_INSTALLED=True') {
         throw "Scenario C: npm must be detected: $($scenarioCRun.Combined)"
+    }
+    if ($scenarioCRun.Combined -notmatch 'SCENARIO_C_NODE_PATH=.*node\.exe' -or $scenarioCRun.Combined -notmatch 'SCENARIO_C_NODE_SOURCE=mock_fixed_path') {
+        throw "Scenario C: Node must use mock node.exe fixed path: $($scenarioCRun.Combined)"
+    }
+    if ($scenarioCRun.Combined -notmatch 'SCENARIO_C_NPM_PATH=.*npm\.cmd' -or $scenarioCRun.Combined -notmatch 'SCENARIO_C_NPM_SOURCE=mock_fixed_path') {
+        throw "Scenario C: npm must use mock npm.cmd fixed path: $($scenarioCRun.Combined)"
     }
     Write-Host "[simulate]   Scenario C (Node/npm pre-existing): detection OK" -ForegroundColor Green
     Assert-TextOrder -Text $scenarioCRun.Combined -Scenario "C"

@@ -26,10 +26,10 @@ if not exist "%~dp0lib\bootstrap.ps1" (
     popd >nul 2>&1
     exit /b 1
 )
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0repair-deps.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0repair-deps.ps1" -NoFinalPause
 set "PS_EXIT=%ERRORLEVEL%"
 echo.
-echo Press any key to close this window...
+echo Press any key to finish...
 pause >nul
 popd >nul 2>&1
 endlocal & exit /b %PS_EXIT%

@@ -429,6 +429,130 @@ try {
             $null = Initialize-CcdiScript -ScriptName 'test-vm-acceptance-installer'
         }
 
+        $simulateReleaseSource = Get-Content -LiteralPath (Join-Path $ProjectRoot 'scripts\simulate-user-release.ps1') -Raw -Encoding UTF8
+        $scenarioCSource = if ($simulateReleaseSource -match '(?s)# --- Scenario C:.*?# --- Scenario D:') { $matches[0] } else { '' }
+        Assert-Test (-not [string]::IsNullOrWhiteSpace($scenarioCSource)) 'simulate-user-release Scenario C source block exists'
+        Assert-Test ($scenarioCSource -notmatch 'node\.cmd' -and $scenarioCSource -match '"node\.exe"' -and $scenarioCSource -match 'CCDI_MOCK_NODE_EXE' -and $scenarioCSource -match 'CCDI_MOCK_NPM_CMD') 'Scenario C uses node.exe fixed-path mock and never node.cmd for Node'
+
+        $scenarioCMockDir = Join-Path $installerRoot 'scenario-c-node-mock'
+        New-Item -ItemType Directory -Path $scenarioCMockDir -Force | Out-Null
+        $scenarioCNodeExe = Join-Path $scenarioCMockDir 'node.exe'
+        $scenarioCNpmCmd = Join-Path $scenarioCMockDir 'npm.cmd'
+        New-Item -ItemType File -Path $scenarioCNodeExe -Force | Out-Null
+        "@echo off`r`necho 10.2.4`r`nexit /b 0`r`n" | Set-Content -LiteralPath $scenarioCNpmCmd -Encoding ASCII
+        $savedScenarioCMocks = @{
+            NodeExe = $env:CCDI_MOCK_NODE_EXE
+            NpmCmd = $env:CCDI_MOCK_NPM_CMD
+            NodeVersion = $env:CCDI_MOCK_NODE_VERSION
+            NpmVersion = $env:CCDI_MOCK_NPM_VERSION
+        }
+        try {
+            $env:CCDI_MOCK_NODE_EXE = $scenarioCNodeExe
+            $env:CCDI_MOCK_NPM_CMD = $scenarioCNpmCmd
+            $env:CCDI_MOCK_NODE_VERSION = 'v20.11.0'
+            $env:CCDI_MOCK_NPM_VERSION = '10.2.4'
+            $scenarioCNodeInfo = Test-NodeJsInstalled
+            $scenarioCNpmInfo = Test-NpmInstalled
+            Assert-Test ($scenarioCNodeInfo.Installed -and $scenarioCNodeInfo.IsSupported -and $scenarioCNodeInfo.Path -eq $scenarioCNodeExe -and $scenarioCNodeInfo.Source -eq 'mock_fixed_path') 'Test-NodeJsInstalled detects Scenario C mock node.exe fixed path'
+            Assert-Test ($scenarioCNpmInfo.Installed -and $scenarioCNpmInfo.Path -eq $scenarioCNpmCmd -and $scenarioCNpmInfo.Source -eq 'mock_fixed_path') 'Test-NpmInstalled detects Scenario C mock npm.cmd fixed path'
+        }
+        finally {
+            if ($null -eq $savedScenarioCMocks.NodeExe) { Remove-Item Env:\CCDI_MOCK_NODE_EXE -ErrorAction SilentlyContinue } else { $env:CCDI_MOCK_NODE_EXE = $savedScenarioCMocks.NodeExe }
+            if ($null -eq $savedScenarioCMocks.NpmCmd) { Remove-Item Env:\CCDI_MOCK_NPM_CMD -ErrorAction SilentlyContinue } else { $env:CCDI_MOCK_NPM_CMD = $savedScenarioCMocks.NpmCmd }
+            if ($null -eq $savedScenarioCMocks.NodeVersion) { Remove-Item Env:\CCDI_MOCK_NODE_VERSION -ErrorAction SilentlyContinue } else { $env:CCDI_MOCK_NODE_VERSION = $savedScenarioCMocks.NodeVersion }
+            if ($null -eq $savedScenarioCMocks.NpmVersion) { Remove-Item Env:\CCDI_MOCK_NPM_VERSION -ErrorAction SilentlyContinue } else { $env:CCDI_MOCK_NPM_VERSION = $savedScenarioCMocks.NpmVersion }
+        }
+
+        function Invoke-RepairDepsFunctionalCase {
+            param(
+                [string]$Name,
+                [hashtable]$Overrides,
+                [switch]$AllowInstall
+            )
+            $caseRoot = Join-Path $installerRoot "repair-$Name"
+            $caseProfile = Join-Path $caseRoot 'profile'
+            $caseAppData = Join-Path $caseProfile 'AppData\Roaming'
+            $caseLocalAppData = Join-Path $caseProfile 'AppData\Local'
+            $caseArtifacts = Join-Path $caseRoot 'artifacts'
+            foreach ($caseDir in @($caseProfile, $caseAppData, $caseLocalAppData, $caseArtifacts)) {
+                New-Item -ItemType Directory -Path $caseDir -Force | Out-Null
+            }
+            $caseEnvNames = @(
+                'CCDI_TEST_MODE', 'CCDI_TEST_USERPROFILE', 'CCDI_TEST_ARTIFACT_ROOT',
+                'CCDI_MOCK_INSTALL_DECISION', 'CCDI_MOCK_CLAUDE', 'CCDI_MOCK_OFFICIAL',
+                'CCDI_MOCK_NATIVE_INSTALL', 'CCDI_MOCK_WINGET', 'CCDI_MOCK_NODE',
+                'CCDI_MOCK_NPM', 'CCDI_MOCK_NPMMIRROR', 'CCDI_MOCK_NODE_INSTALL',
+                'CCDI_MOCK_NODE_VERSION', 'CCDI_MOCK_NPM_VERSION', 'CCDI_MOCK_NPM_INSTALL',
+                'CCDI_MOCK_NODE_EXE', 'CCDI_MOCK_NPM_CMD'
+            )
+            $savedCaseEnv = @{}
+            foreach ($caseEnvName in $caseEnvNames) { $savedCaseEnv[$caseEnvName] = [Environment]::GetEnvironmentVariable($caseEnvName, 'Process') }
+            $savedCaseProfile = $env:USERPROFILE
+            $savedCaseAppData = $env:APPDATA
+            $savedCaseLocalAppData = $env:LOCALAPPDATA
+            try {
+                foreach ($caseEnvName in $caseEnvNames) { Remove-Item -Path "Env:\$caseEnvName" -ErrorAction SilentlyContinue }
+                $env:USERPROFILE = $caseProfile
+                $env:APPDATA = $caseAppData
+                $env:LOCALAPPDATA = $caseLocalAppData
+                $env:CCDI_TEST_MODE = '1'
+                $env:CCDI_TEST_USERPROFILE = $caseProfile
+                $env:CCDI_TEST_ARTIFACT_ROOT = $caseArtifacts
+                $env:CCDI_MOCK_INSTALL_DECISION = '1'
+                foreach ($overrideKey in $Overrides.Keys) {
+                    [Environment]::SetEnvironmentVariable([string]$overrideKey, [string]$Overrides[$overrideKey], 'Process')
+                }
+                $args = @('-TestSafe', '-NonInteractive', '-NoFinalPause')
+                if ($AllowInstall) { $args += '-AllowInstall' }
+                $run = Invoke-AcceptanceCapturedCommand -FilePath (Join-Path $ProjectRoot 'repair-deps.ps1') -ArgumentList $args -TimeoutSec 45
+                $report = Get-ChildItem -LiteralPath (Join-Path $caseArtifacts 'reports') -Filter 'repair-deps-report-*.txt' -ErrorAction SilentlyContinue |
+                    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                $reportText = if ($report) { Get-Content -LiteralPath $report.FullName -Raw -Encoding UTF8 } else { '' }
+                [PSCustomObject]@{
+                    Run = $run
+                    Output = "$($run.StdOut)`n$($run.StdErr)"
+                    ReportText = $reportText
+                    ReportPath = if ($report) { $report.FullName } else { $null }
+                }
+            }
+            finally {
+                $env:USERPROFILE = $savedCaseProfile
+                $env:APPDATA = $savedCaseAppData
+                $env:LOCALAPPDATA = $savedCaseLocalAppData
+                foreach ($caseEnvName in $caseEnvNames) {
+                    $savedValue = $savedCaseEnv[$caseEnvName]
+                    if ($null -eq $savedValue) { Remove-Item -Path "Env:\$caseEnvName" -ErrorAction SilentlyContinue }
+                    else { [Environment]::SetEnvironmentVariable($caseEnvName, $savedValue, 'Process') }
+                }
+            }
+        }
+
+        $repairClaudeOk = Invoke-RepairDepsFunctionalCase -Name 'claude-ok-node-missing' -Overrides @{
+            CCDI_MOCK_CLAUDE = 'ok'; CCDI_MOCK_NODE = 'missing'; CCDI_MOCK_NPM = 'missing'
+        }
+        $repairClaudeOkText = "$($repairClaudeOk.Output)`n$($repairClaudeOk.ReportText)"
+        Assert-Test (-not $repairClaudeOk.Run.TimedOut -and $repairClaudeOk.Run.ExitCode -eq 0 -and $repairClaudeOk.ReportText -match 'Claude Code:' -and $repairClaudeOk.ReportText -match 'Node\.js/npm' -and $repairClaudeOk.ReportText -match 'npm fallback') 'repair-deps reports no repair needed when Claude is usable and Node/npm are missing'
+        Assert-Test ($repairClaudeOkText -notmatch '\[(WARN|ERROR)\]\s+Node\.js' -and $repairClaudeOkText -notmatch '\[(WARN|ERROR)\]\s+npm' -and $repairClaudeOkText -notmatch 'Node\.js LTS|failed_missing_node_or_npm') 'repair-deps does not warn about optional Node/npm when Claude is usable'
+
+        $repairNativeFirst = Invoke-RepairDepsFunctionalCase -Name 'native-before-node' -AllowInstall -Overrides @{
+            CCDI_MOCK_CLAUDE = 'missing'; CCDI_MOCK_NODE = 'missing'; CCDI_MOCK_NPM = 'missing'; CCDI_MOCK_OFFICIAL = 'reachable'; CCDI_MOCK_NATIVE_INSTALL = 'success'
+        }
+        $repairNativeText = "$($repairNativeFirst.Output)`n$($repairNativeFirst.ReportText)"
+        Assert-Test (-not $repairNativeFirst.Run.TimedOut -and $repairNativeFirst.Run.ExitCode -eq 0 -and $repairNativeText -match 'official_native' -and $repairNativeFirst.ReportText -match 'Claude Code:') 'repair-deps tries official Native before requiring Node/npm when Claude is missing'
+        Assert-Test ($repairNativeText -notmatch '\[ERROR\] Claude Code repair' -and $repairNativeText -notmatch 'failed_missing_node_or_npm') 'repair-deps Native path is not pre-blocked by missing Node/npm'
+
+        $repairFallbackNeedsNode = Invoke-RepairDepsFunctionalCase -Name 'fallback-needs-node' -AllowInstall -Overrides @{
+            CCDI_MOCK_CLAUDE = 'missing'; CCDI_MOCK_NODE = 'missing'; CCDI_MOCK_NPM = 'missing'; CCDI_MOCK_OFFICIAL = 'unreachable'; CCDI_MOCK_NATIVE_INSTALL = 'fail'; CCDI_MOCK_WINGET = 'missing'
+        }
+        $repairFallbackText = "$($repairFallbackNeedsNode.Output)`n$($repairFallbackNeedsNode.ReportText)"
+        Assert-Test (-not $repairFallbackNeedsNode.Run.TimedOut -and $repairFallbackNeedsNode.Run.ExitCode -eq 0 -and $repairFallbackText -match '\[ERROR\] Claude Code' -and $repairFallbackText -match 'Node\.js LTS|npm fallback') 'repair-deps allows Node/npm missing to become a repair blocker only when npm fallback is needed'
+
+        $repairDepsSource = Get-Content -LiteralPath (Join-Path $ProjectRoot 'repair-deps.ps1') -Raw -Encoding UTF8
+        $repairCmdName = [string]::Concat([char]0x4E00, [char]0x952E, [char]0x4FEE, [char]0x590D, [char]0x4F9D, [char]0x8D56, '.cmd')
+        $repairCmdSource = Get-Content -LiteralPath (Join-Path $ProjectRoot $repairCmdName) -Raw -Encoding UTF8
+        Assert-Test ($repairDepsSource -match '\[switch\]\$NoFinalPause' -and $repairDepsSource -match 'NoFinalPause[\s\S]{0,120}Read-Host') 'repair-deps supports NoFinalPause and gates final Read-Host'
+        Assert-Test ($repairCmdSource -match 'repair-deps\.ps1"\s+-NoFinalPause' -and $repairCmdSource -notmatch 'Press any key to close this window' -and $repairCmdSource -match 'Press any key to finish') 'repair-deps cmd wrapper uses NoFinalPause and one final finish pause'
+
         $env:CCDI_MOCK_INSTALL_DECISION = '1'
         $env:CCDI_MOCK_CLAUDE = 'missing'
         $env:CCDI_MOCK_OFFICIAL = 'unreachable'

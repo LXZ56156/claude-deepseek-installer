@@ -3967,7 +3967,7 @@ function Install-ClaudeCodeAuto {
             Write-Info "未检测到系统安装工具，请手动安装必要运行环境。"
             Write-Log "INFO" "winget not detected; prompting manual Node.js install"
             Write-Info "下载地址: https://nodejs.org (选择 LTS 版本)"
-            Write-Info "安装完成后，关闭并重新打开终端，然后重新运行本脚本。"
+            Write-Info "安装完成后重新运行本脚本。"
             $result.Status = "failed_missing_node_or_npm"
             Update-CcdiState -Updates @{
                 claudeInstallStatus = "failed_missing_node_or_npm"
@@ -3979,10 +3979,10 @@ function Install-ClaudeCodeAuto {
 
     if (-not $mirrorCheck.NpmAvailable) {
         # npm 不可用（Node.js 存在但 npm 缺失或损坏）
-        Write-Error-Msg "必要运行环境不可用。"
+        Write-Error-Msg "npm fallback 需要 npm。"
         Write-Log "ERROR" "npm unavailable: $($mirrorCheck.Error)"
-        Write-Info "官方安装方式不可用，备用方式需要 npm。"
-        Write-Info "请确认 Node.js 安装是否完整，然后重新打开终端重试。"
+        Write-Info "如果你只使用已安装的 Claude Code，则无需处理。"
+        Write-Info "当前 Claude Code 不可用，且官方安装方式不可用；请修复 Node.js/npm 后重新运行本工具。"
         $result.Status = "failed_missing_node_or_npm"
         Update-CcdiState -Updates @{
             claudeInstallStatus = "failed_missing_node_or_npm"

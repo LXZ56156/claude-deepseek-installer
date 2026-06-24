@@ -20,7 +20,8 @@ param(
     [switch]$TestSafe,
     [switch]$DryRun,
     [switch]$Yes,
-    [switch]$AllowInstall
+    [switch]$AllowInstall,
+    [switch]$NoFinalPause
 )
 
 Set-StrictMode -Version Latest
@@ -85,21 +86,17 @@ function Invoke-ClaudeRepair {
         return
     }
 
-    # Node/npm 不满足时，不尝试安装 Claude
-    if (-not $NodeReady -or -not $NpmReady) {
-        Add-CR "Claude Code 修复" "SKIP" "请先修复 Node.js/npm 后再运行"
-        return
-    }
-
-    # TestSafe 模式：报告但不安装
-    if ($IsTestSafe) {
+    # TestSafe 模式：报告但不安装。mock decision 模式仍走完整决策树，
+    # 便于 host functional tests 覆盖官方 Native 与 npm fallback 分支。
+    $mockDecision = ($env:CCDI_TEST_MODE -eq "1" -and $env:CCDI_MOCK_INSTALL_DECISION -eq "1")
+    if ($IsTestSafe -and -not $mockDecision) {
         Add-CR "Claude Code 修复" "SKIP" "测试安全模式：真实模式下会询问是否安装 Claude Code"
         return
     }
 
     # 确定是否可以安装
     $canInstall = $false
-    if ($IsTestSafe) {
+    if ($IsTestSafe -and -not $mockDecision) {
         $canInstall = $false
     }
     elseif ($NonInteractive) {
@@ -129,7 +126,7 @@ function Invoke-ClaudeRepair {
     }
 
     Write-Info "正在安装 Claude Code..."
-    $installResult = Install-ClaudeCodeAuto -TestSafe:$false -NonInteractive:$NonInteractive
+    $installResult = Install-ClaudeCodeAuto -TestSafe:$IsTestSafe -NonInteractive:$NonInteractive
 
     # 根据安装结果分类处理
     switch ($installResult.Status) {
@@ -151,11 +148,11 @@ function Invoke-ClaudeRepair {
         }
         "node_installed_needs_restart" {
             Add-CR "Claude Code 修复" "WARN" "安装结果未确认，将重新检测固定路径"
-            return
+            return $installResult
         }
         "installed_needs_restart" {
             Add-CR "Claude Code 修复" "WARN" "Claude Code 安装结果未确认，将重新检测固定路径"
-            return
+            return $installResult
         }
         "failed_missing_node_or_npm" {
             Add-CR "Claude Code 修复" "ERROR" "缺少 Node.js/npm，无法安装 Claude"
@@ -175,6 +172,7 @@ function Invoke-ClaudeRepair {
     }
 
     # 安装完成后，由调用方刷新 claudeVer 变量
+    return $installResult
 }
 
 # ============================================================
@@ -195,142 +193,113 @@ function Start-RepairDeps {
 
     Write-Info "正在检测系统依赖状态..."
     Write-Host ""
+    Refresh-CurrentProcessPath
 
     # ============================================================
-    # 1. 检测 winget
+    # 1. 优先检测 Claude Code
+    # ============================================================
+    Write-Info "--- Claude Code ---"
+    $claudeCheck = Test-ClaudeCommandExisting
+    $claudeAvailable = [bool]$claudeCheck.Usable
+    $claudeVer = if ($claudeAvailable) { $claudeCheck.Version } else { $null }
+    $claudeDetailParts = New-Object System.Collections.ArrayList
+    if ($claudeCheck.Version) { [void]$claudeDetailParts.Add("version=$($claudeCheck.Version)") }
+    if ($claudeCheck.Path) { [void]$claudeDetailParts.Add("path=$($claudeCheck.Path)") }
+    if ($claudeCheck.Source) { [void]$claudeDetailParts.Add("source=$($claudeCheck.Source)") }
+    $claudeDetail = if ($claudeDetailParts.Count -gt 0) { $claudeDetailParts -join "; " } else { "已确认可用" }
+
+    if ($claudeAvailable) {
+        Add-CR "Claude Code" "OK" $claudeDetail
+    }
+    elseif ($claudeCheck.Exists) {
+        Add-CR "Claude Code" "ERROR" "检测到但不可用: $($claudeCheck.Error)"
+    }
+    else {
+        Add-CR "Claude Code" "ERROR" "未安装或不可用"
+    }
+
+    # ============================================================
+    # 2. 检测 winget
     # ============================================================
     Write-Info "--- winget ---"
     $wingetOk = Test-CommandAvailable -CommandName "winget"
     if ($wingetOk) {
         Add-CR "winget" "OK" "可用"
     }
+    elseif ($claudeAvailable) {
+        Add-CR "winget" "INFO" "未检测到；Claude Code 已可用，当前无需修复。"
+    }
     else {
-        Add-CR "winget" "WARN" "未检测到（将无法自动安装 Node.js）"
+        Add-CR "winget" "WARN" "未检测到；官方 Native Install 不需要预先安装 winget，备用安装方式可能受限。"
     }
 
     # ============================================================
-    # 2. 检测 Node.js
+    # 3. 检测 Node.js（Claude 可用时仅作为可选信息）
     # ============================================================
     Write-Info "--- Node.js ---"
     $nodeInfo = Test-NodeJsInstalled
     if ($nodeInfo.IsSupported) {
-        Add-CR "Node.js" "OK" $nodeInfo.Version
+        $nodeDetail = if ($nodeInfo.Path) { "$($nodeInfo.Version); path=$($nodeInfo.Path); source=$($nodeInfo.Source)" } else { $nodeInfo.Version }
+        Add-CR "Node.js" "OK" $nodeDetail
+    }
+    elseif ($claudeAvailable) {
+        $nodeOptionalDetail = if ($nodeInfo.Installed) { "检测到版本 $($nodeInfo.Version)，但 Claude Code 已可用；Node.js 仅 npm fallback/开发场景需要，当前无需修复。" }
+            else { "未检测到；Claude Code 已可用，Node.js 仅 npm fallback/开发场景需要，当前无需修复。" }
+        Add-CR "Node.js" "INFO" $nodeOptionalDetail
     }
     elseif ($nodeInfo.Installed) {
-        Add-CR "Node.js" "ERROR" "版本 $($nodeInfo.Version) - 需要 >= 18"
+        Add-CR "Node.js" "INFO" "检测到版本 $($nodeInfo.Version)；只有 npm fallback/开发场景需要 Node.js 18+。"
     }
     else {
-        Add-CR "Node.js" "ERROR" "未安装"
+        Add-CR "Node.js" "INFO" "未检测到；官方 Native Install 不需要预先安装 Node.js，只有 npm fallback/开发场景需要。"
     }
 
     # ============================================================
-    # 3. 检测 npm
+    # 4. 检测 npm（Claude 可用时仅作为可选信息）
     # ============================================================
     Write-Info "--- npm ---"
     $npmInfo = Test-NpmInstalled
     if ($npmInfo.Installed) {
-        Add-CR "npm" "OK" $npmInfo.Version
+        $npmDetail = if ($npmInfo.Path) { "$($npmInfo.Version); path=$($npmInfo.Path); source=$($npmInfo.Source)" } else { $npmInfo.Version }
+        Add-CR "npm" "OK" $npmDetail
+    }
+    elseif ($claudeAvailable) {
+        Add-CR "npm" "INFO" "未检测到；Claude Code 已可用，npm 仅 npm fallback/开发场景需要，当前无需修复。"
     }
     else {
-        # 使用增强的状态信息
         $npmStatus = if ($npmInfo.Status -eq "failed_missing_npm") {
-            "npm 不可用（Node.js 存在但 npm 缺失，安装不完整或 PATH 未刷新）"
+            "npm fallback 需要 npm；如果你只使用已安装的 Claude Code，则无需处理。"
         }
         elseif ($npmInfo.Status -eq "failed_missing_node") {
-            "Node.js 未安装（npm 伴随 Node.js 安装）"
+            "Node.js 未检测到；官方 Native Install 不需要预先安装 Node.js，只有 npm fallback/开发场景需要。"
         }
         elseif ($npmInfo.Status -eq "failed_node_too_old") {
-            "Node.js 版本过低"
+            "Node.js 版本低于 npm fallback 要求。"
         }
         elseif ($npmInfo.Status -eq "failed_npm_broken") {
-            "npm 命令存在但无法执行（环境异常）"
+            "npm 命令存在但无法执行；仅 npm fallback 需要处理。"
         }
         else {
             $npmInfo.ErrorMessage
         }
-        Add-CR "npm" "ERROR" $npmStatus
+        Add-CR "npm" "INFO" $npmStatus
+    }
+
+    $needsRestart = $false
+
+    if ($claudeAvailable) {
+        Write-Host ""
+        Write-Success "Claude Code 已可用，无需修复。"
+        Generate-Report
+        if (-not $NonInteractive -and -not $IsTestSafe -and -not $NoFinalPause) {
+            Write-Host ""
+            Read-Host "按回车键退出..."
+        }
+        return
     }
 
     # ============================================================
-    # 4. 检测 Claude Code
-    # ============================================================
-    Write-Info "--- Claude Code ---"
-    $claudeVer = Test-ClaudeInstalled
-    if ($claudeVer) {
-        Add-CR "Claude Code" "OK" $claudeVer
-    }
-    else {
-        Add-CR "Claude Code" "ERROR" "未安装"
-    }
-
-    # --- 4b. 检测 Native Install PATH 问题 (v1.3.3) ---
-    $nativeClaudeExe = Get-NativeClaudeExePath
-    $nativeBinPath = Get-NativeClaudeBinPath
-    $nativeExeExists = Test-Path $nativeClaudeExe
-    $userPathMissingNative = $false
-
-    if ($nativeExeExists) {
-        Write-Info "--- Native Install PATH ---"
-
-        $pathWasFixedOrAlreadyOk = $false
-        $userPathCheck = Test-UserPathContains -TargetPath $nativeBinPath
-
-        if (-not $userPathCheck.Contains) {
-            $userPathMissingNative = $true
-            Add-CR "Native Install PATH" "WARN" "Claude Code 已安装 ($nativeClaudeExe)，但安装目录未加入 User PATH"
-
-            if (-not $IsTestSafe) {
-                Write-Info "检测到 Claude Code 已安装，但 claude 命令未加入 PATH"
-                Write-Info "正在修复用户 PATH..."
-                $pathFix = Ensure-UserPathEntry -PathToAdd $nativeBinPath
-
-                if ($pathFix.Success) {
-                    $pathWasFixedOrAlreadyOk = $true
-                    Add-CR "Native Install PATH 写入" "OK" "User PATH 已写入 Native Install 目录"
-                }
-                else {
-                    Add-CR "Native Install PATH 写入" "ERROR" "PATH 自动修复失败: $($pathFix.Error)"
-                    Write-Warning "PATH 自动修复失败"
-                    Write-Info "请手动添加以下路径到用户 PATH:"
-                    Write-Info "  $nativeBinPath"
-                }
-            }
-            else {
-                Add-CR "Native Install PATH" "SKIP" "测试安全模式，未写入 PATH"
-            }
-        }
-        else {
-            $pathWasFixedOrAlreadyOk = $true
-            Add-CR "Native Install PATH" "OK" "已在 User PATH 中"
-        }
-
-        # v1.3.3 P1-1: 只要 native exe 存在且 PATH 可用（无论原本就有还是刚修复），
-        # 都必须执行 fresh shell 验证
-        if (-not $IsTestSafe -and $pathWasFixedOrAlreadyOk) {
-            Write-Info "正在验证新 PowerShell 是否可直接运行 claude..."
-            $freshCheck = Test-ClaudeCommandInFreshShell
-
-            if ($freshCheck.Success) {
-                Add-CR "Fresh PowerShell claude" "OK" "新 PowerShell 可直接运行 claude: $($freshCheck.Output)"
-                Write-Success "新 PowerShell 已可识别 claude"
-                # 更新 Claude Code 检测结果为 OK
-                foreach ($cr in $script:CheckResults) {
-                    if ($cr.Name -eq "Claude Code" -and $cr.Status -eq "ERROR") {
-                        $cr.Status = "OK"
-                        $cr.Detail = $freshCheck.Output
-                    }
-                }
-            }
-            else {
-                Add-CR "Fresh PowerShell claude" "WARN" "User PATH 已配置，但 fresh shell 验证未通过: $($freshCheck.Error)"
-                Write-Warning "User PATH 已配置，但新 PowerShell 验证仍未通过。"
-                Write-Info "请关闭当前窗口，重新打开 PowerShell 后执行 claude --version。"
-            }
-        }
-    }
-
-    # ============================================================
-    # 5. 检测 PATH
+    # 5. 检测 PATH（仅 npm fallback 辅助信息）
     # ============================================================
     Write-Info "--- PATH ---"
     if ($IsTestSafe) {
@@ -354,7 +323,7 @@ function Start-RepairDeps {
             }
         }
         else {
-            Add-CR "npm 全局 PATH" "SKIP" "无法获取（可能 npm 不可用）"
+            Add-CR "npm 全局 PATH" "SKIP" "无法获取；仅 npm fallback 需要。"
         }
     }
 
@@ -364,100 +333,39 @@ function Start-RepairDeps {
     # 修复逻辑
     # ============================================================
 
-    $needsRestart = $false
-
-    # --- 缺 Node.js ---
-    if (-not $nodeInfo.Installed -or -not $nodeInfo.IsSupported) {
-        Write-Host ""
-        Write-Warning "============================================================"
-        Write-Warning "  需要安装/升级 Node.js LTS（v18 或更高版本）"
-        Write-Warning "============================================================"
-        Write-Host ""
-
-        if ($IsTestSafe) {
-            Write-Info "测试安全模式：将跳过 Node.js 安装。"
-            if ($wingetOk) {
-                Write-Info "真实安装时将会执行: winget install OpenJS.NodeJS.LTS"
-            }
-            else {
-                Write-Info "真实安装时将会提示手动下载: https://nodejs.org"
-            }
-        }
-        elseif ($wingetOk) {
-            $canInstall = if ($NonInteractive) { $AllowInstall } else { $true }
-            if (-not $canInstall) {
-                Write-Info "非交互模式下未授权安装。"
-                Write-Info "请手动下载安装 Node.js LTS: https://nodejs.org"
-                Write-Info "或使用 -AllowInstall 参数授权自动安装。"
-            }
-            else {
-                if ($NonInteractive) {
-                    Write-Info "非交互模式 -AllowInstall：将自动安装 Node.js LTS。"
-                }
-                else {
-                    if (-not (Confirm-UserChoice -Message "是否现在安装 Node.js LTS？Windows 可能弹出权限确认窗口，请选择'是'继续。" -Default "No")) {
-                        Write-Info "已取消。请手动安装 Node.js 后重新运行。"
-                        Write-Info "下载地址: https://nodejs.org (选择 LTS 版本)"
-                        Write-Host ""
-                        Write-Info "安装完成后关闭此窗口，重新双击 [00-点我开始安装.cmd]。"
-                        Generate-Report
-                        return
-                    }
-                }
-
-                Write-Info "正在使用 winget 安装 Node.js LTS，安装进度将直接显示在下方..."
-                $installResult = Install-NodeJsViaWinget -TimeoutSec 900
-
-                # 无论 Success 是 true/false，先记录日志
-                Write-Log "INFO" "winget Node.js 安装返回: Success=$($installResult.Success), ExitCode=$($installResult.ExitCode), Error=$($installResult.Error)"
-
-                # 立即执行二次验证
-                Write-Info "正在二次验证 Node.js/npm 是否已经可用..."
-                Refresh-CurrentProcessPath
-                $nodeRecheck = Test-NodeJsInstalled
-                $npmRecheck = Test-NpmInstalled
-
-                $nodeInstallCommandAccepted = Test-WingetNodeInstallAccepted -InstallResult $installResult
-                if ($nodeRecheck.Installed -and $nodeRecheck.IsSupported -and $npmRecheck.Installed) {
-                    Add-CR "Node.js 安装验证" "OK" "Node $($nodeRecheck.Version), npm $($npmRecheck.Version)"
-                    Write-Success "Node.js 已安装并确认可用，继续修复 Claude Code。"
-                    Write-Log "INFO" "Node repair classification: node_ready_after_install; CommandAccepted=$nodeInstallCommandAccepted; NodePath=$($nodeRecheck.Path); NpmPath=$($npmRecheck.Path)"
-                    # 更新当前变量，继续后续 Claude Code 修复
-                    $nodeInfo = $nodeRecheck
-                    $npmInfo = $npmRecheck
-                }
-                else {
-                    Add-CR "Node.js 安装验证" "ERROR" "Node.js 自动安装失败，请检查网络或稍后重试"
-                    Write-Error-Msg "Node.js 自动安装失败，通常是网络或系统安装源暂时不可用。"
-                    Write-Info "请稍后重试，或手动安装 Node.js LTS 后再运行本工具。"
-                    Write-Log "ERROR" "Node repair classification: node_install_failed; CommandAccepted=$nodeInstallCommandAccepted; ExitCode=$($installResult.ExitCode); Error=$($installResult.Error); Node=$($nodeRecheck.ErrorMessage); npm=$($npmRecheck.ErrorMessage)"
-                }
-            }
-        }
-        else {
-            Write-Info "未检测到 winget。请手动安装 Node.js："
-            Write-Info "下载地址: https://nodejs.org (选择 LTS 版本)"
-            Write-Info "安装完成后重新运行 [00-点我开始安装.cmd]。"
-        }
-    }
-
-    # --- Node 存在但 npm 缺失 ---
+    # --- Node 存在但 npm 缺失：仅说明 npm fallback 场景 ---
     if ($nodeInfo.Installed -and -not $npmInfo.Installed -and -not $needsRestart) {
         Write-Host ""
-        Write-Warning "检测到 Node.js 存在，但 npm 不可用。"
-        Write-Warning "这通常表示 Node.js 安装不完整，或当前终端 PATH 未刷新。"
-        Write-Info "请先关闭此窗口重新打开后再试。"
-        Write-Info "如果仍失败，请重新安装 Node.js LTS: https://nodejs.org"
+        Write-Info "npm fallback 需要 npm；如果你只使用已安装的 Claude Code，则无需处理。"
     }
 
     # --- 缺 Claude Code ---
-    if ($claudeVer) {
-        Add-CR "Claude Code 状态" "OK" "已安装可用"
-    }
-    elseif (-not $needsRestart) {
-        Invoke-ClaudeRepair -NodeReady:($nodeInfo.IsSupported) -NpmReady:$npmInfo.Installed -ClaudeMissingOrBroken:(-not $claudeVer)
-        # 刷新 Claude 检测结果（可能刚安装完成）
-        $claudeVer = Test-ClaudeInstalled
+    if (-not $needsRestart) {
+        $repairResult = Invoke-ClaudeRepair -NodeReady:($nodeInfo.IsSupported) -NpmReady:$npmInfo.Installed -ClaudeMissingOrBroken:(-not $claudeVer)
+        Refresh-CurrentProcessPath
+        $postRepairClaude = Test-ClaudeCommandExisting
+        if ($repairResult -and $repairResult.Success) {
+            $claudeAvailable = $true
+            $claudeVer = $repairResult.Version
+            foreach ($cr in $script:CheckResults) {
+                if ($cr.Name -eq "Claude Code" -and $cr.Status -eq "ERROR") {
+                    $cr.Status = "OK"
+                    $cr.Detail = "已可用: version=$($repairResult.Version); method=$($repairResult.Method); status=$($repairResult.Status)"
+                }
+            }
+            Add-CR "Claude Code 状态" "OK" "已可用: version=$($repairResult.Version); method=$($repairResult.Method); status=$($repairResult.Status)"
+        }
+        elseif ($postRepairClaude.Usable) {
+            $claudeAvailable = $true
+            $claudeVer = $postRepairClaude.Version
+            foreach ($cr in $script:CheckResults) {
+                if ($cr.Name -eq "Claude Code" -and $cr.Status -eq "ERROR") {
+                    $cr.Status = "OK"
+                    $cr.Detail = "已可用: version=$($postRepairClaude.Version); path=$($postRepairClaude.Path); source=$($postRepairClaude.Source)"
+                }
+            }
+            Add-CR "Claude Code 状态" "OK" "已可用: version=$($postRepairClaude.Version); path=$($postRepairClaude.Path); source=$($postRepairClaude.Source)"
+        }
     }
 
     # ============================================================
@@ -466,7 +374,7 @@ function Start-RepairDeps {
 
     Generate-Report
 
-    if (-not $NonInteractive -and -not $IsTestSafe) {
+    if (-not $NonInteractive -and -not $IsTestSafe -and -not $NoFinalPause) {
         Write-Host ""
         Read-Host "按回车键退出..."
     }
@@ -501,14 +409,21 @@ function Generate-Report {
     $npmStatus = if ($npmInfo.Installed) { "正常" }
         elseif ($npmInfo.Status) { $npmInfo.Status }
         else { "不可用" }
-    $claudeStatus = if ($claudeVer) { "已安装" } else { "未安装" }
+    $claudeStatus = if ($claudeAvailable) { "已可用" } elseif ($claudeVer) { "已安装" } else { "未安装" }
 
     Add-RL "  Node.js:     $nodeStatus"
     Add-RL "  npm:         $npmStatus"
     Add-RL "  Claude Code: $claudeStatus"
     Add-RL "  winget:      $(if ($wingetOk) { '可用' } else { '未检测到' })"
 
-    if ($needsRestart) {
+    if ($claudeAvailable) {
+        Add-RL ""
+        Add-RL "  状态: Claude Code 已可用，无需修复。"
+        if (-not $nodeInfo.IsSupported -or -not $npmInfo.Installed) {
+            Add-RL "  说明: Node.js/npm 仅 npm fallback/开发场景需要，当前无需修复。"
+        }
+    }
+    elseif ($needsRestart) {
         Add-RL ""
         Add-RL "  状态: NEEDS_RESTART - 需要关闭窗口重新打开 [00-点我开始安装.cmd]。"
     }
@@ -542,23 +457,17 @@ function Generate-Report {
     Add-RL "【建议动作】"
     Add-RL ""
 
-    if ($needsRestart) {
+    if ($claudeAvailable) {
+        Add-RL "  无需进一步操作。"
+    }
+    elseif ($needsRestart) {
         Add-RL "  1. 重新打开 PowerShell"
         Add-RL "  2. 运行 [一键修复依赖.cmd]"
         Add-RL "  3. 如果仍失败，请运行 [一键诊断.cmd]"
     }
-    elseif (-not $nodeInfo.IsSupported) {
-        Add-RL "  1. 安装 Node.js LTS: https://nodejs.org"
-        Add-RL "  2. 或运行本工具自动安装（需要 winget）"
-        Add-RL "  3. 安装完成后重新运行 [00-点我开始安装.cmd]"
-    }
-    elseif (-not $npmInfo.Installed) {
-        Add-RL "  1. 关闭当前窗口重新打开（PATH 可能未刷新）"
-        Add-RL "  2. 如仍不可用，重新安装 Node.js LTS"
-    }
     elseif (-not $claudeVer) {
-        Add-RL "  1. 如果 Node.js 和 npm 已正常，重新运行本工具可安装 Claude Code"
-        Add-RL "  2. 或运行 [00-点我开始安装.cmd] 自动安装 Claude Code"
+        Add-RL "  1. 重新运行本工具安装或修复 Claude Code。"
+        Add-RL "  2. 如果官方安装不可用且需要 npm fallback，再按提示安装 Node.js/npm。"
     }
     else {
         Add-RL "  所有依赖已就绪，无需进一步操作。"

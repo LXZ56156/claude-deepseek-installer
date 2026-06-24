@@ -1805,8 +1805,8 @@ if ($rpmPrefix.Success) {
 } else {
     throw "repair-deps.ps1 npm prefix -g must have explicit -TimeoutSec 8"
 }
-if ($repairDepsText -notmatch 'if\s*\(\s*-not\s+\$NonInteractive\s+-and\s+-not\s+\$IsTestSafe\s*\)\s*\{[\s\S]{0,120}Read-Host') {
-    throw "repair-deps.ps1 TestSafe/DryRun mode must not wait for final Read-Host"
+if ($repairDepsText -notmatch 'if\s*\(\s*-not\s+\$NonInteractive\s+-and\s+-not\s+\$IsTestSafe\s+-and\s+-not\s+\$NoFinalPause\s*\)\s*\{[\s\S]{0,120}Read-Host') {
+    throw "repair-deps.ps1 TestSafe/DryRun/NoFinalPause mode must not wait for final Read-Host"
 }
 
 # 57. check-long-running-commands.ps1 must have new rules
@@ -1885,8 +1885,11 @@ $repairDepsText = Get-Content -Path (Join-Path $RootDir "repair-deps.ps1") -Raw 
 if ($repairDepsText -match 'Invoke-CommandSafe\s+-Command\s+"winget"') {
     throw "repair-deps.ps1 must NOT use Invoke-CommandSafe for winget install; use Install-NodeJsViaWinget"
 }
-if ($repairDepsText -notmatch 'Install-NodeJsViaWinget') {
-    throw "repair-deps.ps1 must call Install-NodeJsViaWinget for Node.js installation"
+if ($repairDepsText -notmatch 'Install-ClaudeCodeAuto') {
+    throw "repair-deps.ps1 must delegate Claude repair to Install-ClaudeCodeAuto so official Native runs before npm fallback Node requirements"
+}
+if ($repairDepsText -match 'Install-NodeJsViaWinget') {
+    throw "repair-deps.ps1 must not run standalone Node.js installation before Claude outcome is known"
 }
 
 # 26. Short timeouts for version checks
@@ -2836,31 +2839,32 @@ if ($repairDepsText -match "Invoke-CommandSafe\s+-Command\s+'npm'\s+-Arguments\s
     throw "repair-deps.ps1 must NOT use bare 'npm' in Invoke-CommandSafe for prefix; use Resolve-NpmCmdPath"
 }
 
-# 5. repair-deps.ps1 Node winget install branch must have secondary verification
-if ($repairDepsText -notmatch 'winget Node\.js 安装返回') {
-    throw "repair-deps.ps1 must log 'winget Node.js 安装返回' after Install-NodeJsViaWinget"
+# 5. Install-ClaudeCodeAuto Node winget install branch must have secondary verification.
+# repair-deps is Claude-first and delegates fallback Node requirements to this owner.
+if ($installAutoText -notmatch 'winget Node\.js 安装返回') {
+    throw "Install-ClaudeCodeAuto must log 'winget Node.js 安装返回' after Install-NodeJsViaWinget"
 }
 # Must call Refresh-CurrentProcessPath, Test-NodeJsInstalled, Test-NpmInstalled after winget Node install
 # Check that these three appear after Install-NodeJsViaWinget within reasonable proximity
-$repairPostWinget = if ($repairDepsText -match 'Install-NodeJsViaWinget[\s\S]{0,2000}') {
+$repairPostWinget = if ($installAutoText -match 'Install-NodeJsViaWinget\s+-TimeoutSec\s+900[\s\S]{0,2400}') {
     $matches[0]
 } else { "" }
 if ($repairPostWinget -notmatch 'Refresh-CurrentProcessPath') {
-    throw "repair-deps.ps1 winget Node branch must call Refresh-CurrentProcessPath for secondary verify"
+    throw "Install-ClaudeCodeAuto winget Node branch must call Refresh-CurrentProcessPath for secondary verify"
 }
 if ($repairPostWinget -notmatch 'Test-NodeJsInstalled') {
-    throw "repair-deps.ps1 winget Node branch must call Test-NodeJsInstalled for secondary verify"
+    throw "Install-ClaudeCodeAuto winget Node branch must call Test-NodeJsInstalled for secondary verify"
 }
 if ($repairPostWinget -notmatch 'Test-NpmInstalled') {
-    throw "repair-deps.ps1 winget Node branch must call Test-NpmInstalled for secondary verify"
+    throw "Install-ClaudeCodeAuto winget Node branch must call Test-NpmInstalled for secondary verify"
 }
 # secondary verification failure must be explicit failure, not a restart continuation
 if ($repairDepsText -match 'NEEDS_RESTART.*winget 已执行') {
     throw "repair-deps.ps1 must not classify secondary Node verification failure as NEEDS_RESTART"
 }
-if ($repairDepsText -notmatch 'Node repair classification: node_install_failed' -or
-    $repairDepsText -notmatch 'Node\.js 自动安装失败') {
-    throw "repair-deps.ps1 must classify secondary Node verification failure as node_install_failed/ERROR"
+if ($installAutoText -notmatch 'Node install classification: node_install_failed' -or
+    $installAutoText -notmatch 'Node\.js 自动安装失败') {
+    throw "Install-ClaudeCodeAuto must classify secondary Node verification failure as node_install_failed/ERROR"
 }
 
 # ============================================================
@@ -5122,6 +5126,75 @@ foreach ($scenarioBMockTerm in @(
     }
 }
 Write-Host "[check]   1b. Scenario B isolated mock Claude command OK"
+
+$scenarioCBlock = if ($simulateText -match '(?s)# --- Scenario C:.*?# --- Scenario D:') { $matches[0] } else { "" }
+if ([string]::IsNullOrWhiteSpace($scenarioCBlock)) {
+    throw "simulate-user-release.ps1 must contain a Scenario C block"
+}
+if ($scenarioCBlock -match 'node\.cmd') {
+    throw "Scenario C must not use node.cmd as the Node mock; production detection requires node.exe"
+}
+foreach ($scenarioCTerm in @(
+    '"node.exe"',
+    'CCDI_MOCK_NODE_EXE',
+    'CCDI_MOCK_NPM_CMD',
+    'SCENARIO_C_NODE_PATH',
+    'SCENARIO_C_NPM_PATH',
+    'SCENARIO_C_NODE_SOURCE',
+    'SCENARIO_C_NPM_SOURCE',
+    'SCENARIO_C_NODE_INSTALLED=True',
+    'SCENARIO_C_NPM_INSTALLED=True'
+)) {
+    if ($scenarioCBlock -notmatch [regex]::Escape($scenarioCTerm) -and $simulateText -notmatch [regex]::Escape($scenarioCTerm)) {
+        throw "Scenario C release simulation must prove fixed-path mock detection: $scenarioCTerm"
+    }
+}
+Write-Host "[check]   1c. Scenario C node.exe fixed-path mock OK"
+
+$repairDepsText = Get-Content -Path (Join-Path $RootDir "repair-deps.ps1") -Raw -Encoding UTF8
+$repairCmdText = Get-Content -Path (Join-Path $RootDir "一键修复依赖.cmd") -Raw -Encoding UTF8
+$repairDepsMainIndex = $repairDepsText.IndexOf('function Start-RepairDeps')
+$claudeAvailableIndex = $repairDepsText.IndexOf('if ($claudeAvailable) {', $repairDepsMainIndex)
+$invokeRepairIndex = $repairDepsText.IndexOf('Invoke-ClaudeRepair', $repairDepsMainIndex)
+if ($claudeAvailableIndex -lt 0 -or $invokeRepairIndex -lt 0 -or $claudeAvailableIndex -gt $invokeRepairIndex) {
+    throw "repair-deps.ps1 must branch on Claude availability before Invoke-ClaudeRepair"
+}
+$claudeAvailableArea = $repairDepsText.Substring($claudeAvailableIndex, [Math]::Min($invokeRepairIndex - $claudeAvailableIndex, 5000))
+if ($claudeAvailableArea -notmatch 'Claude Code 已可用，无需修复。' -or $claudeAvailableArea -notmatch 'Node\.js 仅 npm fallback/开发场景需要') {
+    throw "repair-deps.ps1 Claude-available branch must state that Node.js/npm are optional and no repair is needed"
+}
+if ($claudeAvailableArea -match 'Add-CR\s+"Node\.js"\s+"(?:WARN|ERROR)"' -or $claudeAvailableArea -match 'Add-CR\s+"npm"\s+"(?:WARN|ERROR)"') {
+    throw "repair-deps.ps1 must not mark Node.js/npm WARN/ERROR when Claude Code is usable"
+}
+foreach ($forbiddenRepairText in @(
+    '需要安装/升级 Node.js',
+    'npm 不可用',
+    '关闭当前窗口重新打开',
+    '有依赖缺失，请按照下方建议修复'
+)) {
+    if ($claudeAvailableArea -match [regex]::Escape($forbiddenRepairText)) {
+        throw "repair-deps.ps1 Claude-available branch must not emit: $forbiddenRepairText"
+    }
+}
+if ($repairDepsText -notmatch '\[switch\]\$NoFinalPause') {
+    throw "repair-deps.ps1 must support -NoFinalPause"
+}
+if ($repairDepsText -notmatch 'if\s*\(\s*-not\s+\$NonInteractive\s+-and\s+-not\s+\$IsTestSafe\s+-and\s+-not\s+\$NoFinalPause\s*\)\s*\{[\s\S]{0,120}Read-Host') {
+    throw "repair-deps.ps1 final Read-Host must be gated by NonInteractive, TestSafe, and NoFinalPause"
+}
+if ($repairCmdText -notmatch 'repair-deps\.ps1"\s+-NoFinalPause') {
+    throw "一键修复依赖.cmd must pass -NoFinalPause to repair-deps.ps1"
+}
+if ($repairCmdText -match 'Press any key to close this window') {
+    throw "一键修复依赖.cmd must not say 'Press any key to close this window'"
+}
+if ($repairCmdText -notmatch 'Press any key to finish') {
+    throw "一键修复依赖.cmd must use the final 'finish' pause wording"
+}
+if ($claudeInstallText -match 'npm fallback 需要 npm[\s\S]{0,200}重新打开终端') {
+    throw "npm fallback missing-npm guidance must not require reopening the terminal"
+}
+Write-Host "[check]   1d. repair-deps Claude-first and single-pause gates OK"
 
 # 2. Assert-TextOrder function exists
 if ($simulateText -notmatch 'function Assert-TextOrder') {

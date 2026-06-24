@@ -132,3 +132,17 @@
 | ACC-043 | `Invoke-CommandSafe` / `ConvertTo-CommandLineArgument` | 不适用 | command/path argument boundary probes + source gate forbidding old wrapper | 否 |
 | ACC-044 | `simulate-user-release.ps1` / docs | 不适用 | Release simulation path coverage | 否 |
 | ACC-045 | `vm-final-acceptance.ps1` / Live scenario JSON | Live setup行为待专用 VM；host仅静态 gate | Node setup helper/timeout + official fallback gate | 是；Live 8 场景与真实重启仍待 VM |
+
+## 2026-06-24 Release simulation and repair-deps closure fixes
+
+| ID | Problem | Root cause | Fix | Regression |
+|---|---|---|---|---|
+| ACC-046 | `validate-release` Scenario C could fail on clean VMs while passing on developer hosts | Scenario C used `node.cmd` as the Node fixture, but production `Resolve-NodeExePath` correctly requires `node.exe`; host PATH refresh could mask the bad fixture by finding a real Node install | Scenario C now creates `mock-node\node.exe`, keeps `npm.cmd`, injects `CCDI_MOCK_NODE_EXE`/`CCDI_MOCK_NPM_CMD`/version mocks, and asserts installed/path/source evidence | `test-vm-acceptance.ps1` fixed-path Node/npm mock assertions + `check.ps1` Scenario C source gate |
+| ACC-047 | `repair-deps` reported optional Node/npm as required and double-paused through the cmd wrapper | The script evaluated Node/npm before outcome, blocked Claude repair on Node/npm before official Native Install, generated reports from dependency presence rather than Claude usability, and both `repair-deps.ps1` and `一键修复依赖.cmd` waited for input | `repair-deps.ps1` is now Claude-first/outcome-first, treats Node/npm as optional when Claude is usable, lets official Native run before npm fallback requirements, supports `-NoFinalPause`, and the cmd wrapper owns the single final pause with neutral wording | repair-deps functional cases for Claude usable, Native-before-Node, fallback-needs-Node, `NoFinalPause` static checks, and `check.ps1` Claude-first/single-pause gates |
+
+## 2026-06-24 Release simulation and repair-deps coverage index
+
+| ID | 修复函数/脚本 | test-vm-acceptance.ps1 断言 | check.ps1 防回归 | 需专用 VM Live |
+|---|---|---|---|---|
+| ACC-046 | `scripts/simulate-user-release.ps1` Scenario C / `Resolve-NodeExePath` / `Resolve-NpmCmdPath` | Scenario C source forbids `node.cmd`; `Test-NodeJsInstalled` detects `CCDI_MOCK_NODE_EXE` `node.exe`; `Test-NpmInstalled` detects `CCDI_MOCK_NPM_CMD` `npm.cmd` | Scenario C block must use `node.exe`, `CCDI_MOCK_NODE_EXE`, `CCDI_MOCK_NPM_CMD`, and path/source evidence fields | 否；release simulation host 复验即可 |
+| ACC-047 | `repair-deps.ps1` / `一键修复依赖.cmd` / npm fallback guidance | Claude usable + Node/npm missing emits no Node/npm WARN/ERROR and reports no repair; Claude missing tries official Native before Node/npm; fallback missing Node becomes a repair blocker only after fallback is needed; NoFinalPause avoids double wait | repair-deps must branch on `$claudeAvailable` before repair, keep Node/npm optional in that branch, support `-NoFinalPause`, and cmd must pass it with `finish` wording | 否；真实用户 Live install仍按专用 VM 验收 |
