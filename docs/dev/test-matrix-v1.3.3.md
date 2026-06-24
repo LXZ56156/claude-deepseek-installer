@@ -16,7 +16,7 @@
 | H | 用户名含空格 | 任意 | Invoke-InstallCommandCaptured 参数不拆分 | **本次新增** | check.ps1: 运行级参数验证（含中文+空格路径） |
 | I | TEMP 路径含空格 | 任意 | Invoke-InstallCommandCaptured 参数正确传递 | **本次新增** | check.ps1: 运行级参数验证 |
 | J | 中文路径含空格 | 任意 | 参数保持完整（中文原文：中文 参数） | **本次新增** | check.ps1: 逐项精确比较 |
-| K | Native Install / npm / winget 调用点参数转义 | official_native / npm_npmmirror / winget | ConvertTo-CommandLine + cmd.exe wrapper 正确转义 | **本次新增** | check.ps1 + ux-check.ps1: 源码级防回归 |
+| K | Native Install / npm / winget 调用点参数转义 | official_native / npm_npmmirror / winget | FilePath 与参数分离；`.cmd/.bat` 仅使用环境变量隔离 runner | **本次新增** | check.ps1 + ux-check.ps1: 源码级防回归 |
 | L | Mock 决策矩阵 Native/npm 语义 | official_native / npm_npmmirror | DEC-002/003/009 修复后 10/10 | **本次新增** | install-decision-matrix.ps1: 10/10 |
 
 ## 场景详情
@@ -109,6 +109,7 @@
   - `hostname.exe` 使用真正的 `Arguments=@()`；`exit 7` 正确返回失败
   - finally 清理 stdout/stderr，超时保留 `taskkill /T /F`
   - `ConvertTo-CommandLineArgument` 处理尾部反斜杠
+  - `Invoke-CommandSafe` 对普通 exe/com 使用 direct runner，对 `.cmd/.bat` 使用 `CCDI_CMD_PATH` / `CCDI_CMD_ARG_*` 环境变量隔离 runner，覆盖含 `&`、`!`、`%`、括号和空参数的路径/参数边界
 - **未验证**：未运行真实 Native/winget/npm 安装。
 
 ### 场景 L：Mock 决策矩阵 Native/npm 语义

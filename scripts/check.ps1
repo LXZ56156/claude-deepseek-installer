@@ -458,26 +458,93 @@ function Write-NetworkCheckResult {
 }
 
 Write-Host "[check] Invoke-CommandSafe Windows command execution"
-$psResult = Invoke-CommandSafe -Command "powershell.exe" -Arguments @(
-    "-NoProfile", "-Command", "Write-Output ok; exit 0"
-)
-if (-not $psResult.Success -or $psResult.ExitCode -ne 0 -or $psResult.Output.Trim() -ne "ok") {
-    throw "Invoke-CommandSafe failed to capture powershell.exe success"
-}
-
-$tempCmdDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ccdi-check-cmd-" + [Guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Path $tempCmdDir -Force | Out-Null
+$tempCommandRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ccdi-check-command & ! literal%PATH% (" + [Guid]::NewGuid().ToString("N") + ")")
+New-Item -ItemType Directory -Path $tempCommandRoot -Force | Out-Null
 try {
-    $tempCmd = Join-Path $tempCmdDir "ok.cmd"
-    Set-Content -Path $tempCmd -Encoding ASCII -Value "@echo off`r`necho cmd-ok`r`nexit /b 0"
-    $cmdResult = Invoke-CommandSafe -Command $tempCmd
-    if (-not $cmdResult.Success -or $cmdResult.ExitCode -ne 0 -or $cmdResult.Output.Trim() -ne "cmd-ok") {
-        throw "Invoke-CommandSafe failed to execute .cmd files"
+    $psArgProbe = Join-Path $tempCommandRoot "probe args.ps1"
+    @'
+param(
+    [Parameter(ValueFromRemainingArguments=$true)]
+    [string[]]$ArgsList
+)
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$ArgsList | ConvertTo-Json -Compress
+exit 0
+'@ | Set-Content -LiteralPath $psArgProbe -Encoding UTF8
+
+    $safeCommandPayload = @(
+        "amp&ersand",
+        "pipe|value",
+        "less<value",
+        "greater>value",
+        "caret^value",
+        'literal%PATH%',
+        "bang!value!",
+        "parentheses(value)",
+        "中文 参数",
+        "alpha beta",
+        ""
+    )
+    $psResult = Invoke-CommandSafe -Command "powershell.exe" -Arguments (@(
+        "-NoProfile",
+        "-File",
+        $psArgProbe
+    ) + $safeCommandPayload)
+    if (-not $psResult.Success -or $psResult.ExitCode -ne 0) {
+        throw "Invoke-CommandSafe failed to capture powershell.exe success: ExitCode=$($psResult.ExitCode), Error=$($psResult.Error)"
+    }
+    $receivedSafeCommandPayload = $psResult.Output.Trim() | ConvertFrom-Json
+    if ($receivedSafeCommandPayload.Count -ne $safeCommandPayload.Count) {
+        throw "Invoke-CommandSafe powershell.exe argument count mismatch: expected $($safeCommandPayload.Count), got $($receivedSafeCommandPayload.Count)"
+    }
+    for ($i = 0; $i -lt $safeCommandPayload.Count; $i++) {
+        if ($receivedSafeCommandPayload[$i] -ne $safeCommandPayload[$i]) {
+            throw "Invoke-CommandSafe powershell.exe argument[$i] mismatch: expected '$($safeCommandPayload[$i])', got '$($receivedSafeCommandPayload[$i])'"
+        }
+    }
+
+    $tempCmd = Join-Path $tempCommandRoot "ok.cmd"
+    $unexpectedCommandMarker = Join-Path $tempCommandRoot "unexpected-command-executed.txt"
+    $cmdArgWithMarker = "amp&echo BAD>$unexpectedCommandMarker"
+    Set-Content -LiteralPath $tempCmd -Encoding ASCII -Value @"
+@echo off
+setlocal DisableDelayedExpansion
+echo(%1
+echo(%2
+echo(%3
+echo(%4
+exit /b 0
+"@
+    $cmdResult = Invoke-CommandSafe -Command $tempCmd -Arguments @(
+        $cmdArgWithMarker,
+        'literal%PATH%',
+        "bang!value!",
+        ""
+    )
+    if (-not $cmdResult.Success -or $cmdResult.ExitCode -ne 0) {
+        throw "Invoke-CommandSafe failed to execute .cmd files: ExitCode=$($cmdResult.ExitCode), Error=$($cmdResult.Error)"
+    }
+    if (Test-Path -LiteralPath $unexpectedCommandMarker) {
+        throw "Invoke-CommandSafe allowed .cmd metacharacters to execute an unexpected command"
+    }
+    if ($cmdResult.Output -notmatch [regex]::Escape("`"$cmdArgWithMarker`"") -or
+        $cmdResult.Output -notmatch [regex]::Escape('"literal%PATH%"') -or
+        $cmdResult.Output -notmatch [regex]::Escape('"bang!value!"') -or
+        $cmdResult.Output -notmatch [regex]::Escape('""')) {
+        throw "Invoke-CommandSafe .cmd argument output mismatch: $($cmdResult.Output)"
+    }
+
+    $exitSevenCmd = Join-Path $tempCommandRoot "exit-seven.cmd"
+    Set-Content -LiteralPath $exitSevenCmd -Encoding ASCII -Value "@echo off`r`necho exit-seven`r`nexit /b 7"
+    $exitSevenCmdResult = Invoke-CommandSafe -Command $exitSevenCmd
+    if ($exitSevenCmdResult.Success -or $exitSevenCmdResult.ExitCode -ne 7) {
+        throw "Invoke-CommandSafe .cmd exit code mismatch: Success=$($exitSevenCmdResult.Success), ExitCode=$($exitSevenCmdResult.ExitCode)"
     }
 }
 finally {
-    Remove-Item -Path $tempCmdDir -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $tempCommandRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
+Write-Host "[check] Invoke-CommandSafe command/path argument boundaries OK"
 
 Write-Host "[check] Invoke-InstallCommandCaptured argument boundaries, encoding, and exit codes"
 
@@ -803,6 +870,22 @@ if ($commonText -notmatch '超时部分 stdout') {
 }
 if ($commonText -notmatch '超时部分 stderr') {
     throw "Invoke-CommandSafe must read stderr temp file for partial content before timeout cleanup"
+}
+
+$invokeCommandSafeBody = if ($commonText -match '(?s)function Invoke-CommandSafe\s*\{(.*?)function ConvertTo-CommandLine\s*\{') {
+    $matches[1]
+}
+else {
+    throw "Unable to locate Invoke-CommandSafe body"
+}
+if ($invokeCommandSafeBody -match '\$innerCommand\b|!ERRORLEVEL!|ccdi_exit_|tmpExit') {
+    throw "Invoke-CommandSafe must not use the old innerCommand/ERRORLEVEL/exit-file wrapper"
+}
+if ($invokeCommandSafeBody -notmatch 'CCDI_CMD_PATH' -or
+    $invokeCommandSafeBody -notmatch 'CCDI_CMD_ARG_' -or
+    $invokeCommandSafeBody -notmatch 'runner=cmd' -or
+    $invokeCommandSafeBody -notmatch 'runner=direct') {
+    throw "Invoke-CommandSafe must keep separate direct and environment-isolated .cmd/.bat runners"
 }
 
 # 6. Clear-StaleClaudeDoctorProcesses exists with proper filtering
@@ -5184,12 +5267,12 @@ foreach ($dcName in $diagCmdFiles) {
     $dcPath = Join-Path $RootDir $dcName
     if (Test-Path $dcPath) {
         $dcContent = Get-Content -LiteralPath $dcPath -Raw -Encoding ASCII
-        if ($dcContent -notmatch '-File "%~dp0doctor\.ps1"\s+-ShareSafe') {
-            throw "$dcName must use -File `"%~dp0doctor.ps1`" -ShareSafe (not -File `"%~dp0doctor.ps1 -ShareSafe`")"
+        if ($dcContent -notmatch '-File "%~dp0doctor\.ps1"\s+-ShareSafe\s+-SkipApiTest\s+-NoOpenReport') {
+            throw "$dcName must use -File `"%~dp0doctor.ps1`" -ShareSafe -SkipApiTest -NoOpenReport (not -File `"%~dp0doctor.ps1 -ShareSafe`")"
         }
     }
 }
-Write-Host "[check]   16. diagnostic .cmd files have correct -File/-ShareSafe separation OK"
+Write-Host "[check]   16. diagnostic .cmd files have safe doctor arguments and correct -File separation OK"
 
 # 17. 任何 .cmd 不得出现 .ps1 参数被包进 -File 引号
 foreach ($cmdFile in $cmdFiles) {
@@ -5873,7 +5956,9 @@ if ($acceptanceEnvironmentText -notmatch "NewWingetPackages.*\^__" -or
     throw "Acceptance ownership must ignore unavailable package sentinels and must not claim generic setup/update processes"
 }
 if ($acceptanceOrchestratorText -match '&\s*winget\.exe\s+install' -or
-    $acceptanceOrchestratorText -notmatch "(?s)Invoke-AcceptanceCapturedCommand.*?install.*?TimeoutSec 300") {
+    $acceptanceOrchestratorText -notmatch "(?s)Invoke-AcceptanceCapturedCommand.*?install.*?TimeoutSec 900" -or
+    $acceptanceOrchestratorText -notmatch 'Get-VmNodeProcessPathAfterInstall' -or
+    $acceptanceOrchestratorText -notmatch 'Join-Path\s+\$env:APPDATA\s+''npm''') {
     throw "Live Node setup must use the bounded captured-command helper"
 }
 . $acceptancePaths.Environment
@@ -5926,6 +6011,16 @@ if (@($testSafeScenarioIds).Count -ne 16 -or @($requiredTestSafeIds | Where-Obje
 }
 if (@($liveScenarioIds).Count -ne 8 -or @($requiredLiveIds | Where-Object { $_ -notin $liveScenarioIds }).Count -gt 0) {
     throw "Live interactive scenario set is incomplete or no longer exactly 8 scenarios"
+}
+$officialOnlyLiveScenarioIds = @('live-official-success', 'live-real-api-and-diagnostic')
+foreach ($scenarioId in $officialOnlyLiveScenarioIds) {
+    $scenario = @($acceptanceScenarioDocument.scenarioSets.Live | Where-Object { $_.id -eq $scenarioId } | Select-Object -First 1)
+    if ($scenario.Count -eq 0) { throw "Live scenario not found for official fallback gate: $scenarioId" }
+    $failureText = if ($scenario[0].PSObject.Properties.Name -contains 'failureText') { @($scenario[0].failureText) } else { @() }
+    $forbidden = if ($scenario[0].PSObject.Properties.Name -contains 'forbidden') { @($scenario[0].forbidden) } else { @() }
+    if ($failureText -notcontains '备用下载方式' -or $forbidden -notcontains '备用下载方式') {
+        throw "$scenarioId must fail if the official-only Live path falls back to the backup download flow"
+    }
 }
 $liveRestartFailureTexts = @(
     '当前需要重开终端后继续',

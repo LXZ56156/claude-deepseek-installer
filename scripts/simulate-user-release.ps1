@@ -524,8 +524,8 @@ if (-not (Get-Command $cmdExe -ErrorAction SilentlyContinue)) {
     throw "cmd.exe not found; this simulation must run on Windows or WSL with Windows interop"
 }
 
-$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ccdi 用户 模拟 $PID")
-$extractRoot = Join-Path $tempRoot "解压 目录 With Spaces"
+$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ccdi 用户 模拟 & ! ($PID)")
+$extractRoot = Join-Path $tempRoot "解压 目录 With Spaces & Symbols (OK)"
 $testProfile = Join-Path $tempRoot "User Profile"
 $testDesktop = Join-Path $tempRoot "Desktop 桌面"
 $ReleaseDir = Join-Path $tempRoot 'release-output'

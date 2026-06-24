@@ -78,9 +78,7 @@ switch ($Mode) {
             Write-Host "[ERROR] 找不到 doctor.ps1，请确认 ZIP 已完整解压。" -ForegroundColor Red
             exit 1
         }
-        $doctorArgs = @()
-        if ($SkipApiTest) { $doctorArgs += "-SkipApiTest" }
-        $doctorArgs += "-ShareSafe"
+        $doctorArgs = @("-ShareSafe", "-SkipApiTest", "-NoOpenReport")
         Invoke-CcdiScriptAndExit -ScriptPath $doctorPath -Arguments $doctorArgs
     }
 

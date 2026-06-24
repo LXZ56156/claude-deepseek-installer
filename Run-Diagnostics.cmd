@@ -26,7 +26,7 @@ if not exist "%~dp0lib\bootstrap.ps1" (
     popd >nul 2>&1
     exit /b 1
 )
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0doctor.ps1" -ShareSafe
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0doctor.ps1" -ShareSafe -SkipApiTest -NoOpenReport
 set "PS_EXIT=%ERRORLEVEL%"
 echo.
 echo Press any key to close this window...

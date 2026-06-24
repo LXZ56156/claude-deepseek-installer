@@ -1994,10 +1994,7 @@ function Show-CompletionMenu {
                 Write-Info "正在运行一键诊断..."
                 $doctorScript = Join-Path $ScriptDir "doctor.ps1"
                 if (Test-Path $doctorScript) {
-                    $doctorArgs = @("-File", $doctorScript, "-ShareSafe")
-                    if ($script:EffectiveSkipApiTest) {
-                        $doctorArgs += "-SkipApiTest"
-                    }
+                    $doctorArgs = @("-File", $doctorScript, "-ShareSafe", "-SkipApiTest", "-NoOpenReport")
                     & powershell.exe -NoProfile -ExecutionPolicy Bypass @doctorArgs
                 }
                 else {
@@ -2190,7 +2187,7 @@ function Start-DoctorOnly {
 
     $doctorScript = Join-Path $ScriptDir "doctor.ps1"
     if (Test-Path $doctorScript) {
-        & $doctorScript -ShareSafe -SkipApiTest:$script:EffectiveSkipApiTest
+        & $doctorScript -ShareSafe -SkipApiTest -NoOpenReport
     }
     else {
         Write-Error-Msg "找不到 doctor.ps1，请确认文件完整。"

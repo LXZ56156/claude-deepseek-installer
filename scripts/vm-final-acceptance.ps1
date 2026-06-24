@@ -333,6 +333,35 @@ function Set-VmAdapterPath {
     }
 }
 
+function Join-VmPathSegments {
+    param([AllowNull()][string[]]$Values)
+    $segments = New-Object Collections.ArrayList
+    $seen = @{}
+    foreach ($value in @($Values)) {
+        if ([string]::IsNullOrWhiteSpace($value)) { continue }
+        foreach ($part in ([string]$value -split ';')) {
+            if ([string]::IsNullOrWhiteSpace($part)) { continue }
+            $key = $part.Trim().ToLowerInvariant()
+            if ($seen.ContainsKey($key)) { continue }
+            $seen[$key] = $true
+            [void]$segments.Add($part.Trim())
+        }
+    }
+    return ($segments -join ';')
+}
+
+function Get-VmNodeProcessPathAfterInstall {
+    param($Adapter)
+    $explicitNodeRoots = @()
+    if ($env:ProgramFiles) { $explicitNodeRoots += (Join-Path $env:ProgramFiles 'nodejs') }
+    if ($env:APPDATA) { $explicitNodeRoots += (Join-Path $env:APPDATA 'npm') }
+    return Join-VmPathSegments -Values @(
+        (Get-VmAdapterPath -Adapter $Adapter -Layer Machine),
+        (Get-VmAdapterPath -Adapter $Adapter -Layer User),
+        $explicitNodeRoots
+    )
+}
+
 function Resolve-VmAdapterNpm {
     param($Adapter)
     if ($Adapter.Mode -eq 'Sandbox') { return [pscustomobject]@{ Source = [string]$Adapter.NpmSource } }
@@ -366,11 +395,12 @@ function Start-LiveScenarioSetup {
         $probe = Invoke-AcceptanceCapturedCommand -FilePath ([string]$wingetCommand.Source) -ArgumentList @(
             'install', '--id', 'OpenJS.NodeJS.LTS', '--exact', '--silent', '--disable-interactivity',
             '--accept-package-agreements', '--accept-source-agreements'
-        ) -TimeoutSec 300
+        ) -TimeoutSec 900
         if ($probe.TimedOut -or $probe.ExitCode -ne 0) { throw "Scenario setup failed to install Node.js LTS within the controlled timeout" }
         $state.OwnedWingetPackages += 'OpenJS.NodeJS.LTS'
         $state.OwnedPathRoots += (Join-Path $env:ProgramFiles 'nodejs')
-        Set-VmAdapterPath -Adapter $PathAdapter -Layer Process -Value ((Get-VmAdapterPath -Adapter $PathAdapter -Layer Machine) + ';' + (Get-VmAdapterPath -Adapter $PathAdapter -Layer User))
+        if ($env:APPDATA) { $state.OwnedPathRoots += (Join-Path $env:APPDATA 'npm') }
+        Set-VmAdapterPath -Adapter $PathAdapter -Layer Process -Value (Get-VmNodeProcessPathAfterInstall -Adapter $PathAdapter)
     }
     if ($setup.PSObject.Properties.Name -contains "hideNpm" -and $setup.hideNpm) {
         $npmCommands = @(Get-Command npm, npm.cmd, npm.ps1, npx, npx.cmd, npx.ps1 -All -ErrorAction SilentlyContinue | Where-Object Path | Select-Object -ExpandProperty Path -Unique)
@@ -683,6 +713,21 @@ try {
         )
         if ($index -gt 0) { $arguments += "-SkipDriverSelfTest" }
         if ($scenarioMode -eq "Live") { $arguments += @("-CredentialTarget", $CredentialTarget, "-AcknowledgeRealInstall") }
+        $scenarioTimeoutSec = if ($scenario.PSObject.Properties.Name -contains "timeoutSec") {
+            [int]$scenario.timeoutSec
+        }
+        elseif ($scenarioMode -eq "Live") {
+            2400
+        }
+        else {
+            600
+        }
+        $stageTimeoutSec = if ($scenarioMode -eq "Live") {
+            $scenarioTimeoutSec + 300
+        }
+        else {
+            [Math]::Max(600, $scenarioTimeoutSec + 60)
+        }
         $setupState = $null
         $scenarioResult = $null
         $scenarioFailure = $null
@@ -693,7 +738,7 @@ try {
                 $currentScenarioOwnership = Get-VmScenarioOwnership -Scenario $scenario -SetupState $setupState -ScenarioMode $scenarioMode
             }
             $scenarioResult = Invoke-VmStage -Name ("scenario-" + $scenarioId) -FilePath "powershell.exe" -Arguments $arguments `
-                -TimeoutSec $(if ($scenarioMode -eq "Live") { 2400 } else { 600 }) -EvidenceRoot $sceneDir
+                -TimeoutSec $stageTimeoutSec -EvidenceRoot $sceneDir
         }
         catch {
             $scenarioFailure = $_.Exception.Message

@@ -1926,22 +1926,63 @@ function Invoke-CommandSafe {
             }
         }
 
-        # Windows PowerShell 5.1 may return a blank Start-Process ExitCode,
-        # and npm often resolves to a .cmd shim. Run through cmd.exe and
-        # capture stdout/stderr/exit code explicitly.
         $tempDir = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
         $tmpOut = Join-Path $tempDir "ccdi_stdout_${PID}_$(Get-Random).tmp"
         $tmpErr = Join-Path $tempDir "ccdi_stderr_${PID}_$(Get-Random).tmp"
-        $tmpExit = Join-Path $tempDir "ccdi_exit_${PID}_$(Get-Random).tmp"
 
-        $commandLine = ConvertTo-CommandLine -Arguments (@($startFile) + $startArguments)
-        $innerCommand = "$commandLine > $(ConvertTo-CommandLineArgument -Argument $tmpOut) 2> $(ConvertTo-CommandLineArgument -Argument $tmpErr) & echo !ERRORLEVEL! > $(ConvertTo-CommandLineArgument -Argument $tmpExit)"
-        $cmdExe = if ($env:ComSpec) { $env:ComSpec } else { "cmd.exe" }
-        $argumentLine = "/d /v:on /s /c `"$innerCommand`""
+        $argumentLine = ConvertTo-CommandLine -Arguments $startArguments
+        $resolvedExt = [System.IO.Path]::GetExtension($startFile).ToLowerInvariant()
+        $isBatchCommand = $resolvedExt -in @(".cmd", ".bat")
 
-        $proc = Start-Process -FilePath $cmdExe -ArgumentList $argumentLine -NoNewWindow -PassThru
+        if ($isBatchCommand) {
+            $cmdExe = if ($env:ComSpec) { $env:ComSpec } else { "cmd.exe" }
+            $batchArgRefs = @()
+            $batchPsi = New-Object System.Diagnostics.ProcessStartInfo
+            $batchPsi.FileName = $cmdExe
+            $batchPsi.UseShellExecute = $false
+            $batchPsi.CreateNoWindow = $true
+            $batchPsi.EnvironmentVariables["CCDI_CMD_PATH"] = $startFile
+            $batchPsi.EnvironmentVariables["CCDI_STDOUT"] = $tmpOut
+            $batchPsi.EnvironmentVariables["CCDI_STDERR"] = $tmpErr
 
-        Write-Log "DEBUG" "Invoke-CommandSafe: resolved=$startFile, cwd=$(Get-Location), args=$(ConvertTo-SafeLogText -Text $argumentLine), cmdPid=$($proc.Id)"
+            for ($i = 0; $i -lt $startArguments.Count; $i++) {
+                $arg = $startArguments[$i]
+                if ($null -eq $arg -or $arg.Length -eq 0) {
+                    $batchArgRefs += '""'
+                    continue
+                }
+
+                $envName = "CCDI_CMD_ARG_$i"
+                $batchPsi.EnvironmentVariables[$envName] = $arg
+                $batchArgRefs += ('"!{0}!"' -f $envName)
+            }
+
+            $batchCommand = '""!CCDI_CMD_PATH!"'
+            if ($batchArgRefs.Count -gt 0) {
+                $batchCommand += " " + ($batchArgRefs -join " ")
+            }
+            $batchCommand += ' > "!CCDI_STDOUT!" 2> "!CCDI_STDERR!""'
+            $batchPsi.Arguments = "/d /v:on /s /c $batchCommand"
+
+            $proc = [System.Diagnostics.Process]::Start($batchPsi)
+            Write-Log "DEBUG" "Invoke-CommandSafe: resolved=$startFile, cwd=$(Get-Location), args=$(ConvertTo-SafeLogText -Text $argumentLine), runner=cmd, pid=$($proc.Id)"
+        }
+        else {
+            $startParams = @{
+                FilePath               = $startFile
+                NoNewWindow            = $true
+                PassThru               = $true
+                RedirectStandardOutput = $tmpOut
+                RedirectStandardError  = $tmpErr
+            }
+            if ($null -ne $startArguments -and $startArguments.Count -gt 0) {
+                $startParams.ArgumentList = $argumentLine
+            }
+
+            $proc = Start-Process @startParams
+            try { $null = $proc.Handle } catch {}
+            Write-Log "DEBUG" "Invoke-CommandSafe: resolved=$startFile, cwd=$(Get-Location), args=$(ConvertTo-SafeLogText -Text $argumentLine), runner=direct, pid=$($proc.Id)"
+        }
 
         # 等待进程完成，设置超时；长命令可选择性输出心跳提示。
         $finished = $false
@@ -2054,7 +2095,7 @@ function Invoke-CommandSafe {
 
             $result.Success = $false
             # 清理临时文件
-            foreach ($tmpPath in @($tmpOut, $tmpErr, $tmpExit)) {
+            foreach ($tmpPath in @($tmpOut, $tmpErr)) {
                 if ($tmpPath -and (Test-Path $tmpPath)) {
                     Remove-Item $tmpPath -Force -ErrorAction SilentlyContinue
                 }
@@ -2062,11 +2103,13 @@ function Invoke-CommandSafe {
             return $result
         }
 
-        if (Test-Path $tmpExit) {
-            $exitText = (Get-Content $tmpExit -Raw -ErrorAction SilentlyContinue).Trim()
-            if ($exitText -match '^-?\d+$') {
-                $result.ExitCode = [int]$exitText
-            }
+        $proc.WaitForExit() | Out-Null
+        $proc.Refresh()
+        try {
+            $result.ExitCode = [int]$proc.ExitCode
+        }
+        catch {
+            $result.ExitCode = -1
         }
         $result.Success = ($result.ExitCode -eq 0)
 
@@ -2079,7 +2122,7 @@ function Invoke-CommandSafe {
             if ($null -eq $result.Error) { $result.Error = "" }
         }
 
-        foreach ($tmpPath in @($tmpOut, $tmpErr, $tmpExit)) {
+        foreach ($tmpPath in @($tmpOut, $tmpErr)) {
             if ($tmpPath -and (Test-Path $tmpPath)) {
                 Remove-Item $tmpPath -Force -ErrorAction SilentlyContinue
             }
@@ -2088,6 +2131,11 @@ function Invoke-CommandSafe {
     catch {
         $result.Error = $_.Exception.Message
         Write-Log "ERROR" "命令执行异常: $Command $Arguments, 错误: $($_.Exception.Message)"
+        foreach ($tmpPath in @($tmpOut, $tmpErr)) {
+            if ($tmpPath -and (Test-Path $tmpPath)) {
+                Remove-Item $tmpPath -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 
     return $result
@@ -2123,7 +2171,7 @@ function ConvertTo-CommandLineArgument {
         return '""'
     }
 
-    if ($Argument -notmatch '[\s"]') {
+    if ($Argument -notmatch '[\s"&|<>\(\)\^!%]') {
         return $Argument
     }
 

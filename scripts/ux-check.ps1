@@ -678,6 +678,10 @@ x-api-key: $TestApiKey
         $installContent -match 'Invoke-CcdiScriptAndExit[\s\S]{0,50}\$doctorPath'
     } "install.ps1 Doctor 分支未使用安全转发函数"
 
+    Assert "install.ps1 Doctor 分支默认离线诊断" {
+        $installContent -match '\$doctorArgs\s*=\s*@\("-ShareSafe",\s*"-SkipApiTest",\s*"-NoOpenReport"\)'
+    } "install.ps1 Doctor 分支必须默认传入 -ShareSafe -SkipApiTest -NoOpenReport"
+
     Assert "install.ps1 ConfigureOnly 分支使用安全转发" {
         $installContent -match 'Invoke-CcdiScriptAndExit[\s\S]{0,50}\$configPath'
     } "install.ps1 ConfigureOnly 分支未使用安全转发函数"
@@ -703,6 +707,14 @@ x-api-key: $TestApiKey
     $configurePath = Join-Path $ScriptRoot "configure-deepseek.ps1"
     $startHereText = Get-Content $startHerePath -Raw -Encoding UTF8
     $configureText = Get-Content $configurePath -Raw -Encoding UTF8
+
+    Assert "Start-Here 一键诊断菜单默认离线诊断" {
+        $startHereText -match '\$doctorArgs\s*=\s*@\("-File",\s*\$doctorScript,\s*"-ShareSafe",\s*"-SkipApiTest",\s*"-NoOpenReport"\)'
+    } "Start-Here 菜单 [4] 必须默认传入 -ShareSafe -SkipApiTest -NoOpenReport"
+
+    Assert "Start-Here DoctorOnly 默认离线诊断" {
+        $startHereText -match '&\s*\$doctorScript\s+-ShareSafe\s+-SkipApiTest\s+-NoOpenReport'
+    } "Start-Here DoctorOnly 必须默认传入 -ShareSafe -SkipApiTest -NoOpenReport"
 
     # Step-GetApiKey 菜单文案必须存在
     $menuTexts = @(
@@ -996,6 +1008,8 @@ x-api-key: $TestApiKey
     $doctorText = Get-Content $doctorPath -Raw -Encoding UTF8
     $doctorCmdPath = Join-Path $ScriptRoot "一键诊断.cmd"
     $doctorCmdText = Get-Content $doctorCmdPath -Raw -Encoding ASCII
+    $runDiagnosticsCmdPath = Join-Path $ScriptRoot "Run-Diagnostics.cmd"
+    $runDiagnosticsCmdText = Get-Content $runDiagnosticsCmdPath -Raw -Encoding ASCII
 
     Assert "doctor.ps1 不直接 chcp 65001" {
         $doctorText -notmatch '(?m)^[^#\r\n]*chcp\s+65001'
@@ -1018,9 +1032,19 @@ x-api-key: $TestApiKey
         $doctorCmdText -notmatch 'chcp\s+65001'
     } "一键诊断.cmd 不得设置 chcp 65001"
 
-    Assert "一键诊断.cmd 调用 doctor.ps1 -ShareSafe" {
-        $doctorCmdText -match 'doctor\.ps1' -and $doctorCmdText -match '-ShareSafe'
-    } "一键诊断.cmd 必须调用 doctor.ps1 -ShareSafe"
+    Assert "一键诊断.cmd 调用 doctor.ps1 安全诊断参数" {
+        $doctorCmdText -match 'doctor\.ps1' -and
+        $doctorCmdText -match '-ShareSafe' -and
+        $doctorCmdText -match '-SkipApiTest' -and
+        $doctorCmdText -match '-NoOpenReport'
+    } "一键诊断.cmd 必须调用 doctor.ps1 -ShareSafe -SkipApiTest -NoOpenReport"
+
+    Assert "Run-Diagnostics.cmd 调用 doctor.ps1 安全诊断参数" {
+        $runDiagnosticsCmdText -match 'doctor\.ps1' -and
+        $runDiagnosticsCmdText -match '-ShareSafe' -and
+        $runDiagnosticsCmdText -match '-SkipApiTest' -and
+        $runDiagnosticsCmdText -match '-NoOpenReport'
+    } "Run-Diagnostics.cmd 必须调用 doctor.ps1 -ShareSafe -SkipApiTest -NoOpenReport"
 
     Write-Host ""
 

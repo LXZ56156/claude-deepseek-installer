@@ -114,3 +114,21 @@
 | ACC-039 | all interactive acceptance `sendSecret` steps | TestSafe `configure-secret-input` plus static Live scenario coverage ensure secrets wait for real prompt lines | source gate rejects any sendSecret expect outside the anchored allowed list and reports scenario id, raw expect and secret type | Live 场景需 VM 复验；静态 guard 覆盖 Live 定义 |
 | ACC-040 | `Get-VmScenarioOwnership` / scenario loop / failure cleanup | pathKinds-only ownership returns installer state root under StrictMode; simulated stage failure cleanup removes owned installer state without `UNOWNED_PATH` | source gate forbids direct optional ownership property access and requires pre-`Invoke-VmStage` ownership calculation | Live 场景需 VM 复验；host functional coverage proves cleanup ownership path |
 | ACC-041 | `Resolve-NodeExePath` / `Test-NodeJsInstalled` / `Test-NpmInstalled` / `Install-ClaudeCodeAuto` / `Test-ClaudeCommandExisting` / `Start-Here.ps1` / Live scenarios | Node winget nonzero -> `node_install_failed`; winget success injects nodejs PATH; native and npm fixed Claude paths continue without restart; Live fallback failureText includes restart/incomplete text | fixed-path resolver source gates; no `node_installed_needs_restart` normal return; Start-Here fixed-path postcheck gate; Live success scenario failureText gate | Live 场景需 VM 复验；host functional coverage proves classification and runner guard |
+
+## 2026-06-24 Deep audit closure fixes
+
+| ID | Problem | Root cause | Fix | Regression |
+|---|---|---|---|---|
+| ACC-042 | Buyer diagnostic entrypoints could run a real DeepSeek API smoke test and open Explorer by default | `.cmd`, Start-Here menu, Doctor mode forwarding only passed `-ShareSafe`, while `-SkipApiTest` and `-NoOpenReport` were conditional or absent | Default all buyer diagnostic launch paths to `-ShareSafe -SkipApiTest -NoOpenReport` | `check.ps1` diagnostic `.cmd` gate + `ux-check.ps1` launcher/Start-Here/install gates |
+| ACC-043 | `Invoke-CommandSafe` could fail or execute unintended fragments for resolved `.cmd` paths/arguments containing shell metacharacters | It constructed one `cmd.exe /c` string with `$innerCommand`, redirection, and `!ERRORLEVEL!`, so command paths and arguments were parsed by cmd before execution | Split direct exe/com runner from `.cmd/.bat` runner; batch runner passes target and non-empty args through `CCDI_CMD_PATH`/`CCDI_CMD_ARG_*` environment variables and keeps stdout/stderr temp evidence | `check.ps1` executes powershell.exe and `.cmd` probes under a path containing中文/space/`&`/`!`/`%`/parentheses; verifies metachar args, empty arg, and exit 7 |
+| ACC-044 | Release simulation did not cover common special-character extraction paths | The extracted ZIP path only contained中文 and spaces | Release simulation now extracts under中文/space/`&`/`!`/parentheses path and keeps docs explicit about this coverage boundary | `simulate-user-release.ps1` path itself + docs/check release gates |
+| ACC-045 | Live fault scenarios could lose npm after winget Node setup, time out exactly at the scenario limit, or let official-only scenarios pass after fallback | Setup used a short Node install timeout and rebuilt Process PATH only from Machine/User PATH; outer stage timeout had no overhead; official success scenarios did not forbid fallback text | Use 900s bounded Node setup, explicitly add `Program Files\nodejs` and user npm to Process PATH, add stage timeout overhead, and fail official-only Live scenarios on “备用下载方式” | `check.ps1` VM source gates + Live scenario definition gates; real Live still requires dedicated VM |
+
+## 2026-06-24 Deep audit coverage index
+
+| ID | 修复函数/脚本 | test-vm-acceptance.ps1 断言 | check.ps1 防回归 | 需专用 VM Live |
+|---|---|---|---|---|
+| ACC-042 | `一键诊断.cmd` / `Run-Diagnostics.cmd` / `Start-Here.ps1` / `install.ps1` | 不适用 | diagnostic args + UX gates | 否 |
+| ACC-043 | `Invoke-CommandSafe` / `ConvertTo-CommandLineArgument` | 不适用 | command/path argument boundary probes + source gate forbidding old wrapper | 否 |
+| ACC-044 | `simulate-user-release.ps1` / docs | 不适用 | Release simulation path coverage | 否 |
+| ACC-045 | `vm-final-acceptance.ps1` / Live scenario JSON | Live setup行为待专用 VM；host仅静态 gate | Node setup helper/timeout + official fallback gate | 是；Live 8 场景与真实重启仍待 VM |
