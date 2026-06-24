@@ -628,6 +628,27 @@ Write-Host 'SCENARIO_FINAL_FAILURE_UNIQUE'
         throw "Scenario failureText emitted after the final prompt must fail the scenario"
     }
 
+    $restartFailureDir = Join-Path $selfTestDir "restart-failure"
+    New-Item -ItemType Directory -Path $restartFailureDir -Force | Out-Null
+    @'
+Write-Host 'BEFORE_RESTART_FAILURE'
+Write-Host '当前需要重开终端后继续'
+Start-Sleep -Seconds 10
+'@ | Set-Content -LiteralPath (Join-Path $restartFailureDir "restart-failure.ps1") -Encoding UTF8
+    "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0restart-failure.ps1`"`r`n" | Set-Content -LiteralPath (Join-Path $restartFailureDir "restart-failure.cmd") -Encoding ASCII
+    $restartFailureScenario = [PSCustomObject]@{
+        id = "driver-restart-failure-self-test"; entry = "restart-failure.cmd"; timeoutSec = 15; responders = @()
+        failureText = @("当前需要重开终端后继续")
+        steps = @([PSCustomObject]@{ expect = "THIS_PROMPT_MUST_NOT_EXIST"; send = $null; timeoutSec = 8 })
+        required = @(); forbidden = @($DummyApiKey); expectedExitCodes = @(0)
+    }
+    $restartFailureResult = Invoke-ConPtyScenario -Scenario $restartFailureScenario -ReleaseRoot $restartFailureDir -Secret $DummyApiKey -Environment @{} -ScenarioEvidenceDir (Join-Path $EvidenceDir "driver-restart-failure-self-test")
+    if ($restartFailureResult.Status -ne "FAIL" -or
+        $restartFailureResult.Error -notmatch 'Failure text detected' -or
+        $restartFailureResult.Error -match 'Step timeout') {
+        throw "Restart failureText must fail immediately instead of waiting for step timeout"
+    }
+
     $finalCleanDir = Join-Path $selfTestDir "final-clean"
     New-Item -ItemType Directory -Path $finalCleanDir -Force | Out-Null
     @'

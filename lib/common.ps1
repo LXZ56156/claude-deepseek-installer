@@ -1525,6 +1525,64 @@ catch {
 # PATH 刷新
 # ============================================================
 
+function Add-CurrentProcessPathEntry {
+    <#
+    .SYNOPSIS
+        将一个已存在目录加入当前进程 PATH，避免刚安装的命令需要重开终端才可用。
+    #>
+    param(
+        [string]$PathToAdd
+    )
+
+    $result = @{
+        Added = $false
+        Path  = $PathToAdd
+        Error = ""
+    }
+
+    if ([string]::IsNullOrWhiteSpace($PathToAdd)) {
+        $result.Error = "路径为空"
+        return $result
+    }
+
+    if (-not (Test-Path -LiteralPath $PathToAdd -PathType Container)) {
+        $result.Error = "目录不存在: $PathToAdd"
+        return $result
+    }
+
+    try {
+        $target = [System.IO.Path]::GetFullPath($PathToAdd).TrimEnd('\').ToLowerInvariant()
+        $entries = @()
+        if ($env:Path) {
+            $entries = @($env:Path -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        }
+        foreach ($entry in $entries) {
+            try {
+                $entryNorm = [System.IO.Path]::GetFullPath($entry.Trim()).TrimEnd('\').ToLowerInvariant()
+                if ($entryNorm -eq $target) {
+                    return $result
+                }
+            }
+            catch { }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($env:Path)) {
+            $env:Path = $PathToAdd
+        }
+        else {
+            $env:Path = "$PathToAdd;$env:Path"
+        }
+        $result.Added = $true
+        Write-Log "DEBUG" "当前进程 PATH 已加入: $PathToAdd"
+    }
+    catch {
+        $result.Error = "加入当前进程 PATH 失败: $($_.Exception.Message)"
+        Write-Log "WARN" "Add-CurrentProcessPathEntry: $($result.Error)"
+    }
+
+    return $result
+}
+
 function Refresh-CurrentProcessPath {
     <#
     .SYNOPSIS
@@ -1573,6 +1631,88 @@ function Refresh-CurrentProcessPath {
 # npm.cmd 路径解析
 # ============================================================
 
+function Resolve-NodeExePath {
+    <#
+    .SYNOPSIS
+        解析可执行的 node.exe，不只依赖 Get-Command node。
+    .RETURNS
+        包含 Found, Path, Source, Error 的 hashtable
+    #>
+    $result = @{
+        Found  = $false
+        Path   = $null
+        Source = ""
+        Error  = ""
+    }
+
+    if ($env:CCDI_TEST_MODE -eq "1" -and -not [string]::IsNullOrWhiteSpace($env:CCDI_MOCK_NODE_EXE)) {
+        if (Test-Path -LiteralPath $env:CCDI_MOCK_NODE_EXE -PathType Leaf) {
+            $result.Found = $true
+            $result.Path = $env:CCDI_MOCK_NODE_EXE
+            $result.Source = "mock_fixed_path"
+            [void](Add-CurrentProcessPathEntry -PathToAdd (Split-Path -Parent $result.Path))
+            return $result
+        }
+    }
+
+    $candidates = New-Object System.Collections.ArrayList
+    $seen = @{}
+
+    function _addNodeCandidate {
+        param(
+            [string]$CandidatePath,
+            [string]$SourceHint
+        )
+        if ([string]::IsNullOrWhiteSpace($CandidatePath)) { return }
+        try { $norm = [System.IO.Path]::GetFullPath($CandidatePath).TrimEnd('\').ToLowerInvariant() }
+        catch { $norm = $CandidatePath.Trim().ToLowerInvariant() }
+        if ($seen.ContainsKey($norm)) { return }
+        $seen[$norm] = $true
+        [void]$candidates.Add([PSCustomObject]@{ Path = $CandidatePath; Source = $SourceHint })
+    }
+
+    foreach ($commandName in @("node.exe", "node")) {
+        foreach ($cmd in @(Get-Command $commandName -All -ErrorAction SilentlyContinue)) {
+            $resolved = if ($cmd.Source) { $cmd.Source } else { $cmd.Definition }
+            if ($resolved -and [System.IO.Path]::GetExtension($resolved).ToLowerInvariant() -eq ".exe") {
+                _addNodeCandidate -CandidatePath $resolved -SourceHint "Get-Command $commandName"
+            }
+        }
+    }
+
+    if ($env:ProgramFiles) {
+        _addNodeCandidate -CandidatePath (Join-Path $env:ProgramFiles "nodejs\node.exe") -SourceHint "ProgramFiles"
+    }
+    if (${env:ProgramFiles(x86)}) {
+        _addNodeCandidate -CandidatePath (Join-Path ${env:ProgramFiles(x86)} "nodejs\node.exe") -SourceHint "ProgramFiles(x86)"
+    }
+
+    if ($env:Path) {
+        foreach ($dir in @($env:Path -split ';')) {
+            if ([string]::IsNullOrWhiteSpace($dir)) { continue }
+            try {
+                _addNodeCandidate -CandidatePath (Join-Path $dir.Trim() "node.exe") -SourceHint "PATH"
+            }
+            catch { }
+        }
+    }
+
+    foreach ($candidate in $candidates) {
+        if ($candidate.Path -and (Test-Path -LiteralPath $candidate.Path -PathType Leaf)) {
+            $result.Found = $true
+            $result.Path = [string]$candidate.Path
+            $result.Source = [string]$candidate.Source
+            [void](Add-CurrentProcessPathEntry -PathToAdd (Split-Path -Parent $result.Path))
+            Write-Log "DEBUG" "Resolve-NodeExePath: 找到 node.exe: $($result.Path) ($($result.Source))"
+            return $result
+        }
+    }
+
+    $result.Error = "未找到 node.exe。请确认 Node.js LTS 已安装。"
+    Write-Log "WARN" "Resolve-NodeExePath: $($result.Error)"
+    return $result
+}
+
 function Resolve-NpmCmdPath {
     <#
     .SYNOPSIS
@@ -1589,6 +1729,16 @@ function Resolve-NpmCmdPath {
         Error  = ""
     }
 
+    if ($env:CCDI_TEST_MODE -eq "1" -and -not [string]::IsNullOrWhiteSpace($env:CCDI_MOCK_NPM_CMD)) {
+        if (Test-Path -LiteralPath $env:CCDI_MOCK_NPM_CMD -PathType Leaf) {
+            $result.Found = $true
+            $result.Path = $env:CCDI_MOCK_NPM_CMD
+            $result.Source = "mock_fixed_path"
+            [void](Add-CurrentProcessPathEntry -PathToAdd (Split-Path -Parent $result.Path))
+            return $result
+        }
+    }
+
     # 1. 优先 Get-Command npm.cmd
     $npmCmd = Get-Command npm.cmd -ErrorAction SilentlyContinue
     if ($npmCmd) {
@@ -1597,6 +1747,7 @@ function Resolve-NpmCmdPath {
             $result.Found = $true
             $result.Path = $resolved
             $result.Source = "Get-Command npm.cmd"
+            [void](Add-CurrentProcessPathEntry -PathToAdd (Split-Path -Parent $result.Path))
             Write-Log "DEBUG" "Resolve-NpmCmdPath: 通过 Get-Command npm.cmd 找到: $resolved"
             return $result
         }
@@ -1619,6 +1770,7 @@ function Resolve-NpmCmdPath {
             $result.Found = $true
             $result.Path = $candidate
             $result.Source = "常见路径"
+            [void](Add-CurrentProcessPathEntry -PathToAdd (Split-Path -Parent $result.Path))
             Write-Log "DEBUG" "Resolve-NpmCmdPath: 通过常见路径找到: $candidate"
             return $result
         }
@@ -1633,6 +1785,7 @@ function Resolve-NpmCmdPath {
                 $result.Found = $true
                 $result.Path = $firstLine
                 $result.Source = "where.exe"
+                [void](Add-CurrentProcessPathEntry -PathToAdd (Split-Path -Parent $result.Path))
                 Write-Log "DEBUG" "Resolve-NpmCmdPath: 通过 where.exe 找到: $firstLine"
                 return $result
             }

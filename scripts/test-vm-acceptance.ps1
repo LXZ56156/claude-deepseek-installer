@@ -17,6 +17,17 @@ $testRoot = Join-Path $env:TEMP ('ccdi-vm-acceptance-test-' + [guid]::NewGuid().
 $oldProfile = $env:USERPROFILE; $oldAppData = $env:APPDATA; $oldLocalAppData = $env:LOCALAPPDATA
 $oldTestDesktop = $env:CCDI_TEST_DESKTOP; $oldProcessPath = $env:Path
 $oldUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$oldProgramFiles = $env:ProgramFiles; $oldProgramFilesX86 = ${env:ProgramFiles(x86)}
+$installerEnvNames = @(
+    'CCDI_TEST_MODE', 'CCDI_TEST_USERPROFILE', 'CCDI_TEST_ARTIFACT_ROOT',
+    'CCDI_MOCK_INSTALL_DECISION', 'CCDI_MOCK_CLAUDE', 'CCDI_MOCK_OFFICIAL',
+    'CCDI_MOCK_NATIVE_INSTALL', 'CCDI_MOCK_WINGET', 'CCDI_MOCK_NODE',
+    'CCDI_MOCK_NPM', 'CCDI_MOCK_NPMMIRROR', 'CCDI_MOCK_NODE_INSTALL',
+    'CCDI_MOCK_NODE_VERSION', 'CCDI_MOCK_NPM_VERSION', 'CCDI_MOCK_NPM_INSTALL',
+    'CCDI_MOCK_NODE_EXE', 'CCDI_MOCK_NPM_CMD'
+)
+$oldInstallerEnv = @{}
+foreach ($installerEnvName in $installerEnvNames) { $oldInstallerEnv[$installerEnvName] = [Environment]::GetEnvironmentVariable($installerEnvName, 'Process') }
 $passes = New-Object Collections.ArrayList
 
 function Assert-Test {
@@ -380,6 +391,122 @@ try {
     Assert-Test ((Get-VmAcceptanceCollectionCount $postStaticOne) -eq 1) 'post static command count handles 1 under StrictMode'
     Assert-Test ((Get-VmAcceptanceCollectionCount $postStaticMany) -eq 2) 'post static command count handles many under StrictMode'
 
+    # Installer restart-elimination checks are fully sandboxed and mock-driven:
+    # no winget/npm/Claude command is executed, and no real profile/PATH is changed.
+    $installerSaved = @{
+        UserProfile = $env:USERPROFILE
+        AppData = $env:APPDATA
+        LocalAppData = $env:LOCALAPPDATA
+        ProcessPath = $env:Path
+        ProgramFiles = $env:ProgramFiles
+        ProgramFilesX86 = ${env:ProgramFiles(x86)}
+    }
+    try {
+        foreach ($installerEnvName in $installerEnvNames) { Remove-Item -Path "Env:\$installerEnvName" -ErrorAction SilentlyContinue }
+        $installerRoot = Join-Path $testRoot 'installer-sandbox'
+        $installerProfile = Join-Path $installerRoot 'profile'
+        $installerAppData = Join-Path $installerProfile 'AppData\Roaming'
+        $installerLocalAppData = Join-Path $installerProfile 'AppData\Local'
+        $installerProgramFiles = Join-Path $installerRoot 'ProgramFiles'
+        $installerProgramFilesX86 = Join-Path $installerRoot 'ProgramFilesX86'
+        $installerArtifacts = Join-Path $installerRoot 'artifacts'
+        foreach ($dir in @($installerProfile, $installerAppData, $installerLocalAppData, $installerProgramFiles, $installerProgramFilesX86, $installerArtifacts)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+
+        $env:CCDI_TEST_MODE = '1'
+        $env:CCDI_TEST_USERPROFILE = $installerProfile
+        $env:CCDI_TEST_ARTIFACT_ROOT = $installerArtifacts
+        $env:USERPROFILE = $installerProfile
+        $env:APPDATA = $installerAppData
+        $env:LOCALAPPDATA = $installerLocalAppData
+        $env:ProgramFiles = $installerProgramFiles
+        ${env:ProgramFiles(x86)} = $installerProgramFilesX86
+        $env:Path = $oldProcessPath
+
+        if (-not (Get-Command Resolve-NodeExePath -ErrorAction SilentlyContinue)) {
+            . (Join-Path $ProjectRoot 'lib\bootstrap.ps1')
+            $null = Initialize-CcdiScript -ScriptName 'test-vm-acceptance-installer'
+        }
+
+        $env:CCDI_MOCK_INSTALL_DECISION = '1'
+        $env:CCDI_MOCK_CLAUDE = 'missing'
+        $env:CCDI_MOCK_OFFICIAL = 'unreachable'
+        $env:CCDI_MOCK_WINGET = 'ok'
+        $env:CCDI_MOCK_NODE = 'missing'
+        $env:CCDI_MOCK_NODE_INSTALL = 'fail'
+        $nodeFailure = Install-ClaudeCodeAuto
+        Assert-Test ((-not $nodeFailure.Success) -and $nodeFailure.Status -eq 'node_install_failed' -and $nodeFailure.Status -ne 'node_installed_needs_restart' -and -not [string]::IsNullOrWhiteSpace($nodeFailure.UserMessage)) 'Node winget nonzero without fixed-path node/npm returns node_install_failed'
+
+        $fakeNodeDir = Join-Path $installerProgramFiles 'nodejs'
+        New-Item -ItemType Directory -Path $fakeNodeDir -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $fakeNodeDir 'node.exe') -Force | Out-Null
+        "@echo off`r`necho 10.2.4`r`nexit /b 0`r`n" | Set-Content -LiteralPath (Join-Path $fakeNodeDir 'npm.cmd') -Encoding ASCII
+        $env:CCDI_MOCK_CLAUDE = 'missing'
+        $env:CCDI_MOCK_OFFICIAL = 'unreachable'
+        $env:CCDI_MOCK_WINGET = 'ok'
+        $env:CCDI_MOCK_NODE = 'missing'
+        $env:CCDI_MOCK_NODE_INSTALL = 'success'
+        $env:CCDI_MOCK_NPMMIRROR = 'reachable'
+        $env:CCDI_MOCK_NPM_INSTALL = 'success'
+        $nodeSuccess = Install-ClaudeCodeAuto
+        $processPathHasNode = @($env:Path -split ';' | Where-Object { $_ -eq $fakeNodeDir }).Count -gt 0
+        Assert-Test ($nodeSuccess.Status -ne 'node_installed_needs_restart' -and $processPathHasNode) 'Node winget success injects nodejs into current PATH and continues without restart status'
+
+        foreach ($installerEnvName in @('CCDI_MOCK_INSTALL_DECISION','CCDI_MOCK_CLAUDE','CCDI_MOCK_OFFICIAL','CCDI_MOCK_WINGET','CCDI_MOCK_NODE','CCDI_MOCK_NODE_INSTALL','CCDI_MOCK_NPMMIRROR','CCDI_MOCK_NPM_INSTALL','CCDI_MOCK_NODE_VERSION','CCDI_MOCK_NPM_VERSION')) {
+            Remove-Item -Path "Env:\$installerEnvName" -ErrorAction SilentlyContinue
+        }
+        $emptyPathDir = Join-Path $installerRoot 'empty-path'
+        New-Item -ItemType Directory -Path $emptyPathDir -Force | Out-Null
+        $nativeBin = Join-Path $installerProfile '.local\bin'
+        New-Item -ItemType Directory -Path $nativeBin -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $nativeBin 'claude.exe') -Force | Out-Null
+        $env:Path = $emptyPathDir
+        $nativeFixed = Test-ClaudeCommandExisting
+        Assert-Test ($nativeFixed.Usable -and $nativeFixed.Source -eq 'native_local_bin' -and $nativeFixed.Path -like '*.local\bin\claude.exe') 'Native Claude fixed path postcheck works when Get-Command claude fails'
+
+        Remove-Item -LiteralPath (Join-Path $nativeBin 'claude.exe') -Force
+        $npmGlobalDir = Join-Path $installerAppData 'npm'
+        New-Item -ItemType Directory -Path $npmGlobalDir -Force | Out-Null
+        "@echo off`r`necho 2.1.0 (Claude Code)`r`nexit /b 0`r`n" | Set-Content -LiteralPath (Join-Path $npmGlobalDir 'claude.cmd') -Encoding ASCII
+        "@echo 'reference only'`r`n" | Set-Content -LiteralPath (Join-Path $npmGlobalDir 'claude.ps1') -Encoding ASCII
+        $env:Path = $emptyPathDir
+        $npmFixed = Test-ClaudeCommandExisting
+        $processPathHasNpm = @($env:Path -split ';' | Where-Object { $_ -eq $npmGlobalDir }).Count -gt 0
+        Assert-Test ($npmFixed.Usable -and $npmFixed.Source -eq 'npm_global' -and $npmFixed.Path -like '*\AppData\Roaming\npm\claude.cmd' -and $processPathHasNpm) 'npm global Claude fixed path postcheck injects APPDATA npm and avoids restart'
+
+        $startHereSource = Get-Content -LiteralPath (Join-Path $ProjectRoot 'Start-Here.ps1') -Raw -Encoding UTF8
+        $startHereContinuationOk = (
+            ($startHereSource -match 'Legacy restart status overridden by fixed-path postcheck') -and
+            ($startHereSource -notmatch 'node_installed_needs_restart[\s\S]{0,300}Show-CompletionPage[\s\S]{0,80}return')
+        )
+        Assert-Test $startHereContinuationOk 'Start-Here restart statuses perform fixed-path postcheck instead of skipping configuration'
+
+        $scenarioDoc = Get-Content -LiteralPath (Join-Path $ProjectRoot 'scripts\data\interactive-acceptance-scenarios.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $fallbackScenario = @($scenarioDoc.scenarioSets.Live | Where-Object { $_.id -eq 'live-official-fallback-success' })[0]
+        $fallbackFailureText = @($fallbackScenario.failureText)
+        $fallbackFailureTextJoined = $fallbackFailureText -join '|'
+        $fallbackFailureTextOk = (
+            ($fallbackFailureText.Count -ge 7) -and
+            ($fallbackFailureTextJoined -match 'Node\.js') -and
+            ($fallbackFailureTextJoined -match 'npm')
+        )
+        Assert-Test $fallbackFailureTextOk 'Live fallback success scenario fails fast on restart and install-incomplete text'
+    }
+    finally {
+        $env:USERPROFILE = $installerSaved.UserProfile
+        $env:APPDATA = $installerSaved.AppData
+        $env:LOCALAPPDATA = $installerSaved.LocalAppData
+        $env:Path = $installerSaved.ProcessPath
+        $env:ProgramFiles = $installerSaved.ProgramFiles
+        ${env:ProgramFiles(x86)} = $installerSaved.ProgramFilesX86
+        foreach ($installerEnvName in $installerEnvNames) {
+            $oldValue = $oldInstallerEnv[$installerEnvName]
+            if ($null -eq $oldValue) { Remove-Item -Path "Env:\$installerEnvName" -ErrorAction SilentlyContinue }
+            else { [Environment]::SetEnvironmentVariable($installerEnvName, $oldValue, 'Process') }
+        }
+    }
+
     # Resume state round-trip preserves parameters and all previous results without registering real tasks.
     $resumePaths = Get-AcceptanceControlPaths -ControlRoot (Join-Path $testRoot 'resume-control') -RunId '20260623-120000-001'
     New-Item -ItemType Directory -Path $resumePaths.Run -Force | Out-Null
@@ -675,6 +802,12 @@ Start-Sleep -Seconds 30
 }
 finally {
     $env:USERPROFILE=$oldProfile;$env:APPDATA=$oldAppData;$env:LOCALAPPDATA=$oldLocalAppData;$env:Path=$oldProcessPath
+    $env:ProgramFiles=$oldProgramFiles;${env:ProgramFiles(x86)}=$oldProgramFilesX86
+    foreach ($installerEnvName in $installerEnvNames) {
+        $oldValue = $oldInstallerEnv[$installerEnvName]
+        if ($null -eq $oldValue) { Remove-Item -Path "Env:\$installerEnvName" -ErrorAction SilentlyContinue }
+        else { [Environment]::SetEnvironmentVariable($installerEnvName, $oldValue, 'Process') }
+    }
     if ($null -eq $oldTestDesktop) { Remove-Item Env:\CCDI_TEST_DESKTOP -ErrorAction SilentlyContinue } else { $env:CCDI_TEST_DESKTOP=$oldTestDesktop }
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

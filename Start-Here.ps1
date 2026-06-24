@@ -698,18 +698,26 @@ function Step-InstallClaudeCode {
     # 处理特殊状态
     if ($installResult.Status -eq "node_installed_needs_restart" -or
         $installResult.Status -eq "installed_needs_restart") {
-        Write-UserFriendlyInstallMessage -Type "NeedRestart"
-        Write-NextStepCard `
-            -Status "必要运行环境已安装，当前窗口还没有识别到最新命令。" `
-            -Tried @(
-                "已重新检测安装结果",
-                "已刷新当前窗口的命令路径"
-            ) `
-            -NextSteps @(
-                "关闭当前窗口",
-                "重新双击「00-点我开始安装.cmd」继续安装",
-                "如果仍提示相同问题，再运行「一键修复依赖.cmd」"
-            )
+        Write-Log "WARN" "Install returned legacy restart status; running fixed-path postcheck before deciding: $($installResult.Status)"
+        Refresh-CurrentProcessPath
+        $legacyStatusCheck = Test-ClaudeCommandExisting
+        if ($legacyStatusCheck.Exists -and $legacyStatusCheck.Usable) {
+            $script:ClaudeInstalled = $true
+            $script:ClaudeInstallMethod = if ($installResult.Method) { $installResult.Method } else { "final_fallback" }
+            $script:ClaudeInstallStatus = "installed_needs_restart_or_path_fix"
+            Write-Warning "Claude Code 已在本次安装流程中可用。"
+            Write-Info "本工具会继续完成 DeepSeek 配置。"
+            Write-Log "INFO" "Legacy restart status overridden by fixed-path postcheck: version=$($legacyStatusCheck.Version), path=$($legacyStatusCheck.Path)"
+            return $true
+        }
+
+        Write-Error-Msg "安装未完成，尚未确认 Claude Code 可用。"
+        if ($installResult.UserMessage) {
+            Write-Info $installResult.UserMessage
+        }
+        else {
+            Write-Info "请稍后重试；如果仍失败，请运行「一键诊断.cmd」获取详细诊断报告。"
+        }
         return $false
     }
 
@@ -1329,7 +1337,7 @@ $reportTitle
 【一眼结论】
 --------------------------------------
 运行环境: Windows ($($winInfo.Version))
-Claude Code: $(if ($script:TestSafeMode) { "测试安全模式未执行真实安装" } elseif ($claudeVer) { "已安装 ($claudeVer)" } elseif (($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart"))) { "已安装但需重开终端" } else { "未安装" })
+Claude Code: $(if ($script:TestSafeMode) { "测试安全模式未执行真实安装" } elseif ($claudeVer) { "已安装 ($claudeVer)" } elseif (($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart"))) { "安装未完成" } else { "未安装" })
 Claude Code 安装位置: $claudeInstallLocation
 Node.js: $(if ($nodeInfo.Installed) { "$($nodeInfo.Version)" } elseif ($isOfficialNativeSuccess) { "未安装（当前官方安装方式无需 Node.js）" } else { "未安装" })
 npm: $(if ($npmInfo.Installed) { "$($npmInfo.Version)" } elseif ($isOfficialNativeSuccess) { "不可用（当前官方安装方式无需 npm）" } else { "不可用" })
@@ -1339,7 +1347,7 @@ User PATH: $userPathStatus
 Fresh PowerShell 验证: $freshShellStatusText
 整体状态: $overallStatus
 $(if ($script:TestSafeMode) { "测试安全模式流程完成，不代表真实安装/API 已验证。" } else { "" })
-$(if (($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart"))) { "NEEDS_RESTART - 需要关闭窗口重新运行「00-点我开始安装.cmd」继续安装。" } else { "" })
+$(if (($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart"))) { "INSTALL_INCOMPLETE - 尚未确认 Claude Code 可用，请稍后重试或运行一键诊断。" } else { "" })
 
 一、系统信息
 --------------------------------------
@@ -1399,8 +1407,8 @@ $(if ($script:TestSafeMode) {
 "测试安全模式未执行真实安装，也未验证真实 API。
 本结果只代表沙盒配置流程通过。"
 } elseif (($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart"))) {
-"关闭该窗口后重新双击「00-点我开始安装.cmd」继续安装流程。
-脚本会继续安装 Claude Code 并配置 DeepSeek。"
+"安装未完成，尚未确认 Claude Code 可用。
+请稍后重试，或运行「一键诊断.cmd」获取详细诊断报告。"
 } elseif ($script:ClaudeInstalled -and $script:ConfigWritten -and $script:ApiTestPassed -and $userPathOk -and -not $freshShellOk) {
 "安装和配置已完成，但自动启动验证未通过。
 
@@ -1792,15 +1800,12 @@ function Show-CompletionPage {
         Write-Info "请稍后运行 configure-deepseek.ps1 或在主菜单选择高级选项配置 API Key。"
     }
     elseif ($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart")) {
-        Write-Host "==============================================================" -ForegroundColor Yellow
-        Write-Host "            需要重开终端后继续                                " -ForegroundColor Yellow
-        Write-Host "==============================================================" -ForegroundColor Yellow
+        Write-Host "==============================================================" -ForegroundColor Red
+        Write-Host "            安装未完成                                        " -ForegroundColor Red
+        Write-Host "==============================================================" -ForegroundColor Red
         Write-Host ""
-        Write-Warning "当前窗口还没有识别到新安装的命令。"
-        Write-Info "这是第一阶段完成，不是失败。"
-        Write-Info "下一步：关闭此窗口，重新双击「00-点我开始安装.cmd」继续。"
-        Write-Info "重新打开后，安装助手会继续完成后续步骤。"
-        Write-Info "类比：就像手机安装完 App 后需要点图标打开。"
+        Write-Error-Msg "尚未确认 Claude Code 可用。"
+        Write-Info "请稍后重试；如果仍失败，请运行「一键诊断.cmd」获取详细诊断报告。"
     }
     else {
         # 最终兜底：即使在所有安装通道都失败的情况下，也做一次最终检测。
@@ -2039,78 +2044,66 @@ function Start-LazyInstall {
     # Step 2: 安装 Claude Code
     $claudeOk = Step-InstallClaudeCode
     if (-not $claudeOk) {
-        if (($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart"))) {
-            Write-Warning "当前需要重开终端后继续，已跳过后续配置步骤。"
-        }
-        else {
-            # 最后一次兜底检测：也许 Claude 已可用但中间流程误判
-            Refresh-CurrentProcessPath
-            $finalCheck = Test-ClaudeCommandExisting
-            if ($finalCheck.Exists -and $finalCheck.Usable) {
-                # v1.3.3 P1-2: 兜底检测必须包含 fresh shell 验证
-                $freshFinal = Test-ClaudeCommandInFreshShell
+        # 最后一次兜底检测：也许 Claude 已可用但中间流程误判。
+        Refresh-CurrentProcessPath
+        $finalCheck = Test-ClaudeCommandExisting
+        if ($finalCheck.Exists -and $finalCheck.Usable) {
+            # v1.3.3 P1-2: 兜底检测必须包含 fresh shell 验证
+            $freshFinal = Test-ClaudeCommandInFreshShell
 
-                # 优先保留 installResult.Method（如 npm_npmmirror），不被 Source=ExternalScript 覆盖
-                $knownInstallMethods = @("official_native", "winget", "npm_npmmirror", "existing", "existing_native")
-                $resolvedMethod = if ($script:ClaudeInstallMethod -in $knownInstallMethods) {
-                    $script:ClaudeInstallMethod
-                }
-                else {
-                    "final_fallback"
-                }
-                Write-Log "INFO" "Start-LazyInstall final fallback source=$($finalCheck.Source), path=$($finalCheck.Path), preservedMethod=$resolvedMethod"
-
-                if ($freshFinal.Success) {
-                    $script:ClaudeInstalled = $true
-                    $script:ClaudeInstallMethod = $resolvedMethod
-                    $script:ClaudeInstallStatus = "installed"
-                    Write-UserFriendlyInstallMessage -Type "InstallSuccess" -Detail "final check version: $($finalCheck.Version)"
-                    Write-Log "INFO" "Start-LazyInstall 兜底通过: fresh shell 可用, 继续流程"
-                }
-                else {
-                    $script:ClaudeInstalled = $true
-                    $script:ClaudeInstallMethod = $resolvedMethod
-                    $script:ClaudeInstallStatus = "installed_needs_restart_or_path_fix"
-
-                    Write-Warning "当前窗口可以识别 Claude Code，但新打开的 PowerShell 还没有确认可用。"
-                    Write-Info "本工具会继续配置 DeepSeek API Key。"
-                    Write-Info "安装结束后请先选择完成页 [1] 启动测试。"
-                    Write-Info "如果测试失败，再运行「一键修复依赖.cmd」。"
-                    Write-Log "WARN" "Start-LazyInstall 兜底部分通过: current process usable, fresh shell failed: $($freshFinal.Error)"
-                }
-
-                $configStatus = Get-DeepSeekConfigStatus
-                if (-not $configStatus.IsConfigured) {
-                    Write-Warning "Claude Code 已安装，但 DeepSeek API Key 尚未配置或配置不完整。"
-                    if ($configStatus.ErrorMessage) {
-                        Write-Info "原因: $($configStatus.ErrorMessage)"
-                    }
-                    Write-Info "下一步：继续配置 DeepSeek API Key。"
-                }
-
-                # 不 return，继续后续 API Key 配置
+            # 优先保留 installResult.Method（如 npm_npmmirror），不被 Source=ExternalScript 覆盖
+            $knownInstallMethods = @("official_native", "winget", "npm_npmmirror", "existing", "existing_native")
+            $resolvedMethod = if ($script:ClaudeInstallMethod -in $knownInstallMethods) {
+                $script:ClaudeInstallMethod
             }
             else {
-                Write-UserFriendlyInstallMessage -Type "InstallFailed"
-                Write-NextStepCard `
-                    -Status "Claude Code 暂未确认安装成功。" `
-                    -Tried @(
-                        "已自动切换可用安装方式",
-                        "已刷新命令路径并重新检测安装结果"
-                    ) `
-                    -NextSteps @(
-                        "先运行「一键修复依赖.cmd」自动修复常见问题",
-                        "修复后重新运行「00-点我开始安装.cmd」",
-                        "如果仍失败，再运行「一键诊断.cmd」生成 report.txt"
-                    ) `
-                    -IncludeSupportFallback
-                Show-CompletionPage
-                return
+                "final_fallback"
             }
+            Write-Log "INFO" "Start-LazyInstall final fallback source=$($finalCheck.Source), path=$($finalCheck.Path), preservedMethod=$resolvedMethod"
+
+            if ($freshFinal.Success) {
+                $script:ClaudeInstalled = $true
+                $script:ClaudeInstallMethod = $resolvedMethod
+                $script:ClaudeInstallStatus = "installed"
+                Write-UserFriendlyInstallMessage -Type "InstallSuccess" -Detail "final check version: $($finalCheck.Version)"
+                Write-Log "INFO" "Start-LazyInstall 兜底通过: fresh shell 可用, 继续流程"
+            }
+            else {
+                $script:ClaudeInstalled = $true
+                $script:ClaudeInstallMethod = $resolvedMethod
+                $script:ClaudeInstallStatus = "installed_needs_restart_or_path_fix"
+
+                Write-Warning "Claude Code 已在本次安装流程中可用，但新窗口暂未确认。"
+                Write-Info "本工具会继续配置 DeepSeek API Key。"
+                Write-Info "安装结束后如果新窗口暂时识别不到 claude，请重新打开 PowerShell 或运行「一键修复依赖.cmd」。"
+                Write-Log "WARN" "Start-LazyInstall 兜底部分通过: current process usable, fresh shell failed: $($freshFinal.Error)"
+            }
+
+            $configStatus = Get-DeepSeekConfigStatus
+            if (-not $configStatus.IsConfigured) {
+                Write-Warning "Claude Code 已安装，但 DeepSeek API Key 尚未配置或配置不完整。"
+                if ($configStatus.ErrorMessage) {
+                    Write-Info "原因: $($configStatus.ErrorMessage)"
+                }
+                Write-Info "下一步：继续配置 DeepSeek API Key。"
+            }
+
+            # 不 return，继续后续 API Key 配置
         }
-        # needs_restart 分支仍然需要 return
-        # v1.3.3 P0-3: installed_needs_restart_or_path_fix 表示已安装完毕仅需手动验证，不应阻断后续流程
-        if ($script:ClaudeInstallStatus -in @("node_installed_needs_restart", "installed_needs_restart")) {
+        else {
+            Write-UserFriendlyInstallMessage -Type "InstallFailed"
+            Write-NextStepCard `
+                -Status "Claude Code 暂未确认安装成功。" `
+                -Tried @(
+                    "已自动切换可用安装方式",
+                    "已刷新命令路径并重新检测安装结果"
+                ) `
+                -NextSteps @(
+                    "先运行「一键修复依赖.cmd」自动修复常见问题",
+                    "修复后重新运行「00-点我开始安装.cmd」",
+                    "如果仍失败，再运行「一键诊断.cmd」生成 report.txt"
+                ) `
+                -IncludeSupportFallback
             Show-CompletionPage
             return
         }

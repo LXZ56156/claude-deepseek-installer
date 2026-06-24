@@ -162,6 +162,8 @@ $requiredCommands = @(
     "Test-WslClaudeComprehensive",
     "Get-WslVersionClean",
     "Resolve-NpmCmdPath",
+    "Resolve-NodeExePath",
+    "Test-WingetNodeInstallAccepted",
     "Install-ClaudeCodeViaWinget"
 )
 
@@ -2525,7 +2527,8 @@ try {
         "node_installed_needs_restart", "failed_missing_node_or_npm",
         "failed_npmmirror_unreachable", "failed_official_and_mirror", "failed_missing_npm_cmd",
         "failed_claude_unusable", "installed_path_fixed", "installed_needs_path_fix",
-        "installed_needs_restart_or_path_fix")
+        "installed_needs_restart_or_path_fix", "node_install_failed",
+        "installed_postcheck_usable", "claude_install_failed")
     Write-Host "[check]     Valid Methods: $($validMethods -join ', ')"
     Write-Host "[check]     Valid Statuses: $($validStatuses -join ', ')"
 
@@ -2563,6 +2566,29 @@ $startHereText = Get-Content -Path (Join-Path $RootDir "Start-Here.ps1") -Raw -E
 # 1. Resolve-NpmCmdPath exists in common.ps1
 if ($commonText -notmatch 'function Resolve-NpmCmdPath') {
     throw "common.ps1 must define Resolve-NpmCmdPath function"
+}
+if ($commonText -notmatch 'function Resolve-NodeExePath') {
+    throw "common.ps1 must define Resolve-NodeExePath function"
+}
+foreach ($nodePathPattern in @(
+    'ProgramFiles.*nodejs\\node\.exe',
+    'ProgramFiles\(x86\).*nodejs\\node\.exe',
+    'Get-Command\s+\$commandName',
+    'PATH'
+)) {
+    if ($commonText -notmatch $nodePathPattern) {
+        throw "Resolve-NodeExePath must cover fixed paths and existing PATH entries: $nodePathPattern"
+    }
+}
+foreach ($npmPathPattern in @(
+    'ProgramFiles.*nodejs\\npm\.cmd',
+    'ProgramFiles\(x86\).*nodejs\\npm\.cmd',
+    'APPDATA.*npm\\npm\.cmd',
+    'Get-Command npm\.cmd'
+)) {
+    if ($commonText -notmatch $npmPathPattern) {
+        throw "Resolve-NpmCmdPath must cover fixed npm.cmd paths and PATH entries: $npmPathPattern"
+    }
 }
 
 # 2. Install-ClaudeCodeNpmMirror must NOT use Get-Command npm directly for Invoke-VisibleInstallCommand
@@ -2733,9 +2759,13 @@ if ($repairPostWinget -notmatch 'Test-NodeJsInstalled') {
 if ($repairPostWinget -notmatch 'Test-NpmInstalled') {
     throw "repair-deps.ps1 winget Node branch must call Test-NpmInstalled for secondary verify"
 }
-# secondary verification must have NEEDS_RESTART fallback
-if ($repairDepsText -notmatch 'NEEDS_RESTART.*winget 已执行') {
-    throw "repair-deps.ps1 must have NEEDS_RESTART fallback when secondary Node verification fails"
+# secondary verification failure must be explicit failure, not a restart continuation
+if ($repairDepsText -match 'NEEDS_RESTART.*winget 已执行') {
+    throw "repair-deps.ps1 must not classify secondary Node verification failure as NEEDS_RESTART"
+}
+if ($repairDepsText -notmatch 'Node repair classification: node_install_failed' -or
+    $repairDepsText -notmatch 'Node\.js 自动安装失败') {
+    throw "repair-deps.ps1 must classify secondary Node verification failure as node_install_failed/ERROR"
 }
 
 # ============================================================
@@ -3432,11 +3462,14 @@ if ($uninstallTextForCheck -match '首次运行时间[\s\S]{0,30}安装完成' -
         }
     }
 
-    # 7. installed_needs_restart (npm_npmmirror) must have claudeInstallCompletedAt
-    $needsRestartBlocks = [regex]::Matches($claudeInstallTextForP5, "(?s)installed_needs_restart.*?npm_npmmirror[\s\S]{0,200}?\| Out-Null")
-    foreach ($block in $needsRestartBlocks) {
+    # 7. installed_postcheck_usable (command anomaly + fixed-path usable) must have claudeInstallCompletedAt
+    $postcheckUsableBlocks = [regex]::Matches($claudeInstallTextForP5, "(?s)installed_postcheck_usable[\s\S]{0,700}claudeInstallCompletedAt[\s\S]{0,150}?\| Out-Null")
+    if ($claudeInstallTextForP5 -match 'installed_postcheck_usable' -and $postcheckUsableBlocks.Count -eq 0) {
+        throw "claude-install.ps1: installed_postcheck_usable must set claudeInstallCompletedAt"
+    }
+    foreach ($block in $postcheckUsableBlocks) {
         if ($block.Value -notmatch 'claudeInstallCompletedAt') {
-            throw "claude-install.ps1: installed_needs_restart must set claudeInstallCompletedAt"
+            throw "claude-install.ps1: installed_postcheck_usable must set claudeInstallCompletedAt"
         }
     }
 
@@ -3712,10 +3745,14 @@ if ($startHereText -match 'Show-CompletionMenu[\s\S]{0,2000}Test-ClaudeCommandIn
 
 # 3. Test-ClaudeCommandInFreshShell must NOT use Invoke-CommandSafe
 # Extract function body first, then check
-$tcefFuncText = if ($commonText -match '(?s)function Test-ClaudeCommandInFreshShell\s*\{.*?\n(?=\nfunction \w|\n# =+$)') {
+$tcefFuncText = if ($commonText -match '(?s)function Test-ClaudeCommandInFreshShell\s*\{.*?\n(?=\nfunction [A-Za-z0-9_-]+|\n#\s*=+$)') {
     $matches[0]
 } else { "" }
-if ($tcefFuncText -and $tcefFuncText -match '\bInvoke-CommandSafe\b') {
+$tcefExecutableText = if ($tcefFuncText) {
+    $withoutBlockComments = [regex]::Replace($tcefFuncText, '(?s)<#.*?#>', '')
+    (@($withoutBlockComments -split "`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n")
+} else { "" }
+if ($tcefExecutableText -match '\bInvoke-CommandSafe\b') {
     throw "Test-ClaudeCommandInFreshShell still uses Invoke-CommandSafe"
 }
 
@@ -3724,7 +3761,7 @@ if ($commonText -notmatch 'ConvertTo-CommandLineArgument[\s\S]{0,200}\$tempScrip
     throw "Test-ClaudeCommandInFreshShell must use ConvertTo-CommandLineArgument for $tempScript"
 }
 # Must NOT use array-style -ArgumentList @(...) with bare $tempScript
-$tcefFuncTextForR1 = if ($commonText -match '(?s)function Test-ClaudeCommandInFreshShell\s*\{.*?\n(?=function Refresh-CurrentProcessPath)') {
+$tcefFuncTextForR1 = if ($commonText -match '(?s)function Test-ClaudeCommandInFreshShell\s*\{.*?\n(?=function [A-Za-z0-9_-]+)') {
     $matches[0]
 } else { "" }
 if ($tcefFuncTextForR1 -and $tcefFuncTextForR1 -match '-ArgumentList\s+@\(') {
@@ -3749,6 +3786,15 @@ if ($doctorText -notmatch '当前为 Native Install，已不影响 Claude Code �
 # 8. Start-Here.ps1 must NOT use -match "needs_restart" (too broad, catches installed_needs_restart_or_path_fix)
 if ($startHereText -match '-match\s+"needs_restart"') {
     throw "Start-Here.ps1 must not use -match `"needs_restart`" (too broad for installed_needs_restart_or_path_fix)"
+}
+if ($startHereText -match '当前需要重开终端后继续，已跳过后续配置步骤') {
+    throw "Start-Here.ps1 must not skip DeepSeek configuration solely because of a restart status"
+}
+if ($startHereText -match 'node_installed_needs_restart[\s\S]{0,300}Show-CompletionPage[\s\S]{0,80}return') {
+    throw "Start-Here.ps1 must not directly return on node_installed_needs_restart without fixed-path postcheck"
+}
+if ($startHereText -notmatch 'Legacy restart status overridden by fixed-path postcheck') {
+    throw "Start-Here.ps1 must perform fixed-path postcheck before treating legacy restart statuses as blockers"
 }
 
 Write-Host "[check] P0 v1.3.3 fix anti-regression OK"
@@ -4125,27 +4171,31 @@ if ($claudeInstallText -notmatch '工具已等待并重新检测') {
     throw "Post-verify failure paths must include '工具已等待并重新检测' message"
 }
 
-# E. installed_needs_restart must be guarded by mirrorResult.Success
-# When npm install fails AND claude is not found, must return failed_official_and_mirror
-# NOT installed_needs_restart (which falsely suggests "just reopen terminal").
-# E1. The installed_needs_restart branch must check mirrorResult.Success
-if ($claudeInstallText -notmatch 'if\s*\(\s*\$mirrorResult\.Success\s*\)\s*\{') {
-    throw "installed_needs_restart must be guarded by if (`$mirrorResult.Success)"
+# E. npm postcheck unavailable must be a real failure, not a restart-required normal path.
+if ($claudeInstallText -match 'Status\s*=\s*"installed_needs_restart"') {
+    throw "npm postcheck failure must not return installed_needs_restart; use claude_install_failed unless fixed-path postcheck is usable"
 }
-# E2. When mirrorResult.Success is false + claude not found, must return failed_official_and_mirror
-# v1.3.3: 使用 '备用下载方式暂未完成确认' 代替旧文案
-if ($claudeInstallText -notmatch '备用下载方式暂未完成确认') {
-    throw "mirrorResult.Success=false must trigger '备用下载方式暂未完成确认' message"
+if ($claudeInstallText -notmatch 'Status\s*=\s*"claude_install_failed"') {
+    throw "npm postcheck failure must return claude_install_failed"
 }
-# E3. Must NOT unconditionally set installed_needs_restart at end of npm post-verify failure
-# (The installed_needs_restart must appear ONLY inside `if ($mirrorResult.Success)` block)
-if ($claudeInstallText -notmatch 'failed_official_and_mirror') {
-    throw "failed_official_and_mirror status must exist (for mirrorResult.Success=false fallback)"
+if ($claudeInstallText -notmatch 'installed_postcheck_usable') {
+    throw "install command failure plus fixed-path usable postcheck must classify as installed_postcheck_usable"
 }
-# E4. Both npm call sites must have the mirrorResult.Success guard
-$mirrorSuccessGuards = @([regex]::Matches($claudeInstallText, 'if\s*\(\s*\$mirrorResult\.Success\s*\)\s*\{'))
-if ($mirrorSuccessGuards.Count -lt 2) {
-    throw "Both npm mirror call sites must guard installed_needs_restart with if (`$mirrorResult.Success) (found $($mirrorSuccessGuards.Count))"
+if ($claudeInstallText -notmatch 'Wait-ClaudeCommandReady\s+-TotalWaitSec\s+30\s+-IntervalSec\s+2\s+-Context "npm 镜像安装后确认"') {
+    throw "npm postcheck must continue when current-process/fixed-path claude is usable; do not require fresh shell for normal continuation"
+}
+if ($claudeInstallText -match 'Wait-ClaudeCommandReady\s+-TotalWaitSec\s+30\s+-IntervalSec\s+2\s+-RequireFreshShell\s+-Context "npm 镜像安装后确认"') {
+    throw "npm postcheck must not require fresh shell before continuing current install flow"
+}
+if ($claudeInstallText -notmatch 'Node install classification: node_ready_after_install' -or
+    $claudeInstallText -notmatch 'Node install classification: node_install_failed') {
+    throw "winget Node branch must log explicit node_ready_after_install/node_install_failed classifications"
+}
+if ($claudeInstallText -notmatch 'Status\s*=\s*"node_install_failed"') {
+    throw "winget Node fixed-path verification failure must return node_install_failed"
+}
+if ($claudeInstallText -match 'Status\s*=\s*"node_installed_needs_restart"') {
+    throw "winget Node branch must not return node_installed_needs_restart as a normal path"
 }
 
 Write-Host "[check] P0-UX anti-regression OK"
@@ -4818,12 +4868,15 @@ if ($wccrFunc -notmatch 'Get-ClaudeCommandInventory') { throw "Wait-ClaudeComman
 if ($wccrFunc -notmatch 'Test-ClaudeCommandInFreshShell') { throw "Wait-ClaudeCommandReady must call Test-ClaudeCommandInFreshShell" }
 Write-Host "[check]   2. Wait-ClaudeCommandReady contains required functions OK"
 
-# 3. npm 镜像安装后必须调用 Wait-ClaudeCommandReady
+# 3. npm 镜像安装后必须调用 Wait-ClaudeCommandReady，但不得要求 fresh shell
 $npmVerify1 = if ($claudeInstallText2 -match '(?s)(备用下载方式可用，开始安装 Claude Code。.*?)(?=return \$result)') { $matches[0] } else { "" }
-if ($claudeInstallText2 -notmatch 'Wait-ClaudeCommandReady\s+-TotalWaitSec\s+30\s+-IntervalSec\s+2\s+-RequireFreshShell') {
-    throw "npm mirror install must call Wait-ClaudeCommandReady -TotalWaitSec 30 -IntervalSec 2 -RequireFreshShell"
+if ($claudeInstallText2 -notmatch 'Wait-ClaudeCommandReady\s+-TotalWaitSec\s+30\s+-IntervalSec\s+2\s+-Context "npm 镜像安装后确认"') {
+    throw "npm mirror install must call Wait-ClaudeCommandReady -TotalWaitSec 30 -IntervalSec 2 with npm context"
 }
-Write-Host "[check]   3. npm mirror verification calls Wait-ClaudeCommandReady OK"
+if ($claudeInstallText2 -match 'Wait-ClaudeCommandReady\s+-TotalWaitSec\s+30\s+-IntervalSec\s+2\s+-RequireFreshShell\s+-Context "npm 镜像安装后确认"') {
+    throw "npm mirror verification must not require fresh shell before continuing"
+}
+Write-Host "[check]   3. npm mirror verification calls Wait-ClaudeCommandReady without fresh-shell dependency OK"
 
 # 4. npm 安装路径不得在 Wait-ClaudeCommandReady 前输出"请运行一键诊断.cmd"
 # 检查"备用下载方式暂未完成确认"仅在 Wait-ClaudeCommandReady 调用之后出现
@@ -5604,6 +5657,7 @@ if ($acceptanceRunnerText -notmatch 'function Get-ScenarioFailurePatterns' -or
     $acceptanceRunnerText -notmatch 'Failure text detected after final interaction' -or
     $acceptanceRunnerText -notmatch 'driver-step-final-failure-self-test' -or
     $acceptanceRunnerText -notmatch 'driver-scenario-final-failure-self-test' -or
+    $acceptanceRunnerText -notmatch 'driver-restart-failure-self-test' -or
     $acceptanceRunnerText -notmatch 'driver-final-clean-self-test') {
     throw "ConPTY final output scan must include global, scenario, and step failureText with behavior self-tests"
 }
@@ -5860,6 +5914,35 @@ if (@($testSafeScenarioIds).Count -ne 16 -or @($requiredTestSafeIds | Where-Obje
 }
 if (@($liveScenarioIds).Count -ne 8 -or @($requiredLiveIds | Where-Object { $_ -notin $liveScenarioIds }).Count -gt 0) {
     throw "Live interactive scenario set is incomplete or no longer exactly 8 scenarios"
+}
+$liveRestartFailureTexts = @(
+    '当前需要重开终端后继续',
+    '已跳过后续配置步骤',
+    '必要运行环境已安装，但当前窗口还没有识别到最新命令',
+    '请关闭此窗口后重新双击',
+    'Node.js 安装失败',
+    'npm 不可用',
+    '安装未完成'
+)
+$liveSuccessScenarioIds = @(
+    'live-official-success',
+    'live-official-fallback-success',
+    'live-install-command-anomaly-postcheck-usable',
+    'live-real-api-and-diagnostic'
+)
+foreach ($scenarioId in $liveSuccessScenarioIds) {
+    $scenario = @($acceptanceScenarioDocument.scenarioSets.Live | Where-Object { $_.id -eq $scenarioId } | Select-Object -First 1)
+    if ($scenario.Count -eq 0) { throw "Live scenario not found for restart failureText gate: $scenarioId" }
+    $failureText = if ($scenario[0].PSObject.Properties.Name -contains 'failureText') { @($scenario[0].failureText) } else { @() }
+    foreach ($requiredFailureText in $liveRestartFailureTexts) {
+        if ($failureText -notcontains $requiredFailureText) {
+            throw "$scenarioId must fail fast on restart/install-incomplete text: $requiredFailureText"
+        }
+    }
+}
+$fallbackScenario = @($acceptanceScenarioDocument.scenarioSets.Live | Where-Object { $_.id -eq 'live-official-fallback-success' } | Select-Object -First 1)[0]
+if (@($fallbackScenario.forbidden) -contains '重开终端') {
+    throw "live-official-fallback-success must use failureText for restart text, not treat it as an acceptable forbidden-only late check"
 }
 $allowedSendSecretPromptRegexes = @(
     '(?m)^API Key\s*[:：]',

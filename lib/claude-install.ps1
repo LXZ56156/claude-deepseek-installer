@@ -55,6 +55,18 @@ function Test-ClaudeCommandExisting {
             $cmdSource = if ($cmd.CommandType) { $cmd.CommandType.ToString() } else { "path" }
             return @{ Exists = $true; Usable = $true; Version = "test-safe"; Error = ""; Path = $cmdPath; Source = $cmdSource }
         }
+
+        $testSafeCandidates = New-Object System.Collections.ArrayList
+        [void]$testSafeCandidates.Add([PSCustomObject]@{ Path = (Get-NativeClaudeExePath); Source = "native_local_bin" })
+        if ($env:APPDATA) {
+            [void]$testSafeCandidates.Add([PSCustomObject]@{ Path = (Join-Path $env:APPDATA "npm\claude.cmd"); Source = "npm_global" })
+        }
+        foreach ($candidate in $testSafeCandidates) {
+            if ($candidate.Path -and (Test-Path -LiteralPath $candidate.Path -PathType Leaf)) {
+                [void](Add-CurrentProcessPathEntry -PathToAdd (Split-Path -Parent $candidate.Path))
+                return @{ Exists = $true; Usable = $true; Version = "test-safe"; Error = ""; Path = $candidate.Path; Source = $candidate.Source }
+            }
+        }
         return @{ Exists = $false; Usable = $false; Version = $null; Error = "test-safe: claude not found"; Path = $null; Source = "" }
     }
 
@@ -75,6 +87,9 @@ function Test-ClaudeCommandExisting {
         if ($verResult.Success -and -not [string]::IsNullOrWhiteSpace($verResult.Output)) {
             $result.Usable = $true
             $result.Version = $verResult.Output.Trim()
+            if ($result.Path) {
+                [void](Add-CurrentProcessPathEntry -PathToAdd (Split-Path -Parent $result.Path))
+            }
             # PATH 中 claude 可用，直接返回
             return $result
         }
@@ -107,6 +122,7 @@ function Test-ClaudeCommandExisting {
             $result.Version = $nativeVer.Output.Trim()
             $result.Path = $nativeClaudeExe
             $result.Source = "native_local_bin"
+            [void](Add-CurrentProcessPathEntry -PathToAdd (Split-Path -Parent $nativeClaudeExe))
             return $result
         }
         else {
@@ -124,6 +140,50 @@ function Test-ClaudeCommandExisting {
             }
             Write-Log "WARN" $result.Error
         }
+    }
+
+    # ============================================================
+    # 阶段 3: npm/winget 等固定路径清单兜底
+    # 覆盖场景: Get-Command claude 暂未刷新，但 %APPDATA%\npm\claude.cmd
+    # 或 npm prefix -g 目录下的 claude.cmd 已经可用。
+    # ============================================================
+    try {
+        $inventory = Get-ClaudeCommandInventory
+        $usable = $null
+        if ($inventory.Active -and $inventory.Active.Usable) {
+            $usable = $inventory.Active
+        }
+        if (-not $usable) {
+            $usableCandidates = @($inventory.Candidates | Where-Object {
+                $_.Usable -and $_.Source -in @("native_local_bin", "npm_global", "winget", "path", "unknown")
+            })
+            if ($usableCandidates.Count -gt 0) {
+                $usable = $usableCandidates[0]
+            }
+        }
+
+        if ($usable) {
+            $result.Exists = $true
+            $result.Usable = $true
+            $result.Version = $usable.Version
+            $result.Path = $usable.Path
+            $result.Source = $usable.Source
+            [void](Add-CurrentProcessPathEntry -PathToAdd (Split-Path -Parent $usable.Path))
+            Write-Log "INFO" "Test-ClaudeCommandExisting: 固定路径清单确认 claude 可用: Path=$($usable.Path), Source=$($usable.Source), Version=$($usable.Version)"
+            return $result
+        }
+
+        $existingCandidates = @($inventory.Candidates | Where-Object { $_.Exists })
+        $existingFromInventory = if ($existingCandidates.Count -gt 0) { $existingCandidates[0] } else { $null }
+        if ($existingFromInventory -and -not $result.Exists) {
+            $result.Exists = $true
+            $result.Path = $existingFromInventory.Path
+            $result.Source = $existingFromInventory.Source
+            $result.Error = "检测到 claude 文件但 --version 未通过: $($existingFromInventory.Error)"
+        }
+    }
+    catch {
+        Write-Log "DEBUG" "Test-ClaudeCommandExisting: Get-ClaudeCommandInventory fallback failed: $_"
     }
 
     return $result
@@ -375,6 +435,32 @@ function Get-ClaudeCommandInventory {
         $npmClaudeCmd = Join-Path $env:APPDATA "npm\claude.cmd"
         _add -CandidatePath $npmClaudeCmd -SourceHint "npm_global" -RiskHint "INFO" `
             -NoteHint "npm 全局安装 shim" -KnownPath
+        $npmClaudePs1 = Join-Path $env:APPDATA "npm\claude.ps1"
+        _add -CandidatePath $npmClaudePs1 -SourceHint "npm_global" -RiskHint "INFO" `
+            -NoteHint "npm PowerShell shim，仅作为存在性参考，不直接执行" -KnownPath
+    }
+
+    # npm prefix -g 返回的目录也可能不是 %APPDATA%\npm，安装后必须检查。
+    try {
+        $npmResolved = Resolve-NpmCmdPath
+        if ($npmResolved.Found) {
+            $prefixResult = Invoke-CommandSafe -Command $npmResolved.Path -Arguments @("prefix", "-g") -TimeoutSec 8 -LogTimeoutAsWarn
+            if ($prefixResult.Success -and -not [string]::IsNullOrWhiteSpace($prefixResult.Output)) {
+                $npmPrefix = ($prefixResult.Output -split "`r?`n" | Select-Object -First 1).Trim()
+                if (-not [string]::IsNullOrWhiteSpace($npmPrefix)) {
+                    _add -CandidatePath (Join-Path $npmPrefix "claude.cmd") -SourceHint "npm_global" -RiskHint "INFO" `
+                        -NoteHint "npm prefix -g 全局安装 shim" -KnownPath
+                    _add -CandidatePath (Join-Path $npmPrefix "claude.ps1") -SourceHint "npm_global" -RiskHint "INFO" `
+                        -NoteHint "npm prefix -g PowerShell shim，仅作为存在性参考，不直接执行" -KnownPath
+                }
+            }
+            else {
+                Write-Log "DEBUG" "Get-ClaudeCommandInventory: npm prefix -g 未返回可用目录: $($prefixResult.Error)"
+            }
+        }
+    }
+    catch {
+        Write-Log "DEBUG" "Get-ClaudeCommandInventory: npm prefix -g 探测失败: $_"
     }
 
     # ============================================================
@@ -3034,6 +3120,60 @@ function Install-NodeJsViaWinget {
         -StartMessage ""
 }
 
+function Get-InstallResultField {
+    param(
+        [AllowNull()][object]$InstallResult,
+        [string]$Name
+    )
+
+    if ($null -eq $InstallResult) { return $null }
+    if ($InstallResult -is [System.Collections.IDictionary]) {
+        if ($InstallResult.Contains($Name)) { return $InstallResult[$Name] }
+        if ($InstallResult.ContainsKey($Name)) { return $InstallResult[$Name] }
+        return $null
+    }
+
+    $prop = $InstallResult.PSObject.Properties[$Name]
+    if ($prop) { return $prop.Value }
+    return $null
+}
+
+function Test-WingetNodeInstallAccepted {
+    <#
+    .SYNOPSIS
+        判断 winget Node.js 安装命令本身是否可被接受。
+        最终是否可继续仍以固定路径 node.exe/npm.cmd 后验验证为准。
+    #>
+    param(
+        [AllowNull()][object]$InstallResult
+    )
+
+    $success = Get-InstallResultField -InstallResult $InstallResult -Name "Success"
+    if ($success -eq $true) { return $true }
+
+    $exitCode = Get-InstallResultField -InstallResult $InstallResult -Name "ExitCode"
+    if ($null -ne $exitCode) {
+        try {
+            if ([int]$exitCode -eq 0) { return $true }
+        }
+        catch { }
+    }
+
+    $textParts = @()
+    foreach ($field in @("Output", "Error", "RawError", "Status")) {
+        $value = Get-InstallResultField -InstallResult $InstallResult -Name $field
+        if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+            $textParts += [string]$value
+        }
+    }
+    $text = $textParts -join "`n"
+    if ($text -match '(?i)already\s+installed|no\s+applicable\s+update|no\s+available\s+upgrade|package\s+is\s+already\s+installed|已安装|无需更新|没有可用升级') {
+        return $true
+    }
+
+    return $false
+}
+
 function Install-ClaudeCodeViaWinget {
     <#
     .SYNOPSIS
@@ -3106,6 +3246,7 @@ function Install-ClaudeCodeAuto {
         Status              = ""
         Version             = $null
         WasAlreadyInstalled = $false
+        UserMessage         = ""
     }
 
     # ============================================================
@@ -3419,13 +3560,13 @@ function Install-ClaudeCodeAuto {
 
                 $result.Success = $true
                 $result.Method = "official_native"
-                $result.Status = "installed"
+                $result.Status = if ($nativeResult.Success) { "installed" } else { "installed_postcheck_usable" }
                 $result.Version = $verifyResult.Version
 
                 Update-CcdiState -Updates @{
                     claudeWasAlreadyInstalled = $false
                     claudeInstallMethod       = "official_native"
-                    claudeInstallStatus       = "installed"
+                    claudeInstallStatus       = $result.Status
                     claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
                 } | Out-Null
                 return $result
@@ -3632,7 +3773,16 @@ function Install-ClaudeCodeAuto {
                 $installResult = if ($isMockDecision) {
                     $mockNodeInstall = if ($env:CCDI_MOCK_NODE_INSTALL) { $env:CCDI_MOCK_NODE_INSTALL } else { "fail" }
                     Write-Log "DEBUG" "MOCK: winget install Node.js -> CCDI_MOCK_NODE_INSTALL=$mockNodeInstall"
-                    @{ Success = ($mockNodeInstall -eq "success"); Error = if ($mockNodeInstall -eq "success") { "" } else { "mock: winget install failed" } }
+                    if ($mockNodeInstall -eq "success") {
+                        $env:CCDI_MOCK_NODE = "ok"
+                        $env:CCDI_MOCK_NPM = "ok"
+                        $env:CCDI_MOCK_NODE_VERSION = "v20.11.1"
+                        $env:CCDI_MOCK_NPM_VERSION = "10.2.4"
+                        @{ Success = $true; ExitCode = 0; Output = "mock: OpenJS.NodeJS.LTS installed"; Error = ""; Status = "installed_mock" }
+                    }
+                    else {
+                        @{ Success = $false; ExitCode = -2147012744; Output = ""; Error = "mock: winget install failed"; Status = "failed_mock" }
+                    }
                 }
                 else {
                     Install-NodeJsViaWinget -TimeoutSec 900
@@ -3642,10 +3792,12 @@ function Install-ClaudeCodeAuto {
                 Write-Info "正在二次验证 Node.js/npm 是否已经可用..."
                 Refresh-CurrentProcessPath
 
+                $nodeInstallCommandAccepted = Test-WingetNodeInstallAccepted -InstallResult $installResult
                 $nodeRecheck = Test-NodeJsInstalled
                 $npmRecheck = Test-NpmInstalled
                 if ($nodeRecheck.Installed -and $nodeRecheck.IsSupported -and $npmRecheck.Installed) {
-                    Write-Success "Node.js/npm 已验证可用 (Node $($nodeRecheck.Version), npm $($npmRecheck.Version))。"
+                    Write-Success "Node.js 已安装并确认可用，继续安装 Claude Code。"
+                    Write-Log "INFO" "Node install classification: node_ready_after_install; CommandAccepted=$nodeInstallCommandAccepted; Node=$($nodeRecheck.Version); NodePath=$($nodeRecheck.Path); npm=$($npmRecheck.Version); NpmPath=$($npmRecheck.Path)"
 
                     # Node 安装后先检测 Claude 是否已由 winget 装好。
                     # 如果 Claude 已可用，直接返回成功，不必继续 npm。
@@ -3724,22 +3876,22 @@ function Install-ClaudeCodeAuto {
                     }
                     Refresh-CurrentProcessPath
                     Write-Info "正在确认 Claude Code 是否已经可用..."
-                    $ready = Wait-ClaudeCommandReady -TotalWaitSec 30 -IntervalSec 2 -RequireFreshShell -Context "npm 镜像安装后确认"
+                    $ready = Wait-ClaudeCommandReady -TotalWaitSec 30 -IntervalSec 2 -Context "npm 镜像安装后确认"
 
                     if ($ready.Ready) {
                         if (-not $mirrorResult.Success) {
-                            Write-Log "INFO" "npm 镜像安装命令返回异常但等待确认通过，以 claude --version / Fresh PowerShell 为准。"
+                            Write-Log "INFO" "npm 镜像安装命令返回异常但固定路径后验验证通过，以 claude --version 为准。"
                         }
                         Write-Success "Claude Code 已安装并确认可用。"
                         Write-Log "INFO" "npm mirror verification ready: Status=$($ready.Status), Version=$($ready.Version), Path=$($ready.Path), Source=$($ready.Source)"
                         $result.Success = $true
                         $result.Method = "npm_npmmirror"
-                        $result.Status = "installed"
+                        $result.Status = if ($mirrorResult.Success) { "installed" } else { "installed_postcheck_usable" }
                         $result.Version = if ($ready.Version) { $ready.Version } else { "2.1.179 (Claude Code)" }
                         Update-CcdiState -Updates @{
                             claudeWasAlreadyInstalled = $false
                             claudeInstallMethod       = "npm_npmmirror"
-                            claudeInstallStatus       = "installed"
+                            claudeInstallStatus       = $result.Status
                             claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
                         } | Out-Null
                         return $result
@@ -3747,31 +3899,22 @@ function Install-ClaudeCodeAuto {
 
                     Write-Warning "备用下载方式暂未完成确认。"
                     Write-Info "工具已等待并重新检测，但仍未确认 Claude Code 可用。"
-                    Write-Info "请先关闭本窗口，重新双击「00-点我开始安装.cmd」继续。"
-                    Write-Info "如果仍失败，再运行「一键诊断.cmd」获取详细诊断报告。"
+                    Write-Info "安装未完成，请稍后重试；如果仍失败，再运行「一键诊断.cmd」获取详细诊断报告。"
                     Write-Log "WARN" "npm mirror Wait-ClaudeCommandReady not ready: Status=$($ready.Status), Attempts=$($ready.Attempts), LastError=$($ready.LastError)"
 
-                    if ($mirrorResult.Success) {
-                        $result.Method = "npm_npmmirror"
-                        $result.Status = "installed_needs_restart"
-                    }
-                    else {
-                        $result.Method = "npm_npmmirror"
-                        $result.Status = "failed_official_and_mirror"
-                        $result.Success = $false
-                    }
+                    $result.Method = "npm_npmmirror"
+                    $result.Status = "claude_install_failed"
+                    $result.Success = $false
+                    $result.UserMessage = "Claude Code 安装未完成，请稍后重试或运行一键诊断。"
                     $stateUpdate = @{
                         claudeInstallMethod = "npm_npmmirror"
                         claudeInstallStatus = $result.Status
-                    }
-                    if ($result.Status -eq "installed_needs_restart") {
-                        $stateUpdate.claudeInstallCompletedAt = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
                     }
                     Update-CcdiState -Updates $stateUpdate | Out-Null
                     return $result
                 }
                 else {
-                    # Node 安装后二次验证未完全通过，给出具体诊断
+                    # Node 安装后二次验证未通过，明确按安装失败处理，不再要求用户重开终端继续。
                     $diagLines = @()
                     if ($nodeRecheck.Installed -and $nodeRecheck.IsSupported) {
                         $diagLines += "Node.js: $($nodeRecheck.Version) (可用)"
@@ -3789,14 +3932,16 @@ function Install-ClaudeCodeAuto {
                         $diagLines += "npm: 未检测到"
                     }
 
-                    Write-Warning "必要运行环境已安装，但当前窗口还没有识别到最新命令。"
-                    Write-Log "WARN" "Node/npm installed but verification incomplete"
-                    Write-Info "请关闭此窗口后重新双击「00-点我开始安装.cmd」继续。"
+                    Write-Error-Msg "Node.js 自动安装失败，通常是网络或系统安装源暂时不可用。"
+                    Write-Info "请稍后重试，或手动安装 Node.js LTS 后再运行本工具。"
+                    Write-Log "ERROR" "Node install classification: node_install_failed; CommandAccepted=$nodeInstallCommandAccepted; ExitCode=$($installResult.ExitCode); Error=$($installResult.Error); Diagnostics=$($diagLines -join '; ')"
                     $result.Method = "node-via-winget"
-                    $result.Status = "node_installed_needs_restart"
+                    $result.Status = "node_install_failed"
+                    $result.Success = $false
+                    $result.UserMessage = "Node.js 安装失败，请检查网络或稍后重试/手动安装 Node.js LTS。"
                     Update-CcdiState -Updates @{
                         claudeInstallMethod = "node-via-winget"
-                        claudeInstallStatus = "node_installed_needs_restart"
+                        claudeInstallStatus = "node_install_failed"
                     } | Out-Null
                     return $result
                 }
@@ -3908,22 +4053,22 @@ function Install-ClaudeCodeAuto {
     }
     Refresh-CurrentProcessPath
     Write-Info "正在确认 Claude Code 是否已经可用..."
-    $ready = Wait-ClaudeCommandReady -TotalWaitSec 30 -IntervalSec 2 -RequireFreshShell -Context "npm 镜像安装后确认"
+    $ready = Wait-ClaudeCommandReady -TotalWaitSec 30 -IntervalSec 2 -Context "npm 镜像安装后确认"
 
     if ($ready.Ready) {
         if (-not $mirrorResult.Success) {
-            Write-Log "INFO" "npm 镜像安装命令返回异常但等待确认通过，以 claude --version / Fresh PowerShell 为准。"
+            Write-Log "INFO" "npm 镜像安装命令返回异常但固定路径后验验证通过，以 claude --version 为准。"
         }
         Write-Success "Claude Code 已安装并确认可用。"
         Write-Log "INFO" "npm mirror verification ready: Status=$($ready.Status), Version=$($ready.Version), Path=$($ready.Path), Source=$($ready.Source)"
         $result.Success = $true
         $result.Method = "npm_npmmirror"
-        $result.Status = "installed"
+        $result.Status = if ($mirrorResult.Success) { "installed" } else { "installed_postcheck_usable" }
         $result.Version = if ($ready.Version) { $ready.Version } else { "2.1.179 (Claude Code)" }
         Update-CcdiState -Updates @{
             claudeWasAlreadyInstalled = $false
             claudeInstallMethod       = "npm_npmmirror"
-            claudeInstallStatus       = "installed"
+            claudeInstallStatus       = $result.Status
             claudeInstallCompletedAt  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
         } | Out-Null
         return $result
@@ -3932,25 +4077,16 @@ function Install-ClaudeCodeAuto {
     # 只有这里才输出"未完成确认"
     Write-Warning "备用下载方式暂未完成确认。"
     Write-Info "工具已等待并重新检测，但仍未确认 Claude Code 可用。"
-    Write-Info "请先关闭本窗口，重新双击「00-点我开始安装.cmd」继续。"
-    Write-Info "如果仍失败，再运行「一键诊断.cmd」获取详细诊断报告。"
+    Write-Info "安装未完成，请稍后重试；如果仍失败，再运行「一键诊断.cmd」获取详细诊断报告。"
     Write-Log "WARN" "npm mirror Wait-ClaudeCommandReady not ready: Status=$($ready.Status), Attempts=$($ready.Attempts), LastError=$($ready.LastError)"
 
-    if ($mirrorResult.Success) {
-        $result.Method = "npm_npmmirror"
-        $result.Status = "installed_needs_restart"
-    }
-    else {
-        $result.Method = "npm_npmmirror"
-        $result.Status = "failed_official_and_mirror"
-        $result.Success = $false
-    }
+    $result.Method = "npm_npmmirror"
+    $result.Status = "claude_install_failed"
+    $result.Success = $false
+    $result.UserMessage = "Claude Code 安装未完成，请稍后重试或运行一键诊断。"
     $stateUpdate = @{
         claudeInstallMethod = "npm_npmmirror"
         claudeInstallStatus = $result.Status
-    }
-    if ($result.Status -eq "installed_needs_restart") {
-        $stateUpdate.claudeInstallCompletedAt = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
     }
     Update-CcdiState -Updates $stateUpdate | Out-Null
     return $result

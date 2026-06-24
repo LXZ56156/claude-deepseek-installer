@@ -1266,8 +1266,11 @@ Write-Output "TestError=$($result.Error)"
     if ($ciContent2 -notmatch 'function Wait-ClaudeCommandReady') {
         throw "Wait-ClaudeCommandReady function not found in claude-install.ps1"
     }
-    if ($ciContent2 -notmatch 'Wait-ClaudeCommandReady\s+-TotalWaitSec\s+30\s+-IntervalSec\s+2\s+-RequireFreshShell') {
-        throw "npm mirror install must call Wait-ClaudeCommandReady -TotalWaitSec 30 -IntervalSec 2 -RequireFreshShell"
+    if ($ciContent2 -notmatch 'Wait-ClaudeCommandReady\s+-TotalWaitSec\s+30\s+-IntervalSec\s+2\s+-Context "npm 镜像安装后确认"') {
+        throw "npm mirror install must call Wait-ClaudeCommandReady -TotalWaitSec 30 -IntervalSec 2 with npm context"
+    }
+    if ($ciContent2 -match 'Wait-ClaudeCommandReady\s+-TotalWaitSec\s+30\s+-IntervalSec\s+2\s+-RequireFreshShell\s+-Context "npm 镜像安装后确认"') {
+        throw "npm mirror verification must not require fresh shell before continuing"
     }
     if ($ciContent2 -notmatch '正在确认 Claude Code 是否已经可用') {
         throw "npm mirror install must show '正在确认 Claude Code 是否已经可用'"

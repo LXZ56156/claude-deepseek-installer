@@ -87,7 +87,7 @@ function Invoke-ClaudeRepair {
 
     # Node/npm 不满足时，不尝试安装 Claude
     if (-not $NodeReady -or -not $NpmReady) {
-        Add-CR "Claude Code 修复" "SKIP" "请先修复 Node.js/npm，重开终端后再运行"
+        Add-CR "Claude Code 修复" "SKIP" "请先修复 Node.js/npm 后再运行"
         return
     }
 
@@ -136,17 +136,25 @@ function Invoke-ClaudeRepair {
         "installed" {
             Add-CR "Claude Code 修复" "OK" "安装完成: $($installResult.Version)"
         }
+        "installed_postcheck_usable" {
+            Add-CR "Claude Code 修复" "OK" "安装命令返回异常，但固定路径验证可用: $($installResult.Version)"
+        }
         "skipped_existing" {
             Add-CR "Claude Code 修复" "OK" "已安装: $($installResult.Version)"
         }
+        "node_install_failed" {
+            $message = if ($installResult.UserMessage) { $installResult.UserMessage } else { "Node.js 自动安装失败，请检查网络或稍后重试" }
+            Add-CR "Claude Code 修复" "ERROR" $message
+        }
+        "claude_install_failed" {
+            Add-CR "Claude Code 修复" "ERROR" "Claude Code 安装未完成，请运行一键诊断.cmd"
+        }
         "node_installed_needs_restart" {
-            Add-CR "Claude Code 修复" "NEEDS_RESTART" "已完成第一阶段 Node.js 安装，需要关闭窗口后重新运行"
-            Set-Variable -Scope 1 -Name needsRestart -Value $true
+            Add-CR "Claude Code 修复" "WARN" "安装结果未确认，将重新检测固定路径"
             return
         }
         "installed_needs_restart" {
-            Add-CR "Claude Code 修复" "NEEDS_RESTART" "Claude Code 已安装但 PATH 未刷新，需要关闭窗口后重新运行"
-            Set-Variable -Scope 1 -Name needsRestart -Value $true
+            Add-CR "Claude Code 修复" "WARN" "Claude Code 安装结果未确认，将重新检测固定路径"
             return
         }
         "failed_missing_node_or_npm" {
@@ -409,25 +417,27 @@ function Start-RepairDeps {
                 $nodeRecheck = Test-NodeJsInstalled
                 $npmRecheck = Test-NpmInstalled
 
+                $nodeInstallCommandAccepted = Test-WingetNodeInstallAccepted -InstallResult $installResult
                 if ($nodeRecheck.Installed -and $nodeRecheck.IsSupported -and $npmRecheck.Installed) {
                     Add-CR "Node.js 安装验证" "OK" "Node $($nodeRecheck.Version), npm $($npmRecheck.Version)"
-                    Write-Success "Node.js/npm 已验证可用，继续修复 Claude Code。"
+                    Write-Success "Node.js 已安装并确认可用，继续修复 Claude Code。"
+                    Write-Log "INFO" "Node repair classification: node_ready_after_install; CommandAccepted=$nodeInstallCommandAccepted; NodePath=$($nodeRecheck.Path); NpmPath=$($npmRecheck.Path)"
                     # 更新当前变量，继续后续 Claude Code 修复
                     $nodeInfo = $nodeRecheck
                     $npmInfo = $npmRecheck
                 }
                 else {
-                    Add-CR "Node.js 安装验证" "NEEDS_RESTART" "winget 已执行，但当前终端暂未识别 Node/npm"
-                    Write-Warning "Node.js 可能已安装，但当前终端 PATH 尚未刷新。"
-                    Write-Info "请关闭此窗口后重新双击 [00-点我开始安装.cmd]。"
-                    $needsRestart = $true
+                    Add-CR "Node.js 安装验证" "ERROR" "Node.js 自动安装失败，请检查网络或稍后重试"
+                    Write-Error-Msg "Node.js 自动安装失败，通常是网络或系统安装源暂时不可用。"
+                    Write-Info "请稍后重试，或手动安装 Node.js LTS 后再运行本工具。"
+                    Write-Log "ERROR" "Node repair classification: node_install_failed; CommandAccepted=$nodeInstallCommandAccepted; ExitCode=$($installResult.ExitCode); Error=$($installResult.Error); Node=$($nodeRecheck.ErrorMessage); npm=$($npmRecheck.ErrorMessage)"
                 }
             }
         }
         else {
             Write-Info "未检测到 winget。请手动安装 Node.js："
             Write-Info "下载地址: https://nodejs.org (选择 LTS 版本)"
-            Write-Info "安装完成后关闭此窗口，重新双击 [00-点我开始安装.cmd]。"
+            Write-Info "安装完成后重新运行 [00-点我开始安装.cmd]。"
         }
     }
 
@@ -533,9 +543,9 @@ function Generate-Report {
     Add-RL ""
 
     if ($needsRestart) {
-        Add-RL "  1. 关闭当前窗口"
-        Add-RL "  2. 重新双击 [00-点我开始安装.cmd]"
-        Add-RL "  3. 脚本会继续安装 Claude Code 并配置 DeepSeek"
+        Add-RL "  1. 重新打开 PowerShell"
+        Add-RL "  2. 运行 [一键修复依赖.cmd]"
+        Add-RL "  3. 如果仍失败，请运行 [一键诊断.cmd]"
     }
     elseif (-not $nodeInfo.IsSupported) {
         Add-RL "  1. 安装 Node.js LTS: https://nodejs.org"

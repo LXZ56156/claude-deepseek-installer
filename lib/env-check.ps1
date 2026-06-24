@@ -859,37 +859,58 @@ function Test-NodeJsInstalled {
         MajorVersion  = 0
         IsSupported   = $false
         ErrorMessage  = ""
+        Path          = $null
+        Source        = ""
     }
 
-    # TestSafe mode: skip real node --version to avoid process hang
-    if ($env:CCDI_TEST_MODE -eq "1") {
-        $cmd = Get-Command node -ErrorAction SilentlyContinue
-        if ($cmd) {
+    if ($env:CCDI_TEST_MODE -eq "1" -and $env:CCDI_MOCK_INSTALL_DECISION -eq "1") {
+        $mockNode = if ($env:CCDI_MOCK_NODE) { $env:CCDI_MOCK_NODE } else { "missing" }
+        if ($mockNode -eq "ok") {
             $result.Installed = $true
-            $result.Version = "v20.0.0 (test-safe)"
+            $result.Version = "v20.0.0 (mock)"
             $result.MajorVersion = 20
             $result.IsSupported = $true
             return $result
         }
-        $result.ErrorMessage = "TestSafe: node not found"
+        if ($mockNode -eq "old") {
+            $result.Installed = $true
+            $result.Version = "v16.0.0 (mock)"
+            $result.MajorVersion = 16
+            $result.ErrorMessage = "mock: Node.js version too old"
+            return $result
+        }
+        $result.ErrorMessage = "mock: Node.js not installed"
         return $result
     }
 
-    # 检测 node 命令
-    $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
-    if (-not $nodeCmd) {
+    Refresh-CurrentProcessPath
+    $nodeResolved = Resolve-NodeExePath
+    if (-not $nodeResolved.Found) {
         $result.ErrorMessage = "未检测到 Node.js。Claude Code 需要 Node.js 18 或更高版本，请先安装 Node.js LTS 后重新运行。"
         return $result
     }
+    $result.Path = $nodeResolved.Path
+    $result.Source = $nodeResolved.Source
 
     # 获取版本
-    $nodeResult = Invoke-CommandSafe -Command "node" -Arguments @("--version") -TimeoutSec 5
-    if (-not $nodeResult.Success) {
-        $result.ErrorMessage = "无法获取 Node.js 版本信息。"
-        return $result
+    $rawVersion = $null
+    if ($env:CCDI_TEST_MODE -eq "1") {
+        if (-not [string]::IsNullOrWhiteSpace($env:CCDI_MOCK_NODE_VERSION)) {
+            $rawVersion = $env:CCDI_MOCK_NODE_VERSION
+        }
+        else {
+            $rawVersion = "v20.0.0 (test-safe)"
+        }
+    }
+    else {
+        $nodeResult = Invoke-CommandSafe -Command $nodeResolved.Path -Arguments @("--version") -TimeoutSec 5
+        if (-not $nodeResult.Success) {
+            $result.ErrorMessage = "无法获取 Node.js 版本信息。"
+            return $result
+        }
+        $rawVersion = $nodeResult.Output.Trim()
     }
 
-    $rawVersion = $nodeResult.Output.Trim()
     $result.Version = $rawVersion
     $result.Installed = $true
 
@@ -929,59 +950,61 @@ function Test-NpmInstalled {
         Version      = $null
         Status       = ""
         ErrorMessage = ""
+        Path         = $null
+        Source       = ""
     }
 
-    # TestSafe mode: skip real node/npm version checks to avoid process hang
-    if ($env:CCDI_TEST_MODE -eq "1") {
-        $npmResolved = Resolve-NpmCmdPath
-        if ($npmResolved.Found) {
+    if ($env:CCDI_TEST_MODE -eq "1" -and $env:CCDI_MOCK_INSTALL_DECISION -eq "1") {
+        $mockNode = if ($env:CCDI_MOCK_NODE) { $env:CCDI_MOCK_NODE } else { "missing" }
+        $mockNpm = if ($env:CCDI_MOCK_NPM) { $env:CCDI_MOCK_NPM } else { "missing" }
+        if ($mockNode -ne "ok") {
+            $result.Status = "failed_missing_node"
+            $result.ErrorMessage = "mock: node not found"
+            return $result
+        }
+        if ($mockNpm -eq "ok") {
             $result.Installed = $true
-            $result.Version = "10.0.0 (test-safe)"
+            $result.Version = "10.0.0 (mock)"
             $result.Status = "ok"
             return $result
         }
-        $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
-        if ($nodeCmd) {
-            $result.Status = "failed_missing_npm"
-            $result.ErrorMessage = "TestSafe: npm not found (node exists)"
+        if ($mockNpm -eq "broken") {
+            $result.Status = "failed_npm_broken"
+            $result.ErrorMessage = "mock: npm command exists but fails"
             return $result
         }
-        $result.Status = "failed_missing_node"
-        $result.ErrorMessage = "TestSafe: node not found"
+        $result.Status = "failed_missing_npm"
+        $result.ErrorMessage = "mock: npm not found"
         return $result
     }
 
-    # 先检测 Node.js 是否存在
-    $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
-    if (-not $nodeCmd) {
+    Refresh-CurrentProcessPath
+    $nodeInfo = Test-NodeJsInstalled
+    if (-not $nodeInfo.Installed) {
         $result.Status = "failed_missing_node"
         $result.ErrorMessage = "Node.js 未安装，npm 是 Node.js 的一部分，需要先安装 Node.js。"
         return $result
     }
-
-    # 检测 Node.js 版本
-    $nodeResult = Invoke-CommandSafe -Command "node" -Arguments @("--version") -TimeoutSec 5
-    if ($nodeResult.Success) {
-        $rawVersion = $nodeResult.Output.Trim()
-        try {
-            $clean = $rawVersion -replace '^v', ''
-            $major = [int]($clean.Split('.')[0])
-            if ($major -lt 18) {
-                $result.Status = "failed_node_too_old"
-                $result.ErrorMessage = "Node.js 版本 $rawVersion 低于 v18，npm 可能也不可用。请升级 Node.js LTS。"
-                return $result
-            }
-        }
-        catch {
-            # 无法解析版本，继续检测 npm
-        }
+    if (-not $nodeInfo.IsSupported) {
+        $result.Status = "failed_node_too_old"
+        $result.ErrorMessage = "Node.js 版本 $($nodeInfo.Version) 低于 v18，npm 可能也不可用。请升级 Node.js LTS。"
+        return $result
     }
 
     # 检测 npm 命令（优先 npm.cmd，避免 npm.ps1）
     $npmResolved = Resolve-NpmCmdPath
     if (-not $npmResolved.Found) {
         $result.Status = "failed_missing_npm"
-        $result.ErrorMessage = "检测到 Node.js 存在，但 npm.cmd 不可用。这通常表示 Node.js 安装不完整，或当前终端 PATH 未刷新。请先关闭此窗口重新打开后再试。如果仍失败，请重新安装 Node.js LTS。"
+        $result.ErrorMessage = "检测到 Node.js 存在，但 npm.cmd 不可用。这通常表示 Node.js 安装不完整。请稍后重试，或手动安装 Node.js LTS 后再运行本工具。"
+        return $result
+    }
+    $result.Path = $npmResolved.Path
+    $result.Source = $npmResolved.Source
+
+    if ($env:CCDI_TEST_MODE -eq "1") {
+        $result.Version = if (-not [string]::IsNullOrWhiteSpace($env:CCDI_MOCK_NPM_VERSION)) { $env:CCDI_MOCK_NPM_VERSION } else { "10.0.0 (test-safe)" }
+        $result.Installed = $true
+        $result.Status = "ok"
         return $result
     }
 

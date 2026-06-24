@@ -2014,33 +2014,29 @@ x-api-key: $TestApiKey
     } "后验验证失败时必须输出 '工具已等待并重新检测'"
 
     Assert "29d: 后验验证通过时必须记录安装命令异常（Write-Log）" {
-        $claudeInstallText -match '安装命令返回异常但等待确认通过'
+        $claudeInstallText -match '安装命令返回异常但固定路径后验验证通过'
     } "后验验证通过时必须写入日志说明命令返回异常"
 
-    # --- 29e: installed_needs_restart 必须受 mirrorResult.Success 控制 ---
-    # v1.3.3: 简化后的 installed_needs_restart 赋值，使用 if/else 对
-    Assert "29e: installed_needs_restart 必须受 if (`$mirrorResult.Success) 守卫" {
-        # 确保 installed_needs_restart 出现在 mirrorResult.Success 的条件分支附近
-        ($claudeInstallText -match 'installed_needs_restart') -and
-        ($claudeInstallText -match '\$mirrorResult\.Success')
-    } "installed_needs_restart 必须仅在 mirrorResult.Success=true 时使用"
+    # --- 29e: npm postcheck 不再依赖重开终端 ---
+    Assert "29e: 命令异常但后验验证可用必须返回 installed_postcheck_usable" {
+        $claudeInstallText -match 'installed_postcheck_usable'
+    } "命令异常但固定路径后验验证可用时必须返回 installed_postcheck_usable"
 
-    Assert "29e: mirrorResult.Success=false 必须返回真实失败文案" {
+    Assert "29e: 后验验证失败必须返回真实失败文案" {
         $claudeInstallText -match '备用下载方式暂未完成确认'
-    } "mirrorResult.Success=false 时必须输出真实失败原因"
+    } "后验验证失败时必须输出真实失败原因"
 
-    Assert "29e: 两个 npm 调用点都受 mirrorResult.Success 控制" {
-        ([regex]::Matches($claudeInstallText, 'if\s*\(\s*\$mirrorResult\.Success\s*\)\s*\{')).Count -ge 2
-    } "两个 npm 调用点都必须有 mirrorResult.Success 守卫"
+    Assert "29e: 后验验证失败必须返回 claude_install_failed" {
+        $claudeInstallText -match 'Status\s*=\s*"claude_install_failed"'
+    } "后验验证失败时必须返回 claude_install_failed"
 
     Assert "29e: failed_official_and_mirror 状态仍存在（用于 mirrorResult.Success=false）" {
         $claudeInstallText -match 'failed_official_and_mirror'
     } "failed_official_and_mirror 必须保留用于真实失败场景"
 
-    Assert "29e: 不得在 else 分支中无条件设置 installed_needs_restart" {
-        $claudeInstallText -notmatch 'else\s*\{[\s\S]{0,50}Write-Warning\s+"Claude Code 可能已安装' `
-            -or $claudeInstallText -match 'if\s*\(\s*\$mirrorResult\.Success\s*\)\s*\{[\s\S]{0,300}installed_needs_restart'
-    } "installed_needs_restart 不得在无条件 else 分支中出现"
+    Assert "29e: npm postcheck 不得返回 installed_needs_restart" {
+        $claudeInstallText -notmatch 'Status\s*=\s*"installed_needs_restart"'
+    } "npm postcheck 不得再通过 installed_needs_restart 提示重开终端"
 
     Write-Host ""
 
