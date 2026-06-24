@@ -164,3 +164,15 @@
 | ID | 修复函数/脚本 | test-vm-acceptance.ps1 断言 | check.ps1 防回归 | 需专用 VM Live |
 |---|---|---|---|---|
 | ACC-051 | `Invoke-AcceptanceCapturedCommand` / `Start-LiveScenarioSetup` | safe `powershell.exe -Command exit 0` accepts `-TimeoutSec 900`; fake `winget.cmd` setup path covers `live-npm-missing` and `live-install-command-anomaly-postcheck-usable` without real install | extracts `ValidateRange` upper bound from `AcceptanceEnvironment.ps1`, AST-scans vm-final explicit captured-command `-TimeoutSec` values, requires the 900s Live setup call to be within range, and gates the mocked functional coverage | 是；上一次 Live 已进入 Scenario 20 前，专用 VM 必须清理后重跑 Live 8 与真实重启续跑 |
+
+## 2026-06-25 VM Live npm-missing required text closure fixes
+
+| ID | Problem | Root cause | Fix | Regression |
+|---|---|---|---|---|
+| ACC-052 | VM Live `live-npm-missing` failed after scenario execution with `Required output missing: 必要运行环境不可用`, even though the script correctly reported the current npm fallback failure | `scripts/data/interactive-acceptance-scenarios.json` still required old output strings (`必要运行环境不可用`, `备用方式需要 npm`) after the install/repair wording changed to `npm fallback 需要 npm。` and the current install-blocked guidance | Updated `live-npm-missing.required` to exactly the current emitted two-line text and removed the stale required strings | `check.ps1` compares the Live scenario required text with `lib/claude-install.ps1` output strings; `test-vm-acceptance.ps1` asserts the same scenario required contract |
+
+## 2026-06-25 VM Live npm-missing required text coverage index
+
+| ID | 修复函数/脚本 | test-vm-acceptance.ps1 断言 | check.ps1 防回归 | 需专用 VM Live |
+|---|---|---|---|---|
+| ACC-052 | `scripts/data/interactive-acceptance-scenarios.json` / `lib/claude-install.ps1` Live npm fallback output | `live-npm-missing` required list must equal the current two emitted npm fallback messages extracted from `claude-install.ps1` | source gate extracts the emitted strings from `claude-install.ps1` and requires the scenario required list to match exactly | 是；修复后需在清理后的专用 VM 重新跑 Live 8 |

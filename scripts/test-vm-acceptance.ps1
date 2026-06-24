@@ -380,6 +380,21 @@ try {
     "@echo off`r`necho MOCK-WINGET %*`r`nexit /b 0" | Set-Content -LiteralPath $fakeWinget -Encoding ASCII
     $fakeWingetResolver = { [PSCustomObject]@{ Source = $fakeWinget } }.GetNewClosure()
     $scenarioDocument = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'data\interactive-acceptance-scenarios.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $liveNpmMissingScenario = @($scenarioDocument.scenarioSets.Live | Where-Object { [string]$_.id -eq 'live-npm-missing' } | Select-Object -First 1)
+    $liveNpmMissingRequired = @($liveNpmMissingScenario[0].required | ForEach-Object { [string]$_ })
+    $claudeInstallSource = Get-Content -LiteralPath (Join-Path $ProjectRoot 'lib\claude-install.ps1') -Raw -Encoding UTF8
+    $liveNpmMissingFallbackMatch = [regex]::Match($claudeInstallSource, 'Write-Error-Msg\s+"([^"]*npm fallback[^"]*)"')
+    $liveNpmMissingGuidanceMatch = [regex]::Match($claudeInstallSource, 'Write-Info\s+"([^"]*Claude Code[^"]*Node\.js/npm[^"]*)"')
+    $liveNpmMissingExpectedRequired = @(
+        [string]$liveNpmMissingFallbackMatch.Groups[1].Value,
+        [string]$liveNpmMissingGuidanceMatch.Groups[1].Value
+    )
+    $liveNpmMissingHasFallbackText = $liveNpmMissingFallbackMatch.Success -and ($liveNpmMissingRequired -contains $liveNpmMissingExpectedRequired[0])
+    $liveNpmMissingHasGuidanceText = $liveNpmMissingGuidanceMatch.Success -and ($liveNpmMissingRequired -contains $liveNpmMissingExpectedRequired[1])
+    $liveNpmMissingRequiredExact = $liveNpmMissingRequired.Count -eq $liveNpmMissingExpectedRequired.Count
+    Assert-Test $liveNpmMissingHasFallbackText 'live-npm-missing requires current npm fallback error text'
+    Assert-Test $liveNpmMissingHasGuidanceText 'live-npm-missing requires current install-blocked guidance text'
+    Assert-Test $liveNpmMissingRequiredExact 'live-npm-missing requires exactly the current emitted npm fallback messages'
     foreach ($requiredInstallNodeScenarioId in @('live-npm-missing', 'live-install-command-anomaly-postcheck-usable')) {
         $sourceScenario = @($scenarioDocument.scenarioSets.Live | Where-Object { [string]$_.id -eq $requiredInstallNodeScenarioId } | Select-Object -First 1)
         Assert-Test (($sourceScenario.Count -eq 1) -and ($sourceScenario[0].PSObject.Properties.Name -contains 'setup') -and ($sourceScenario[0].setup.PSObject.Properties.Name -contains 'installNodeForFault') -and [bool]$sourceScenario[0].setup.installNodeForFault) "$requiredInstallNodeScenarioId declares installNodeForFault setup"

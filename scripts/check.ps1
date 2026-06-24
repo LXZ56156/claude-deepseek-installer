@@ -6206,6 +6206,28 @@ if (@($testSafeScenarioIds).Count -ne 16 -or @($requiredTestSafeIds | Where-Obje
 if (@($liveScenarioIds).Count -ne 8 -or @($requiredLiveIds | Where-Object { $_ -notin $liveScenarioIds }).Count -gt 0) {
     throw "Live interactive scenario set is incomplete or no longer exactly 8 scenarios"
 }
+$liveNpmMissingScenario = @($acceptanceScenarioDocument.scenarioSets.Live | Where-Object { [string]$_.id -eq 'live-npm-missing' } | Select-Object -First 1)
+if ($liveNpmMissingScenario.Count -ne 1) {
+    throw "Live scenario live-npm-missing must exist exactly once"
+}
+$liveNpmMissingRequired = @($liveNpmMissingScenario[0].required | ForEach-Object { [string]$_ })
+$liveNpmMissingFallbackMatch = [regex]::Match($claudeInstallText, 'Write-Error-Msg\s+"([^"]*npm fallback[^"]*)"')
+$liveNpmMissingGuidanceMatch = [regex]::Match($claudeInstallText, 'Write-Info\s+"([^"]*Claude Code[^"]*Node\.js/npm[^"]*)"')
+if (-not $liveNpmMissingFallbackMatch.Success -or -not $liveNpmMissingGuidanceMatch.Success) {
+    throw "claude-install.ps1 must emit the live-npm-missing npm fallback error and guidance messages"
+}
+$liveNpmMissingExpectedRequired = @(
+    [string]$liveNpmMissingFallbackMatch.Groups[1].Value,
+    [string]$liveNpmMissingGuidanceMatch.Groups[1].Value
+)
+if ($liveNpmMissingRequired.Count -ne $liveNpmMissingExpectedRequired.Count) {
+    throw "live-npm-missing required text must contain exactly the current emitted npm fallback messages"
+}
+foreach ($liveNpmMissingText in $liveNpmMissingExpectedRequired) {
+    if ($liveNpmMissingRequired -notcontains $liveNpmMissingText) {
+        throw "live-npm-missing required text drifted from claude-install.ps1 output: $liveNpmMissingText"
+    }
+}
 $requiredCmdPauseEntries = @(
     '00-点我开始安装.cmd',
     '一键诊断.cmd',

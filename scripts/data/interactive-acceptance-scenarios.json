@@ -300,7 +300,7 @@
           { "expect": "请输入选项编号 \\(1-5\\)", "send": "5\r", "timeoutSec": 900 },
           { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 60 }
         ],
-        "required": ["必要运行环境不可用", "备用方式需要 npm"],
+        "required": ["npm fallback 需要 npm。", "当前 Claude Code 不可用，且官方安装方式不可用；请修复 Node.js/npm 后重新运行本工具。"],
         "expectedExitCodes": [0]
       },
       {
