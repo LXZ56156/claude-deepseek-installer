@@ -399,6 +399,13 @@ function Invoke-ConPtyScenario {
     $maxScanBuffer = 65536
     $responderCounts = @{}
     $failurePatterns = Get-ScenarioFailurePatterns -Scenario $Scenario -GlobalFailurePatterns @('脚本执行过程中发生未预期的错误', 'TIMEOUT:')
+    $evidenceFiles = [ordered]@{
+        Transcript = Join-Path $ScenarioEvidenceDir "transcript.txt"
+        Stdout = Join-Path $ScenarioEvidenceDir "stdout.txt"
+        Stderr = Join-Path $ScenarioEvidenceDir "stderr.txt"
+        Events = Join-Path $ScenarioEvidenceDir "events.json"
+        Result = Join-Path $ScenarioEvidenceDir "result.json"
+    }
 
     try {
         # The process working directory is already the package root. Keep entries
@@ -516,37 +523,64 @@ function Invoke-ConPtyScenario {
         if ($process.OutputError) { throw "ConPTY output reader failed: $($process.OutputError)" }
 
         $safeOutput = if ($Secret) { $visibleOutput.Replace($Secret, "[REDACTED]") } else { $visibleOutput }
-        [System.IO.File]::WriteAllText((Join-Path $ScenarioEvidenceDir "transcript.txt"), $safeOutput, (New-Object Text.UTF8Encoding($false)))
-        $events | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $ScenarioEvidenceDir "events.json") -Encoding UTF8
+        $stderrText = if ($process.OutputError) { [string]$process.OutputError } else { "" }
+        [System.IO.File]::WriteAllText($evidenceFiles.Transcript, $safeOutput, (New-Object Text.UTF8Encoding($false)))
+        [System.IO.File]::WriteAllText($evidenceFiles.Stdout, $safeOutput, (New-Object Text.UTF8Encoding($false)))
+        [System.IO.File]::WriteAllText($evidenceFiles.Stderr, $stderrText, (New-Object Text.UTF8Encoding($false)))
+        $events | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $evidenceFiles.Events -Encoding UTF8
 
-        return [PSCustomObject]@{
+        $scenarioResult = [PSCustomObject]@{
             Id = [string]$Scenario.id
+            Stage = [string]$Scenario.id
             Status = "PASS"
             ExitCode = $exitCode
             DurationSec = [Math]::Round(((Get-Date) - $startedAt).TotalSeconds, 2)
             Evidence = $ScenarioEvidenceDir
+            EvidenceFiles = $evidenceFiles
             Error = $null
         }
+        $scenarioResult | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $evidenceFiles.Result -Encoding UTF8
+        return $scenarioResult
     }
     catch {
         Stop-ConPtyTree -Process $process
         $raw = if ($process) { ConvertTo-VisibleTerminalText -Text $process.GetOutput() } else { "" }
         $safe = if ($Secret) { $raw.Replace($Secret, "[REDACTED]") } else { $raw }
-        [System.IO.File]::WriteAllText((Join-Path $ScenarioEvidenceDir "transcript.txt"), $safe, (New-Object Text.UTF8Encoding($false)))
-        $events | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $ScenarioEvidenceDir "events.json") -Encoding UTF8
-        return [PSCustomObject]@{
+        $stderrText = if ($process -and $process.OutputError) { [string]$process.OutputError } else { "" }
+        [System.IO.File]::WriteAllText($evidenceFiles.Transcript, $safe, (New-Object Text.UTF8Encoding($false)))
+        [System.IO.File]::WriteAllText($evidenceFiles.Stdout, $safe, (New-Object Text.UTF8Encoding($false)))
+        [System.IO.File]::WriteAllText($evidenceFiles.Stderr, $stderrText, (New-Object Text.UTF8Encoding($false)))
+        $events | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $evidenceFiles.Events -Encoding UTF8
+        $scenarioResult = [PSCustomObject]@{
             Id = [string]$Scenario.id
+            Stage = [string]$Scenario.id
             Status = "FAIL"
             ExitCode = if ($process -and $process.HasExited) { $process.ExitCode } else { $null }
             DurationSec = [Math]::Round(((Get-Date) - $startedAt).TotalSeconds, 2)
             Evidence = $ScenarioEvidenceDir
+            EvidenceFiles = $evidenceFiles
             Error = $_.Exception.Message
         }
+        $scenarioResult | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $evidenceFiles.Result -Encoding UTF8
+        return $scenarioResult
     }
     finally {
         if ($process) { $process.Dispose() }
         Restore-TemporaryEnvironment -Saved $savedEnv
     }
+}
+
+function Format-ScenarioEvidencePaths {
+    param($Result)
+
+    if ($Result -and $Result.PSObject.Properties.Name -contains "EvidenceFiles" -and $Result.EvidenceFiles) {
+        $files = $Result.EvidenceFiles
+        return "transcript=$($files.Transcript); stdout=$($files.Stdout); stderr=$($files.Stderr); result=$($files.Result)"
+    }
+    if ($Result -and $Result.PSObject.Properties.Name -contains "Evidence" -and $Result.Evidence) {
+        return "transcript=$(Join-Path $Result.Evidence 'transcript.txt'); stdout=$(Join-Path $Result.Evidence 'stdout.txt'); stderr=$(Join-Path $Result.Evidence 'stderr.txt'); result=$(Join-Path $Result.Evidence 'result.json')"
+    }
+    return "transcript=<unavailable>; stdout=<unavailable>; stderr=<unavailable>; result=<unavailable>"
 }
 
 function Invoke-DriverSelfTest {
@@ -570,8 +604,7 @@ Write-Host "SECRET_LENGTH=$length"
 Write-Host "`e[32mANSI_OK`e[0m"
 Write-Host -NoNewline "CR_OLD`rCR_NEW"
 Write-Host ""
-Write-Host "Press any key to close this window..."
-cmd.exe /d /c pause `>nul
+[void](Read-Host 'Press any key to close this window')
 '@
     Set-Content -LiteralPath $helper -Value $helperText -Encoding UTF8
     "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0self-test.ps1`"`r`n" | Set-Content -LiteralPath $launcher -Encoding ASCII
@@ -590,7 +623,7 @@ cmd.exe /d /c pause `>nul
         expectedExitCodes = @(0)
     }
     $result = Invoke-ConPtyScenario -Scenario $scenario -ReleaseRoot $selfTestDir -Secret $DummyApiKey -Environment @{} -ScenarioEvidenceDir (Join-Path $EvidenceDir "driver-self-test")
-    if ($result.Status -ne "PASS") { throw "ConPTY driver self-test failed: $($result.Error)" }
+    if ($result.Status -ne "PASS") { throw "ConPTY driver self-test failed: $($result.Error); $(Format-ScenarioEvidencePaths -Result $result)" }
 
     $driverEvents = Get-Content -LiteralPath (Join-Path $EvidenceDir "driver-self-test\events.json") -Raw -Encoding UTF8 | ConvertFrom-Json
     $startEvent = @($driverEvents | Where-Object type -eq "start" | Select-Object -First 1)
@@ -641,10 +674,9 @@ Write-Host -NoNewline '重复提示>'
 
     $finalFailureDir = Join-Path $selfTestDir "final-failure"
     New-Item -ItemType Directory -Path $finalFailureDir -Force | Out-Null
-    @'
+@'
 Write-Host 'BEFORE_FINAL_FAILURE'
-Write-Host 'Press any key to close this window...'
-cmd.exe /d /c pause `>nul
+[void](Read-Host 'Press any key to close this window')
 Write-Host '脚本执行过程中发生未预期的错误'
 '@ | Set-Content -LiteralPath (Join-Path $finalFailureDir "final-failure.ps1") -Encoding UTF8
     "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0final-failure.ps1`"`r`n" | Set-Content -LiteralPath (Join-Path $finalFailureDir "final-failure.cmd") -Encoding ASCII
@@ -655,15 +687,14 @@ Write-Host '脚本执行过程中发生未预期的错误'
     }
     $finalFailureResult = Invoke-ConPtyScenario -Scenario $finalFailureScenario -ReleaseRoot $finalFailureDir -Secret $DummyApiKey -Environment @{} -ScenarioEvidenceDir (Join-Path $EvidenceDir "driver-final-failure-self-test")
     if ($finalFailureResult.Status -ne "FAIL" -or $finalFailureResult.Error -notmatch 'Failure text detected after final interaction') {
-        throw "Fatal output emitted after the final prompt must fail the scenario"
+        throw "Fatal output emitted after the final prompt must fail the scenario: $($finalFailureResult.Error); $(Format-ScenarioEvidencePaths -Result $finalFailureResult)"
     }
 
     $stepFinalFailureDir = Join-Path $selfTestDir "step-final-failure"
     New-Item -ItemType Directory -Path $stepFinalFailureDir -Force | Out-Null
-    @'
+@'
 Write-Host 'BEFORE_STEP_FINAL_FAILURE'
-Write-Host 'Press any key to close this window...'
-cmd.exe /d /c pause `>nul
+[void](Read-Host 'Press any key to close this window')
 Write-Host 'STEP_FINAL_FAILURE_UNIQUE'
 '@ | Set-Content -LiteralPath (Join-Path $stepFinalFailureDir "step-final-failure.ps1") -Encoding UTF8
     "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0step-final-failure.ps1`"`r`n" | Set-Content -LiteralPath (Join-Path $stepFinalFailureDir "step-final-failure.cmd") -Encoding ASCII
@@ -674,15 +705,14 @@ Write-Host 'STEP_FINAL_FAILURE_UNIQUE'
     }
     $stepFinalFailureResult = Invoke-ConPtyScenario -Scenario $stepFinalFailureScenario -ReleaseRoot $stepFinalFailureDir -Secret $DummyApiKey -Environment @{} -ScenarioEvidenceDir (Join-Path $EvidenceDir "driver-step-final-failure-self-test")
     if ($stepFinalFailureResult.Status -ne "FAIL" -or $stepFinalFailureResult.Error -notmatch 'STEP_FINAL_FAILURE_UNIQUE') {
-        throw "Step failureText emitted after the final prompt must fail the scenario"
+        throw "Step failureText emitted after the final prompt must fail the scenario: $($stepFinalFailureResult.Error); $(Format-ScenarioEvidencePaths -Result $stepFinalFailureResult)"
     }
 
     $scenarioFinalFailureDir = Join-Path $selfTestDir "scenario-final-failure"
     New-Item -ItemType Directory -Path $scenarioFinalFailureDir -Force | Out-Null
-    @'
+@'
 Write-Host 'BEFORE_SCENARIO_FINAL_FAILURE'
-Write-Host 'Press any key to close this window...'
-cmd.exe /d /c pause `>nul
+[void](Read-Host 'Press any key to close this window')
 Write-Host 'SCENARIO_FINAL_FAILURE_UNIQUE'
 '@ | Set-Content -LiteralPath (Join-Path $scenarioFinalFailureDir "scenario-final-failure.ps1") -Encoding UTF8
     "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0scenario-final-failure.ps1`"`r`n" | Set-Content -LiteralPath (Join-Path $scenarioFinalFailureDir "scenario-final-failure.cmd") -Encoding ASCII
@@ -694,7 +724,7 @@ Write-Host 'SCENARIO_FINAL_FAILURE_UNIQUE'
     }
     $scenarioFinalFailureResult = Invoke-ConPtyScenario -Scenario $scenarioFinalFailureScenario -ReleaseRoot $scenarioFinalFailureDir -Secret $DummyApiKey -Environment @{} -ScenarioEvidenceDir (Join-Path $EvidenceDir "driver-scenario-final-failure-self-test")
     if ($scenarioFinalFailureResult.Status -ne "FAIL" -or $scenarioFinalFailureResult.Error -notmatch 'SCENARIO_FINAL_FAILURE_UNIQUE') {
-        throw "Scenario failureText emitted after the final prompt must fail the scenario"
+        throw "Scenario failureText emitted after the final prompt must fail the scenario: $($scenarioFinalFailureResult.Error); $(Format-ScenarioEvidencePaths -Result $scenarioFinalFailureResult)"
     }
 
     $restartFailureDir = Join-Path $selfTestDir "restart-failure"
@@ -720,22 +750,21 @@ Start-Sleep -Seconds 10
 
     $finalCleanDir = Join-Path $selfTestDir "final-clean"
     New-Item -ItemType Directory -Path $finalCleanDir -Force | Out-Null
-    @'
+@'
 Write-Host 'BEFORE_FINAL_CLEAN'
-Write-Host 'Press any key to close this window...'
-cmd.exe /d /c pause `>nul
+[void](Read-Host 'Press any key to close this window')
 Write-Host 'AFTER_FINAL_CLEAN'
 '@ | Set-Content -LiteralPath (Join-Path $finalCleanDir "final-clean.ps1") -Encoding UTF8
     "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0final-clean.ps1`"`r`n" | Set-Content -LiteralPath (Join-Path $finalCleanDir "final-clean.cmd") -Encoding ASCII
     $finalCleanScenario = [PSCustomObject]@{
         id = "driver-final-clean-self-test"; entry = "final-clean.cmd"; timeoutSec = 15; responders = @()
         failureText = @("SCENARIO_FINAL_FAILURE_UNIQUE")
-        steps = @([PSCustomObject]@{ expect = "Press any key to close this window"; send = " `r"; delayMs = 100; timeoutSec = 5; failureText = @("STEP_FINAL_FAILURE_UNIQUE") })
+        steps = @([PSCustomObject]@{ expect = "Press any key to close this window"; send = " `r"; delayMs = 300; timeoutSec = 5; failureText = @("STEP_FINAL_FAILURE_UNIQUE") })
         required = @("BEFORE_FINAL_CLEAN", "AFTER_FINAL_CLEAN"); forbidden = @($DummyApiKey); expectedExitCodes = @(0)
     }
     $finalCleanResult = Invoke-ConPtyScenario -Scenario $finalCleanScenario -ReleaseRoot $finalCleanDir -Secret $DummyApiKey -Environment @{} -ScenarioEvidenceDir (Join-Path $EvidenceDir "driver-final-clean-self-test")
     if ($finalCleanResult.Status -ne "PASS") {
-        throw "Clean final output without failureText must pass: $($finalCleanResult.Error)"
+        throw "Clean final output without failureText must pass: $($finalCleanResult.Error); $(Format-ScenarioEvidencePaths -Result $finalCleanResult)"
     }
 
     $largeOutputDir = Join-Path $selfTestDir "large-output"
@@ -761,7 +790,7 @@ Write-Host "LARGE_OUTPUT_VALUE=$value"
         required = @("LARGE_OUTPUT_VALUE=Y"); forbidden = @($DummyApiKey); expectedExitCodes = @(0)
     }
     $largeOutputResult = Invoke-ConPtyScenario -Scenario $largeOutputScenario -ReleaseRoot $largeOutputDir -Secret $DummyApiKey -Environment @{} -ScenarioEvidenceDir (Join-Path $EvidenceDir "driver-large-output-self-test")
-    if ($largeOutputResult.Status -ne "PASS") { throw "Multi-megabyte incremental output self-test failed: $($largeOutputResult.Error)" }
+    if ($largeOutputResult.Status -ne "PASS") { throw "Multi-megabyte incremental output self-test failed: $($largeOutputResult.Error); $(Format-ScenarioEvidencePaths -Result $largeOutputResult)" }
 }
 
 function Assert-NoSecretInEvidence {

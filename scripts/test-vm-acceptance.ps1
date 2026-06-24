@@ -590,8 +590,10 @@ try {
         $repairDepsSource = Get-Content -LiteralPath (Join-Path $ProjectRoot 'repair-deps.ps1') -Raw -Encoding UTF8
         $repairCmdName = [string]::Concat([char]0x4E00, [char]0x952E, [char]0x4FEE, [char]0x590D, [char]0x4F9D, [char]0x8D56, '.cmd')
         $repairCmdSource = Get-Content -LiteralPath (Join-Path $ProjectRoot $repairCmdName) -Raw -Encoding UTF8
+        $repairFinishPromptCount = @([regex]::Matches($repairCmdSource, 'Press any key to finish')).Count
+        $repairHiddenFinalPauseCount = @([regex]::Matches($repairCmdSource, '(?m)^\s*pause\s*>nul\s*$')).Count
         Assert-Test ($repairDepsSource -match '\[switch\]\$NoFinalPause' -and $repairDepsSource -match 'NoFinalPause[\s\S]{0,120}Read-Host') 'repair-deps supports NoFinalPause and gates final Read-Host'
-        Assert-Test ($repairCmdSource -match 'repair-deps\.ps1"\s+-NoFinalPause' -and $repairCmdSource -notmatch 'Press any key to close this window' -and $repairCmdSource -match 'Press any key to finish') 'repair-deps cmd wrapper uses NoFinalPause and one final finish pause'
+        Assert-Test ($repairCmdSource -match 'repair-deps\.ps1"\s+-NoFinalPause' -and $repairCmdSource -notmatch 'Press any key to close this window' -and $repairFinishPromptCount -eq 1 -and $repairHiddenFinalPauseCount -eq 1) 'repair-deps cmd wrapper uses NoFinalPause and one final finish pause'
 
         $env:CCDI_MOCK_INSTALL_DECISION = '1'
         $env:CCDI_MOCK_CLAUDE = 'missing'
@@ -660,6 +662,10 @@ try {
         Assert-Test $startHereContinuationOk 'Start-Here restart statuses perform fixed-path postcheck instead of skipping configuration'
 
         $scenarioDoc = Get-Content -LiteralPath (Join-Path $ProjectRoot 'scripts\data\interactive-acceptance-scenarios.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $repairLauncherScenario = @($scenarioDoc.scenarioSets.TestSafe | Where-Object { $_.id -eq 'repair-launcher' })[0]
+        $repairLauncherStepExpects = @($repairLauncherScenario.steps | ForEach-Object { [string]$_.expect })
+        Assert-Test ([string]$repairLauncherScenario.entry -eq $repairCmdName -and $repairLauncherStepExpects -contains 'Press any key to finish') 'repair-launcher scenario waits for the real repair cmd finish prompt'
+
         $doctorMockScenarioIds = @(
             'doctor-mock-200', 'doctor-mock-401', 'doctor-mock-402', 'doctor-mock-429', 'doctor-mock-503',
             'doctor-mock-timeout', 'doctor-mock-dns'
@@ -684,10 +690,13 @@ try {
         $diagnosticRequired = @($diagnosticLauncherScenario.required)
         $diagnosticForbidden = @($diagnosticLauncherScenario.forbidden)
         $diagnosticCmdName = [string]::Concat([char]0x4E00, [char]0x952E, [char]0x8BCA, [char]0x65AD, '.cmd')
+        $diagnosticCmdSource = Get-Content -LiteralPath (Join-Path $ProjectRoot $diagnosticCmdName) -Raw -Encoding ASCII
         $apiSkipText = [string]::Concat([char]0x5DF2, [char]0x6309, [char]0x53C2, [char]0x6570, [char]0x8DF3, [char]0x8FC7)
         Assert-Test ([string]$diagnosticLauncherScenario.entry -eq $diagnosticCmdName -and $diagnosticRequired -contains $apiSkipText -and $diagnosticForbidden -contains '200 OK' -and $diagnosticForbidden -contains 'HTTP 429') 'diagnostic launcher scenario still covers safe API skip behavior'
+        Assert-Test ($diagnosticCmdSource -match 'doctor\.ps1"\s+-ShareSafe\s+-SkipApiTest\s+-NoOpenReport') 'diagnostic launcher keeps buyer-safe SkipApiTest arguments'
 
         $interactiveRunnerPath = Join-Path $ProjectRoot 'scripts\interactive-user-acceptance.ps1'
+        $interactiveRunnerSource = Get-Content -LiteralPath $interactiveRunnerPath -Raw -Encoding UTF8
         $runnerTokens = $null
         $runnerErrors = $null
         $interactiveRunnerAst = [System.Management.Automation.Language.Parser]::ParseFile($interactiveRunnerPath, [ref]$runnerTokens, [ref]$runnerErrors)
@@ -746,6 +755,11 @@ catch { $nonPs1Rejected = $true }
         Assert-Test ($builderProbeResult.PowerShellLine -match '^powershell\.exe -NoProfile -ExecutionPolicy Bypass -File \.\\doctor\.ps1 -ShareSafe "two words" "literal & value"$' -and $builderProbeResult.PowerShellLine -notmatch '/d /s /c call') 'runner powershell entryMode builds a direct quoted command line'
         Assert-Test ($builderProbeResult.NewlineRejected -and $builderProbeResult.CmdArgsRejected -and $builderProbeResult.NonPs1Rejected) 'runner powershell entryMode rejects unsafe args and non-ps1 entries'
         Assert-Test ($builderProbeResult.CmdLine -match '/d /s /c call launcher\.cmd') 'runner cmd entryMode keeps existing launcher command path'
+        $finalCleanBlock = [regex]::Match($interactiveRunnerSource, '(?s)\$finalCleanDir = .*?\$largeOutputDir =')
+        Assert-Test ($finalCleanBlock.Success -and $finalCleanBlock.Value -match "Read-Host 'Press any key to close this window'" -and $finalCleanBlock.Value -notmatch 'cmd\.exe /d /c pause' -and $finalCleanBlock.Value -match 'delayMs = 300') 'driver final-clean self-test uses readiness-coupled Read-Host prompt'
+        Assert-Test ($interactiveRunnerSource -match 'stdout\.txt' -and $interactiveRunnerSource -match 'stderr\.txt' -and $interactiveRunnerSource -match 'result\.json' -and $interactiveRunnerSource -match 'Format-ScenarioEvidencePaths') 'driver self-test writes stdout stderr result evidence paths'
+        $vmFinalSource = Get-Content -LiteralPath (Join-Path $ProjectRoot 'scripts\vm-final-acceptance.ps1') -Raw -Encoding UTF8
+        Assert-Test ($interactiveRunnerSource -match 'if\s*\(\s*-not\s+\$SkipDriverSelfTest\s*\)' -and $vmFinalSource -match 'if\s*\(\s*\$index\s+-gt\s+0\s*\)\s*\{\s*\$arguments\s*\+=\s*"-SkipDriverSelfTest"\s*\}') 'default interactive acceptance path still executes driver self-test'
 
         $fallbackScenario = @($scenarioDoc.scenarioSets.Live | Where-Object { $_.id -eq 'live-official-fallback-success' })[0]
         $fallbackFailureText = @($fallbackScenario.failureText)

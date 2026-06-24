@@ -5879,6 +5879,23 @@ if ($acceptanceRunnerText -notmatch 'function Get-ScenarioFailurePatterns' -or
     $acceptanceRunnerText -notmatch 'driver-final-clean-self-test') {
     throw "ConPTY final output scan must include global, scenario, and step failureText with behavior self-tests"
 }
+$driverFinalCleanBlock = [regex]::Match($acceptanceRunnerText, '(?s)\$finalCleanDir = .*?\$largeOutputDir =')
+if (-not $driverFinalCleanBlock.Success -or
+    $driverFinalCleanBlock.Value -notmatch "Read-Host 'Press any key to close this window'" -or
+    $driverFinalCleanBlock.Value -match 'cmd\.exe /d /c pause' -or
+    $driverFinalCleanBlock.Value -notmatch 'delayMs\s*=\s*300') {
+    throw "driver-final-clean-self-test must use a readiness-coupled Read-Host prompt and a stable send delay"
+}
+if ($acceptanceRunnerText -notmatch 'stdout\.txt' -or
+    $acceptanceRunnerText -notmatch 'stderr\.txt' -or
+    $acceptanceRunnerText -notmatch 'result\.json' -or
+    $acceptanceRunnerText -notmatch 'Format-ScenarioEvidencePaths') {
+    throw "Interactive acceptance self-test failures must report stdout/stderr/transcript/result evidence paths"
+}
+if ($acceptanceRunnerText -notmatch 'if\s*\(\s*-not\s+\$SkipDriverSelfTest\s*\)' -or
+    $acceptanceOrchestratorText -notmatch 'if\s*\(\s*\$index\s+-gt\s+0\s*\)\s*\{\s*\$arguments\s*\+=\s*"-SkipDriverSelfTest"\s*\}') {
+    throw "Default interactive acceptance path must execute driver self-test; vm-final may skip it only after the first scenario"
+}
 if ($acceptanceDriverText -notmatch 'new UTF8Encoding\(false,\s*false\)' -or
     $acceptanceDriverText -notmatch '\.GetDecoder\(\)' -or
     $acceptanceDriverText -notmatch 'GetMaxCharCount' -or
@@ -6134,6 +6151,79 @@ if (@($testSafeScenarioIds).Count -ne 16 -or @($requiredTestSafeIds | Where-Obje
 }
 if (@($liveScenarioIds).Count -ne 8 -or @($requiredLiveIds | Where-Object { $_ -notin $liveScenarioIds }).Count -gt 0) {
     throw "Live interactive scenario set is incomplete or no longer exactly 8 scenarios"
+}
+$requiredCmdPauseEntries = @(
+    '00-点我开始安装.cmd',
+    '一键诊断.cmd',
+    '一键修复依赖.cmd',
+    '恢复或卸载配置.cmd'
+)
+foreach ($cmdPauseEntry in $requiredCmdPauseEntries) {
+    if (-not (Test-Path -LiteralPath (Join-Path $RootDir $cmdPauseEntry) -PathType Leaf)) {
+        throw "Expected launcher for pause drift gate is missing: $cmdPauseEntry"
+    }
+}
+function Get-CmdExplicitPausePrompts {
+    param([string]$Path)
+
+    $prompts = New-Object System.Collections.ArrayList
+    foreach ($line in (Get-Content -LiteralPath $Path -Encoding ASCII)) {
+        if ($line -match '^\s*echo\s+(?<text>.+?)\s*$') {
+            $text = $matches['text'].Trim()
+            if ($text -match '^Press any key to (close this window|finish)') {
+                [void]$prompts.Add(($text -replace '\.+$', ''))
+            }
+        }
+    }
+    return @($prompts)
+}
+function Test-CmdHasVisiblePause {
+    param([string]$Path)
+
+    foreach ($line in (Get-Content -LiteralPath $Path -Encoding ASCII)) {
+        if ($line -match '^\s*pause\s*$') { return $true }
+    }
+    return $false
+}
+$cmdPauseExpectTexts = @(
+    'Press any key to close this window',
+    'Press any key to finish',
+    '请按任意键继续'
+)
+$cmdPauseViolations = New-Object System.Collections.ArrayList
+foreach ($scenarioSetName in @('TestSafe', 'Live')) {
+    foreach ($scenario in @($acceptanceScenarioDocument.scenarioSets.$scenarioSetName)) {
+        $entry = [string]$scenario.entry
+        if ([string]::IsNullOrWhiteSpace($entry) -or [IO.Path]::GetExtension($entry) -ne '.cmd') { continue }
+        $cmdPath = Join-Path $RootDir $entry
+        if (-not (Test-Path -LiteralPath $cmdPath -PathType Leaf)) {
+            [void]$cmdPauseViolations.Add("scenario=$($scenario.id); entry=$entry; missing launcher")
+            continue
+        }
+        $explicitPrompts = @(Get-CmdExplicitPausePrompts -Path $cmdPath)
+        $hasVisiblePause = Test-CmdHasVisiblePause -Path $cmdPath
+        foreach ($step in @($scenario.steps)) {
+            if ($step.PSObject.Properties.Name -notcontains 'expect') { continue }
+            $expect = [string]$step.expect
+            if ($cmdPauseExpectTexts -notcontains $expect) { continue }
+            if ($expect -like 'Press any key*') {
+                $matchedPrompt = @($explicitPrompts | Where-Object { $_ -eq $expect })
+                if ($matchedPrompt.Count -eq 0) {
+                    [void]$cmdPauseViolations.Add(
+                        "scenario=$($scenario.id); entry=$entry; expect=$expect; launcherPrompts=$($explicitPrompts -join '|')"
+                    )
+                }
+            }
+            elseif ($expect -eq '请按任意键继续' -and -not $hasVisiblePause) {
+                [void]$cmdPauseViolations.Add(
+                    "scenario=$($scenario.id); entry=$entry; expect=$expect; launcher has no visible pause"
+                )
+            }
+        }
+    }
+}
+if ($cmdPauseViolations.Count -gt 0) {
+    throw "Interactive .cmd scenario pause expectations drifted from launcher output:`n$($cmdPauseViolations -join "`n")"
 }
 $doctorMockScenarioIds = @(
     'doctor-mock-200', 'doctor-mock-401', 'doctor-mock-402', 'doctor-mock-429', 'doctor-mock-503',

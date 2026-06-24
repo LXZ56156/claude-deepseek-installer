@@ -167,7 +167,7 @@
         "entry": "一键修复依赖.cmd",
         "timeoutSec": 180,
         "steps": [
-          { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 150 }
+          { "expect": "Press any key to finish", "send": " \r", "delayMs": 300, "timeoutSec": 150 }
         ],
         "required": ["测试安全模式"],
         "expectedExitCodes": [0]
