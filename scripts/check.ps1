@@ -5196,6 +5196,44 @@ if ($claudeInstallText -match 'npm fallback 需要 npm[\s\S]{0,200}重新打开�
 }
 Write-Host "[check]   1d. repair-deps Claude-first and single-pause gates OK"
 
+# 1e. repair-deps Claude Native PATH repair before early return (ACC-048)
+$repairClaudePathFnStart = $repairDepsText.IndexOf('function Repair-ClaudePathIfNeeded')
+if ($repairClaudePathFnStart -lt 0) {
+    throw "repair-deps.ps1 must define Repair-ClaudePathIfNeeded to repair Native Install PATH before the Claude-available early return (ACC-048)"
+}
+$repairClaudePathFnEnd = $repairDepsText.IndexOf('function ', $repairClaudePathFnStart + 1)
+if ($repairClaudePathFnEnd -lt 0) { $repairClaudePathFnEnd = $repairDepsText.Length }
+$repairClaudePathFnBody = $repairDepsText.Substring($repairClaudePathFnStart, $repairClaudePathFnEnd - $repairClaudePathFnStart)
+foreach ($requiredPathHelper in @('Get-NativeClaudeBinPath', 'Test-UserPathContains', 'Ensure-UserPathEntry', 'Test-ClaudeCommandInFreshShell')) {
+    if ($repairClaudePathFnBody -notmatch [regex]::Escape($requiredPathHelper)) {
+        throw "Repair-ClaudePathIfNeeded must use $requiredPathHelper for Native PATH repair/fresh-shell verification (ACC-048)"
+    }
+}
+$repairClaudePathCallIndex = $repairDepsText.IndexOf('Repair-ClaudePathIfNeeded', $repairDepsMainIndex)
+$noRepairMsgIndex = $repairDepsText.IndexOf('Claude Code 已可用，无需修复。', $repairDepsMainIndex)
+if ($repairClaudePathCallIndex -lt 0 -or $noRepairMsgIndex -lt 0 -or $repairClaudePathCallIndex -ge $noRepairMsgIndex) {
+    throw "repair-deps.ps1 must call Repair-ClaudePathIfNeeded before the 'Claude Code 已可用，无需修复。' early return (ACC-048)"
+}
+if ($repairDepsText -notmatch 'if\s*\(\s*-not\s+\$pathWriteFailed\s*\)[\s\S]{0,300}Claude Code 已可用，无需修复') {
+    throw "repair-deps.ps1 must gate the 'Claude Code 已可用，无需修复。' message on -not `$pathWriteFailed so PATH write failure is not masked (ACC-048)"
+}
+if ($repairDepsText -notmatch 'PATH 自动修复失败') {
+    throw "repair-deps.ps1 must report 'PATH 自动修复失败' when Native PATH write fails (ACC-048)"
+}
+if ($repairDepsText -notmatch 'Claude Code 当前可用，但 PATH 自动修复失败') {
+    throw "repair-deps.ps1 must state 'Claude Code 当前可用，但 PATH 自动修复失败' when PATH write fails, not 'no repair needed' (ACC-048)"
+}
+if ($repairDepsText -notmatch '手动将' -or $repairDepsText -notmatch '加入用户 PATH') {
+    throw "repair-deps.ps1 PATH write failure must suggest manually adding native bin to User PATH (ACC-048)"
+}
+if ($claudeAvailableArea -notmatch '\breturn\b') {
+    throw "repair-deps.ps1 Claude-available branch must return before Invoke-ClaudeRepair (no install fall-through) (ACC-048)"
+}
+if ($claudeAvailableArea -match 'Install-ClaudeCodeAuto' -or $claudeAvailableArea -match 'Install-NodeJsViaWinget') {
+    throw "repair-deps.ps1 Claude-available area must not call Install-ClaudeCodeAuto or Install-NodeJsViaWinget before the early return (ACC-048)"
+}
+Write-Host "[check]   1e. repair-deps Native PATH repair before early return OK"
+
 # 2. Assert-TextOrder function exists
 if ($simulateText -notmatch 'function Assert-TextOrder') {
     throw "simulate-user-release.ps1 must define Assert-TextOrder"

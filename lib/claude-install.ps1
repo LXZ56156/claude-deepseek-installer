@@ -44,6 +44,12 @@ function Test-ClaudeCommandExisting {
             Write-Log "DEBUG" "MOCK: Test-ClaudeCommandExisting -> CCDI_MOCK_CLAUDE=$mockClaude"
             switch ($mockClaude) {
                 "ok" { return @{ Exists = $true; Usable = $true; Version = "1.0.0-mock"; Error = ""; Path = $null; Source = "" } }
+                "native" {
+                    # 测试用：返回 Native Install 固定路径可用，用于 repair-deps PATH 修复功能测试。
+                    # 仅在 TestSafe + mock-decision 模式生效，不影响真实检测行为。
+                    $nativeMockExe = Get-NativeClaudeExePath
+                    return @{ Exists = $true; Usable = $true; Version = "1.0.0-mock"; Error = ""; Path = $nativeMockExe; Source = "native_local_bin" }
+                }
                 "broken" { return @{ Exists = $true; Usable = $false; Version = $null; Error = "mock: claude command exists but --version fails (corrupt or residual)"; Path = $null; Source = "" } }
                 default { return @{ Exists = $false; Usable = $false; Version = $null; Error = "mock: claude not found"; Path = $null; Source = "" } }
             }

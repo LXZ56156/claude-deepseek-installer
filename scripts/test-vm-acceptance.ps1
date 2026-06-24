@@ -483,7 +483,8 @@ try {
                 'CCDI_MOCK_NATIVE_INSTALL', 'CCDI_MOCK_WINGET', 'CCDI_MOCK_NODE',
                 'CCDI_MOCK_NPM', 'CCDI_MOCK_NPMMIRROR', 'CCDI_MOCK_NODE_INSTALL',
                 'CCDI_MOCK_NODE_VERSION', 'CCDI_MOCK_NPM_VERSION', 'CCDI_MOCK_NPM_INSTALL',
-                'CCDI_MOCK_NODE_EXE', 'CCDI_MOCK_NPM_CMD'
+                'CCDI_MOCK_NODE_EXE', 'CCDI_MOCK_NPM_CMD',
+                'CCDI_MOCK_USER_PATH_NATIVE', 'CCDI_MOCK_PATH_WRITE'
             )
             $savedCaseEnv = @{}
             foreach ($caseEnvName in $caseEnvNames) { $savedCaseEnv[$caseEnvName] = [Environment]::GetEnvironmentVariable($caseEnvName, 'Process') }
@@ -546,6 +547,45 @@ try {
         }
         $repairFallbackText = "$($repairFallbackNeedsNode.Output)`n$($repairFallbackNeedsNode.ReportText)"
         Assert-Test (-not $repairFallbackNeedsNode.Run.TimedOut -and $repairFallbackNeedsNode.Run.ExitCode -eq 0 -and $repairFallbackText -match '\[ERROR\] Claude Code' -and $repairFallbackText -match 'Node\.js LTS|npm fallback') 'repair-deps allows Node/npm missing to become a repair blocker only when npm fallback is needed'
+
+        # --- ACC-048: Claude native fixed-path usable + User PATH scenarios ---
+        # test-vm-acceptance.ps1 is BOM-less; CJK match strings are built via [char] codes.
+        $cnNoRepair = [string]::Concat([char]0x5DF2,[char]0x53EF,[char]0x7528,[char]0xFF0C,[char]0x65E0,[char]0x9700,[char]0x4FEE,[char]0x590D) # no-repair-needed CJK
+
+        $repairNativeMissing = Invoke-RepairDepsFunctionalCase -Name 'native-path-missing' -Overrides @{
+            CCDI_MOCK_CLAUDE = 'native'; CCDI_MOCK_NODE = 'missing'; CCDI_MOCK_NPM = 'missing'
+        }
+        $repairNativeMissingText = "$($repairNativeMissing.Output)`n$($repairNativeMissing.ReportText)"
+        Assert-Test (-not $repairNativeMissing.Run.TimedOut -and $repairNativeMissing.Run.ExitCode -eq 0) 'repair-deps native fixed-path usable exits cleanly when User PATH missing'
+        Assert-Test ($repairNativeMissingText -match 'source=native_local_bin') 'repair-deps judges Claude usable via native fixed path'
+        Assert-Test ($repairNativeMissingText -match 'Native Install PATH' -and $repairNativeMissingText -match '\[WARN\]\s+Native Install PATH') 'repair-deps detects Native Install PATH gap when Claude fixed-path usable but User PATH missing'
+        Assert-Test ($repairNativeMissingText -match '\[SKIP\]\s+Native Install PATH') 'repair-deps TestSafe skips real User PATH write for native bin'
+        Assert-Test ($repairNativeMissingText -match "Claude Code $cnNoRepair") 'repair-deps reports no repair needed alongside PATH records when native usable and TestSafe skips write'
+        Assert-Test ($repairNativeMissingText -notmatch '\[(WARN|ERROR)\]\s+Node\.js' -and $repairNativeMissingText -notmatch '\[(WARN|ERROR)\]\s+npm') 'repair-deps native fixed-path does not warn about optional Node/npm'
+        Assert-Test ($repairNativeMissingText -notmatch 'official_native' -and $repairNativeMissingText -notmatch 'Install-ClaudeCodeAuto') 'repair-deps native usable does not trigger Claude/Node install'
+
+        $repairNativePresent = Invoke-RepairDepsFunctionalCase -Name 'native-path-present' -Overrides @{
+            CCDI_MOCK_CLAUDE = 'native'; CCDI_MOCK_NODE = 'missing'; CCDI_MOCK_NPM = 'missing'
+            CCDI_MOCK_USER_PATH_NATIVE = 'present'
+        }
+        $repairNativePresentText = "$($repairNativePresent.Output)`n$($repairNativePresent.ReportText)"
+        Assert-Test (-not $repairNativePresent.Run.TimedOut -and $repairNativePresent.Run.ExitCode -eq 0) 'repair-deps native fixed-path usable exits cleanly when User PATH present'
+        Assert-Test ($repairNativePresentText -match '\[OK\]\s+Native Install PATH') 'repair-deps reports Native Install PATH OK when User PATH present'
+        Assert-Test ($repairNativePresentText -match "Claude Code $cnNoRepair") 'repair-deps reports no repair needed when native usable and User PATH present'
+        Assert-Test ($repairNativePresentText -notmatch '\[(WARN|ERROR)\]\s+Node\.js' -and $repairNativePresentText -notmatch '\[(WARN|ERROR)\]\s+npm') 'repair-deps native present does not warn about optional Node/npm'
+        Assert-Test ($repairNativePresentText -notmatch 'official_native') 'repair-deps native present does not trigger install'
+
+        $repairNativeWriteFail = Invoke-RepairDepsFunctionalCase -Name 'native-path-writefail' -Overrides @{
+            CCDI_MOCK_CLAUDE = 'native'; CCDI_MOCK_NODE = 'missing'; CCDI_MOCK_NPM = 'missing'
+            CCDI_MOCK_PATH_WRITE = 'fail'
+        }
+        $repairNativeWriteFailText = "$($repairNativeWriteFail.Output)`n$($repairNativeWriteFail.ReportText)"
+        Assert-Test (-not $repairNativeWriteFail.Run.TimedOut -and $repairNativeWriteFail.Run.ExitCode -eq 0) 'repair-deps native fixed-path write-fail exits cleanly'
+        Assert-Test ($repairNativeWriteFailText -match '\[ERROR\]\s+Native Install PATH') 'repair-deps reports PATH write failure when native bin User PATH write fails'
+        Assert-Test ($repairNativeWriteFailText -notmatch "Claude Code $cnNoRepair") 'repair-deps must not claim no-repair-needed when PATH write failed'
+        Assert-Test ($repairNativeWriteFailText -match '1\.\s.*\.local\\bin') 'repair-deps PATH write failure suggests manual PATH add with native bin'
+        Assert-Test ($repairNativeWriteFailText -match '2\.\s.*\.cmd') 'repair-deps PATH write failure suggests running diagnostics cmd'
+        Assert-Test ($repairNativeWriteFailText -notmatch '\[(WARN|ERROR)\]\s+Node\.js' -and $repairNativeWriteFailText -notmatch '\[(WARN|ERROR)\]\s+npm') 'repair-deps native write-fail does not promote Node/npm to main error'
 
         $repairDepsSource = Get-Content -LiteralPath (Join-Path $ProjectRoot 'repair-deps.ps1') -Raw -Encoding UTF8
         $repairCmdName = [string]::Concat([char]0x4E00, [char]0x952E, [char]0x4FEE, [char]0x590D, [char]0x4F9D, [char]0x8D56, '.cmd')

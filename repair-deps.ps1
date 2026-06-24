@@ -176,6 +176,132 @@ function Invoke-ClaudeRepair {
 }
 
 # ============================================================
+# Claude PATH 修复（Native Install 固定路径可用时补 User PATH）
+# ============================================================
+
+function Repair-ClaudePathIfNeeded {
+    <#
+    .SYNOPSIS
+        当 Claude Code 通过 Native Install 固定路径（%USERPROFILE%\.local\bin\claude.exe）
+        可用、但该目录未加入 User PATH 时，补写 User PATH 并做 fresh shell 验证。
+        Claude 不可用、或 Claude 来自 PATH/npm_global 等非 native 固定路径时，不处理。
+        必须在 Claude 可用早退之前调用，否则会跳过 PATH 修复（ACC-048）。
+    .PARAMETER ClaudeCheck
+        Test-ClaudeCommandExisting 返回的检测对象（含 Usable/Path/Source）。
+    .PARAMETER IsTestSafe
+        测试安全模式：不写真实 User PATH，不做真实 fresh shell 验证。
+    .PARAMETER NonInteractive
+        非交互模式（当前仅用于语义记录，不改变修复逻辑）。
+    .RETURNS
+        包含 NativeBinPath, PathWriteFailed, PathWriteAttempted,
+        PathWritten, FreshShellRan, FreshShellOk 的哈希表。
+    #>
+    param(
+        $ClaudeCheck,
+        [switch]$IsTestSafe,
+        [switch]$NonInteractive
+    )
+
+    $outcome = @{
+        NativeBinPath      = ""
+        PathWriteFailed    = $false
+        PathWriteAttempted = $false
+        PathWritten        = $false
+        FreshShellRan      = $false
+        FreshShellOk       = $false
+    }
+
+    # Claude 不可用 -> 不处理
+    if (-not $ClaudeCheck -or -not $ClaudeCheck.Usable) {
+        return $outcome
+    }
+
+    $nativeBinPath = Get-NativeClaudeBinPath
+    $outcome.NativeBinPath = $nativeBinPath
+
+    # 仅当 Claude 通过 native_local_bin 固定路径找到时才需要补 User PATH。
+    # Path 为空、或不在 native bin 目录下，通常说明 Claude 已在 PATH 中，不处理。
+    $claudePath = $ClaudeCheck.Path
+    $isNativeSourced = $false
+    if ($ClaudeCheck.Source -eq "native_local_bin") {
+        $isNativeSourced = $true
+    }
+    elseif ($claudePath) {
+        try {
+            $claudeDir = Split-Path -Parent $claudePath
+            $normClaudeDir = ([System.IO.Path]::GetFullPath($claudeDir)).TrimEnd('\').ToLowerInvariant()
+            $normNativeBin = ([System.IO.Path]::GetFullPath($nativeBinPath)).TrimEnd('\').ToLowerInvariant()
+            if ($normClaudeDir -eq $normNativeBin) {
+                $isNativeSourced = $true
+            }
+        }
+        catch {
+            # 路径规范化失败，保守不处理
+        }
+    }
+
+    if (-not $isNativeSourced) {
+        return $outcome
+    }
+
+    # 检查 User PATH 是否已包含 native bin
+    $pathCheck = Test-UserPathContains -TargetPath $nativeBinPath
+    $mockDecision = ($env:CCDI_TEST_MODE -eq "1" -and $env:CCDI_MOCK_INSTALL_DECISION -eq "1")
+
+    if ($pathCheck.Contains -or ($IsTestSafe -and $mockDecision -and $env:CCDI_MOCK_USER_PATH_NATIVE -eq "present")) {
+        Add-CR "Native Install PATH" "OK" "已在 User PATH 中"
+    }
+    else {
+        Add-CR "Native Install PATH" "WARN" "Claude Code 已安装，但安装目录未加入 User PATH"
+        $outcome.PathWriteAttempted = $true
+
+        if ($IsTestSafe) {
+            # 测试安全模式：不写真实 User PATH
+            if ($mockDecision -and $env:CCDI_MOCK_PATH_WRITE -eq "fail") {
+                # 模拟写入失败，覆盖 ERROR 分支
+                $outcome.PathWriteFailed = $true
+                Add-CR "Native Install PATH 写入" "ERROR" "PATH 自动修复失败（测试安全模式 mock）：实际运行时会尝试写入 User PATH"
+            }
+            else {
+                Add-CR "Native Install PATH 写入" "SKIP" "测试安全模式未写入 PATH（实际运行时会写入）"
+            }
+        }
+        else {
+            $ensure = Ensure-UserPathEntry -PathToAdd $nativeBinPath
+            if ($ensure.Success) {
+                $outcome.PathWritten = $true
+                if ($ensure.Changed) {
+                    Add-CR "Native Install PATH 写入" "OK" "User PATH 已写入 Native Install 目录"
+                }
+                else {
+                    Add-CR "Native Install PATH 写入" "OK" "Native Install 目录已在 User PATH 中"
+                }
+                Refresh-CurrentProcessPath
+            }
+            else {
+                $outcome.PathWriteFailed = $true
+                Add-CR "Native Install PATH 写入" "ERROR" "PATH 自动修复失败: $($ensure.Error)"
+            }
+        }
+    }
+
+    # fresh shell 验证：仅在非 TestSafe 且未发生 PATH 写入失败时运行
+    if (-not $IsTestSafe -and -not $outcome.PathWriteFailed) {
+        $fresh = Test-ClaudeCommandInFreshShell
+        $outcome.FreshShellRan = $true
+        if ($fresh.Success) {
+            $outcome.FreshShellOk = $true
+            Add-CR "Fresh PowerShell claude" "OK" "新 PowerShell 可直接运行 claude: $($fresh.Version)"
+        }
+        else {
+            Add-CR "Fresh PowerShell claude" "WARN" "User PATH 已配置，但 fresh shell 验证未通过: $($fresh.Error)；如果新终端仍不可用，请运行一键诊断.cmd。"
+        }
+    }
+
+    return $outcome
+}
+
+# ============================================================
 # 主流程
 # ============================================================
 
@@ -286,10 +412,28 @@ function Start-RepairDeps {
     }
 
     $needsRestart = $false
+    $pathWriteFailed = $false
+    $nativeBinPath = ""
+
+    # ============================================================
+    # Claude PATH 修复阶段：Claude 可用且为 Native Install 固定路径时，
+    # 确保 User PATH 包含 native bin，避免新开终端 claude not found。
+    # 必须在 Claude 可用早退之前完成，否则会跳过 PATH 修复（ACC-048）。
+    # ============================================================
+    $pathRepair = Repair-ClaudePathIfNeeded -ClaudeCheck $claudeCheck -IsTestSafe:$IsTestSafe -NonInteractive:$NonInteractive
+    if ($pathRepair) {
+        $pathWriteFailed = [bool]$pathRepair.PathWriteFailed
+        if ($pathRepair.NativeBinPath) { $nativeBinPath = [string]$pathRepair.NativeBinPath }
+    }
 
     if ($claudeAvailable) {
         Write-Host ""
-        Write-Success "Claude Code 已可用，无需修复。"
+        if (-not $pathWriteFailed) {
+            Write-Success "Claude Code 已可用，无需修复。"
+        }
+        else {
+            Write-Warning "Claude Code 当前固定路径可用，但 PATH 自动修复失败。"
+        }
         Generate-Report
         if (-not $NonInteractive -and -not $IsTestSafe -and -not $NoFinalPause) {
             Write-Host ""
@@ -418,9 +562,18 @@ function Generate-Report {
 
     if ($claudeAvailable) {
         Add-RL ""
-        Add-RL "  状态: Claude Code 已可用，无需修复。"
-        if (-not $nodeInfo.IsSupported -or -not $npmInfo.Installed) {
-            Add-RL "  说明: Node.js/npm 仅 npm fallback/开发场景需要，当前无需修复。"
+        if (-not $pathWriteFailed) {
+            Add-RL "  状态: Claude Code 已可用，无需修复。"
+            if (-not $nodeInfo.IsSupported -or -not $npmInfo.Installed) {
+                Add-RL "  说明: Node.js/npm 仅 npm fallback/开发场景需要，当前无需修复。"
+            }
+        }
+        else {
+            Add-RL "  状态: Claude Code 当前可用，但 PATH 自动修复失败。"
+            if ($nativeBinPath) {
+                Add-RL "  安装目录: $nativeBinPath"
+            }
+            Add-RL "  说明: Node.js/npm 缺失不构成主错误（仅 npm fallback/开发场景需要）。"
         }
     }
     elseif ($needsRestart) {
@@ -458,7 +611,18 @@ function Generate-Report {
     Add-RL ""
 
     if ($claudeAvailable) {
-        Add-RL "  无需进一步操作。"
+        if ($pathWriteFailed) {
+            if ($nativeBinPath) {
+                Add-RL "  1. 手动将 $nativeBinPath 加入用户 PATH"
+            }
+            else {
+                Add-RL "  1. 手动将 Claude Code 安装目录（%USERPROFILE%\.local\bin）加入用户 PATH"
+            }
+            Add-RL "  2. 或运行 [一键诊断.cmd] 生成反馈"
+        }
+        else {
+            Add-RL "  无需进一步操作。"
+        }
     }
     elseif ($needsRestart) {
         Add-RL "  1. 重新打开 PowerShell"
