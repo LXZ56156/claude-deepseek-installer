@@ -222,7 +222,8 @@ $safePlaceholders = @(
     ("sk-fake" + ("x" * 42)),  # ux-check.sh test key
     ("sk-" + ("x" * 46)),      # ux-check.ps1 test key
     "sk-test_KEY_12345678901234567890",  # test-vm-acceptance.ps1 ACC-061 regex test
-    "sk-test-KEY-12345678901234567890"   # test-vm-acceptance.ps1 ACC-061 regex test
+    "sk-test-KEY-12345678901234567890",  # test-vm-acceptance.ps1 ACC-061 regex test
+    "sk-RdecKey_RemoveDeepSeek1234567890"  # test-vm-acceptance.ps1 ACC-061 Remove-DeepSeekEnvConfig test
 )
 
 $dangerPatterns = @(
