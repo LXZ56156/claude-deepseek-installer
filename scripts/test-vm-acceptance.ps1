@@ -1355,6 +1355,36 @@ Start-Sleep -Seconds 30
     }
     Assert-Test (-not $foundDangerous) "Test3a: no dangerous Copy-Item rollback from redacted backup. Matched=$matchedPattern"
 
+    # Functional Test 3b: Remove-DeepSeekEnvConfig 写坏后内存回滚能恢复真实 Key
+    $rdecDir = Join-Path $testRoot 'acc061-rm-env'
+    New-Item -ItemType Directory -Path $rdecDir -Force | Out-Null
+    $rdecFile = Join-Path $rdecDir 's.json'
+    $rdecKey = "sk-RdecKey_RemoveDeepSeek1234567890"
+    # Use same pattern as Test 1 that works
+    $rdecOrig = @{ env = [ordered]@{ ANTHROPIC_AUTH_TOKEN = $rdecKey; ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic"; CUSTOM_KEEP = "keep-this-field" }; permissions = [ordered]@{ allow = @("Bash(claude:*)") } }
+    $rdecJson = ($rdecOrig | ConvertTo-Json -Depth 10)
+    [System.IO.File]::WriteAllText($rdecFile, $rdecJson, $utf8NoBom)
+    $rdecSnap = New-SettingsJsonMemorySnapshot -FilePath $rdecFile
+    Assert-Test ($rdecSnap.Exists -and $rdecSnap.Raw -match [regex]::Escape($rdecKey)) 'Test3b: Remove-DeepSeekEnvConfig snapshot captures real Key'
+
+    # 模拟 Write-JsonFileSafe 失败：脱敏占位值覆盖 live config
+    $rdecBad = $rdecJson -replace [regex]::Escape($rdecKey), '__REDACTED_BY_CCDI__'
+    [System.IO.File]::WriteAllText($rdecFile, $rdecBad, $utf8NoBom)
+    $rdecBadRead = [System.IO.File]::ReadAllText($rdecFile, $utf8NoBom)
+    Assert-Test ($rdecBadRead -notmatch [regex]::Escape($rdecKey)) 'Test3c: corrupted settings does NOT have real Key'
+    Assert-Test ($rdecBadRead -match '__REDACTED_BY_CCDI__') 'Test3d: corrupted settings has REDACTED placeholder'
+
+    # 内存回滚
+    $rdecRoll = Restore-SettingsJsonFromMemorySnapshot -FilePath $rdecFile -Snapshot $rdecSnap -Reason "Remove-DeepSeekEnvConfig test"
+    Assert-Test $rdecRoll.Success 'Test3e: Remove-DeepSeekEnvConfig rollback succeeds'
+    $rdecOk = [System.IO.File]::ReadAllText($rdecFile, $utf8NoBom)
+    Assert-Test ($rdecOk -match [regex]::Escape($rdecKey)) 'Test3f: after rollback, real Key restored'
+    Assert-Test ($rdecOk -notmatch '__REDACTED_BY_CCDI__') 'Test3g: after rollback, no REDACTED placeholder'
+    Assert-Test ($rdecOk -match 'CUSTOM_KEEP') 'Test3h: non-DeepSeek field CUSTOM_KEEP preserved'
+    Assert-Test ($rdecOk -match 'api.deepseek.com') 'Test3i: ANTHROPIC_BASE_URL preserved'
+
+    Remove-Item -LiteralPath $rdecDir -Recurse -Force -ErrorAction SilentlyContinue
+
     # Functional Test 4: release scan regex 覆盖 _ 和 -
     $checkPs1Content = if (Test-Path (Join-Path $ProjectRoot "scripts\check.ps1")) {
         [System.IO.File]::ReadAllText((Join-Path $ProjectRoot "scripts\check.ps1"), [System.Text.Encoding]::UTF8)
@@ -1368,6 +1398,9 @@ Start-Sleep -Seconds 30
     # Cleanup test artifacts (acc061)
     if (Test-Path -LiteralPath $testSettingsDir) {
         Remove-Item -LiteralPath $testSettingsDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath (Join-Path $testRoot 'acc061-rm-env')) {
+        Remove-Item -LiteralPath (Join-Path $testRoot 'acc061-rm-env') -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     # Real environment must be byte-identical to the baseline captured before any test ran.

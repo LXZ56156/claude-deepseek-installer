@@ -144,6 +144,13 @@ function Remove-DeepSeekEnvConfig {
         }
     }
 
+    # 在任何修改前创建内存快照（程序内部失败回滚源）
+    $originalSnapshot = New-SettingsJsonMemorySnapshot -FilePath $configPath
+    if ($originalSnapshot.Error) {
+        Write-Error-Msg "读取原配置快照失败，已停止修改，避免破坏用户配置: $($originalSnapshot.Error)"
+        return $false
+    }
+
     $backupResult = Backup-SettingsJsonSafe -FilePath $configPath
     if (-not $backupResult) {
         Write-Error-Msg "配置文件备份失败，已停止修改，避免破坏用户配置。"
@@ -186,6 +193,31 @@ function Remove-DeepSeekEnvConfig {
 
     if (-not (Write-JsonFileSafe -FilePath $configPath -Data $newConfig)) {
         Write-Error-Msg "配置写回失败，备份已保留。"
+
+        # 使用内存快照回滚，不能用脱敏备份（脱敏备份不含真实 Key）
+        $rollback = Restore-SettingsJsonFromMemorySnapshot `
+            -FilePath $configPath `
+            -Snapshot $originalSnapshot `
+            -Reason "Remove-DeepSeekEnvConfig Write-JsonFileSafe failed"
+
+        if (-not $rollback.Success) {
+            Write-Warning "自动回滚失败：$($rollback.Error)"
+        }
+        return $false
+    }
+
+    # 写入后 JSON 校验
+    if (-not (Test-JsonValid -FilePath $configPath)) {
+        Write-Error-Msg "移除 DeepSeek 配置后 JSON 校验失败，正在回滚。"
+
+        $rollback = Restore-SettingsJsonFromMemorySnapshot `
+            -FilePath $configPath `
+            -Snapshot $originalSnapshot `
+            -Reason "Remove-DeepSeekEnvConfig post-write JSON validation failed"
+
+        if (-not $rollback.Success) {
+            Write-Warning "自动回滚失败：$($rollback.Error)"
+        }
         return $false
     }
 

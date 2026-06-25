@@ -447,6 +447,12 @@ function Restore-ConfigFromBackup {
             return $false
         }
 
+        # 确保配置目录存在
+        $configDir = Split-Path -Parent $configPath
+        if ($configDir -and -not (Test-Path -LiteralPath $configDir)) {
+            New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+        }
+
         Copy-Item -LiteralPath $SourcePath -Destination $configPath -Force
         if (-not (Test-JsonValid -FilePath $configPath)) {
             Write-Error-Msg "恢复后 JSON 校验失败，正在回滚。"

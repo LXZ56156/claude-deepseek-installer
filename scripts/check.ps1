@@ -5607,9 +5607,19 @@ if ($uninstallText -notmatch 'Restore-SettingsJsonFromMemorySnapshot') {
 if ($uninstallText -match 'Copy-Item\s+-LiteralPath\s+\$preBackup\s+-Destination\s+\$configPath') {
     throw "uninstall-config.ps1 must NOT use Copy-Item -LiteralPath `$preBackup -Destination `$configPath for rollback"
 }
-Write-Host "[check]  21. uninstall-config.ps1 uses memory snapshot rollback correctly OK"
+Write-Host "[check]  21. uninstall-config.ps1 restore flow uses memory snapshot rollback correctly OK"
 
-# 22. Release key scan regex must cover _ and -
+# 22. uninstall-config.ps1 Remove-DeepSeekEnvConfig must call New-SettingsJsonMemorySnapshot and Restore-SettingsJsonFromMemorySnapshot
+$removeDeepSeekEnvConfigFunc = if ($uninstallText -match '(?s)function Remove-DeepSeekEnvConfig\s*\{.*?(?=^function \w+\s*\{|\Z)') { $matches[0] } else { "" }
+if ($removeDeepSeekEnvConfigFunc -notmatch 'New-SettingsJsonMemorySnapshot') {
+    throw "Remove-DeepSeekEnvConfig must call New-SettingsJsonMemorySnapshot before modifications"
+}
+if ($removeDeepSeekEnvConfigFunc -notmatch 'Restore-SettingsJsonFromMemorySnapshot') {
+    throw "Remove-DeepSeekEnvConfig must call Restore-SettingsJsonFromMemorySnapshot on write/validate failure"
+}
+Write-Host "[check]  22. Remove-DeepSeekEnvConfig uses memory snapshot rollback correctly OK"
+
+# 23. Release key scan regex must cover _ and -
 # check.ps1 self-text is accessible via the script file content
 $checkPs1Self = if (Test-Path (Join-Path $RootDir "scripts\check.ps1")) {
     [System.IO.File]::ReadAllText((Join-Path $RootDir "scripts\check.ps1"), [System.Text.Encoding]::UTF8)
@@ -5617,7 +5627,7 @@ $checkPs1Self = if (Test-Path (Join-Path $RootDir "scripts\check.ps1")) {
 if ($checkPs1Self -notmatch 'sk-\\\[A-Za-z0-9_\-\\]\\\{20,\\\}' -and $checkPs1Self -notmatch "sk-\[A-Za-z0-9_-\]\{20,\}") {
     throw "Release key scan regex must include _ and -: sk-[A-Za-z0-9_-]{20,}"
 }
-Write-Host "[check]  22. release key scan regex covers _ and - OK"
+Write-Host "[check]  23. release key scan regex covers _ and - OK"
 
 Write-Host "[check] v1.3.3 redacted backup rollback safety anti-regression OK"
 
