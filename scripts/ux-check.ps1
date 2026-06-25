@@ -405,7 +405,7 @@ try {
     foreach ($file in $textFiles) {
         try {
             $content = Get-Content $file.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-            $keyMatches = [regex]::Matches($content, 'sk-[A-Za-z0-9]{32,}')
+            $keyMatches = [regex]::Matches($content, 'sk-[A-Za-z0-9_-]{32,}')
             foreach ($m in $keyMatches) {
                 $isSafe = $false
                 foreach ($safe in $safePlaceholders) {

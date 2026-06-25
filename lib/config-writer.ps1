@@ -107,7 +107,15 @@ function Write-DeepSeekConfig {
     Write-Log "INFO" "开始写入 DeepSeek 配置..."
     Write-Log "INFO" "目标配置文件: $ConfigPath"
 
-    # 1. 备份旧文件
+    # 1. 在任何修改前创建内存快照（程序内部失败回滚源）
+    $originalSnapshot = New-SettingsJsonMemorySnapshot -FilePath $ConfigPath
+    if ($originalSnapshot.Error) {
+        $result.Error = "读取原配置快照失败，已停止写入，避免破坏用户配置: $($originalSnapshot.Error)"
+        Write-Error-Msg $result.Error
+        return $result
+    }
+
+    # 2. 备份旧文件（脱敏安全备份，落盘售后参考）
     if (Test-Path -LiteralPath $ConfigPath) {
         $oldConfig = Read-JsonFileSafe -FilePath $ConfigPath
         if ($null -eq $oldConfig) {
@@ -165,7 +173,7 @@ function Write-DeepSeekConfig {
         Write-Info "正在创建 Claude Code 配置。"
     }
 
-    # 2. 获取默认 env 配置
+    # 3. 获取默认 env 配置
     try {
         $newEnv = Get-DefaultDeepSeekEnv -ApiKey $ApiKey
     }
@@ -175,7 +183,7 @@ function Write-DeepSeekConfig {
         return $result
     }
 
-    # 3. 合并配置
+    # 4. 合并配置
     $merged = Merge-SettingsJson -ExistingPath $ConfigPath -NewEnv $newEnv
 
     if ($null -eq $merged) {
@@ -184,32 +192,45 @@ function Write-DeepSeekConfig {
         return $result
     }
 
-    # 4. 确保目录存在
+    # 5. 确保目录存在
     $configDir = Split-Path -Parent $ConfigPath
     if (-not (Test-Path $configDir)) {
         New-Item -ItemType Directory -Path $configDir -Force | Out-Null
         Write-Log "INFO" "创建配置目录: $configDir"
     }
 
-    # 5. 写入配置
+    # 6. 写入配置
     $writeSuccess = Write-JsonFileSafe -FilePath $ConfigPath -Data $merged
 
     if (-not $writeSuccess) {
         $result.Error = "配置文件写入失败"
         Write-Error-Msg "写入配置文件失败，请检查磁盘空间和权限。"
+
+        # 使用内存快照回滚，不能用脱敏备份（脱敏备份不含真实 Key）
+        $rollback = Restore-SettingsJsonFromMemorySnapshot `
+            -FilePath $ConfigPath `
+            -Snapshot $originalSnapshot `
+            -Reason "Write-DeepSeekConfig Write-JsonFileSafe failed"
+
+        if (-not $rollback.Success) {
+            Write-Warning "自动回滚失败：$($rollback.Error)"
+        }
         return $result
     }
 
-    # 6. 验证写入
+    # 7. 验证写入
     if (-not (Test-JsonValid -FilePath $ConfigPath)) {
         $result.Error = "写入的配置文件 JSON 格式无效"
         Write-Error-Msg "写入的配置文件格式验证失败！"
 
-        # 如果有备份，尝试恢复
-        if ($result.BackupPath) {
-            Write-Warning "正在恢复备份文件..."
-            Copy-Item -LiteralPath $result.BackupPath -Destination $ConfigPath -Force
-            Write-Info "已恢复备份文件。"
+        # 使用内存快照回滚，不能用脱敏备份（脱敏备份不含真实 Key）
+        $rollback = Restore-SettingsJsonFromMemorySnapshot `
+            -FilePath $ConfigPath `
+            -Snapshot $originalSnapshot `
+            -Reason "Write-DeepSeekConfig post-write JSON validation failed"
+
+        if (-not $rollback.Success) {
+            Write-Warning "自动回滚失败：$($rollback.Error)"
         }
         return $result
     }
@@ -412,6 +433,49 @@ function Restore-ConfigFromBackup {
         return $result
     }
 
+    function _RestoreSingleBackup {
+        param(
+            [string]$SourcePath,
+            [string]$SourceName
+        )
+
+        # 在复制备份之前创建当前配置的内存快照（用于失败回滚）
+        $preRestoreSnapshot = New-SettingsJsonMemorySnapshot -FilePath $configPath
+        if ($preRestoreSnapshot.Error) {
+            $result.Message = "读取当前配置快照失败，已停止恢复，避免破坏用户配置: $($preRestoreSnapshot.Error)"
+            Write-Error-Msg $result.Message
+            return $false
+        }
+
+        Copy-Item -LiteralPath $SourcePath -Destination $configPath -Force
+        if (-not (Test-JsonValid -FilePath $configPath)) {
+            Write-Error-Msg "恢复后 JSON 校验失败，正在回滚。"
+
+            # 使用内存快照回滚，不能用脱敏备份（脱敏备份不含真实 Key）
+            $rollback = Restore-SettingsJsonFromMemorySnapshot `
+                -FilePath $configPath `
+                -Snapshot $preRestoreSnapshot `
+                -Reason "Restore-ConfigFromBackup post-restore JSON validation failed ($SourceName)"
+
+            if ($rollback.Success) {
+                Write-Warning "恢复失败，已回滚到恢复前配置。"
+            }
+            else {
+                Write-Warning "恢复失败，且自动回滚失败：$($rollback.Error)"
+            }
+            return $false
+        }
+
+        $result.Success = $true
+        $result.Message = "已从备份恢复: $SourceName"
+        Write-Success $result.Message
+        $restoredStatus = Get-DeepSeekConfigStatus
+        if ($restoredStatus.ErrorMessage -match "脱敏") {
+            Write-Warning "已恢复非敏感配置，但 API Key 已脱敏，需要重新配置。"
+        }
+        return $true
+    }
+
     if ($BackupPath -and (Test-Path $BackupPath)) {
         # 使用指定的备份文件
         if ([System.IO.Path]::GetFileName($BackupPath) -match '\.invalid') {
@@ -425,19 +489,7 @@ function Restore-ConfigFromBackup {
             Write-Error-Msg $result.Message
             return $result
         }
-        Copy-Item -LiteralPath $BackupPath -Destination $configPath -Force
-        if (-not (Test-JsonValid -FilePath $configPath)) {
-            $result.Message = "恢复后 JSON 校验失败，已停止"
-            Write-Error-Msg $result.Message
-            return $result
-        }
-        $result.Success = $true
-        $result.Message = "已从 $BackupPath 恢复配置"
-        Write-Success $result.Message
-        $restoredStatus = Get-DeepSeekConfigStatus
-        if ($restoredStatus.ErrorMessage -match "脱敏") {
-            Write-Warning "已恢复非敏感配置，但 API Key 已脱敏，需要重新配置。"
-        }
+        [void](_RestoreSingleBackup -SourcePath $BackupPath -SourceName $BackupPath)
         return $result
     }
 
@@ -478,19 +530,7 @@ function Restore-ConfigFromBackup {
                 Write-Error-Msg $result.Message
                 return $result
             }
-            Copy-Item -LiteralPath $selected.FullName -Destination $configPath -Force
-            if (-not (Test-JsonValid -FilePath $configPath)) {
-                $result.Message = "恢复后 JSON 校验失败，未确认恢复成功"
-                Write-Error-Msg $result.Message
-                return $result
-            }
-            $result.Success = $true
-            $result.Message = "已从备份恢复: $($selected.Name)"
-            Write-Success $result.Message
-            $restoredStatus = Get-DeepSeekConfigStatus
-            if ($restoredStatus.ErrorMessage -match "脱敏") {
-                Write-Warning "已恢复非敏感配置，但 API Key 已脱敏，需要重新配置。"
-            }
+            [void](_RestoreSingleBackup -SourcePath $selected.FullName -SourceName $selected.Name)
         }
         else {
             $result.Message = "无效的选择"

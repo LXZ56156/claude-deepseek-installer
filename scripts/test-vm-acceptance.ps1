@@ -1133,7 +1133,7 @@ catch { $nonPs1Rejected = $true }
     $fakeKey = 'sk-ProdLeakForTest' + ('0' * 12) + 'abcd'
     $scanContent = "first line`nDEEPSEEK_API_KEY=$fakeKey`n"
     $apiHits = [System.Collections.Generic.List[object]]::new()
-    Add-ApiKeyHitsFromContent -Content $scanContent -DisplayPath 'fixtures\leak.env' -Hits $apiHits -DangerPatterns @('sk-[A-Za-z0-9]{20,}', 'DEEPSEEK_API_KEY.*sk-[A-Za-z0-9]{20,}') -SafePlaceholders @('sk-xxxx')
+    Add-ApiKeyHitsFromContent -Content $scanContent -DisplayPath 'fixtures\leak.env' -Hits $apiHits -DangerPatterns @('sk-[A-Za-z0-9_-]{20,}', 'DEEPSEEK_API_KEY.*sk-[A-Za-z0-9_-]{20,}') -SafePlaceholders @('sk-xxxx')
     $renderedHits = @($apiHits | ForEach-Object { "file=$($_.File); line=$($_.Line); type=$($_.Type); redacted=$($_.Redacted)" }) -join "`n"
     Assert-Test ($apiHits.Count -gt 0 -and $renderedHits -notmatch [regex]::Escape($fakeKey) -and $renderedHits -match '<redacted-api-key: suffix=abcd>' -and $renderedHits -match 'file=fixtures\\leak\.env' -and $renderedHits -match 'line=2' -and $renderedHits -match 'type=DEEPSEEK_API_KEY') 'API key scan reports file line type and redacted suffix without leaking the full key'
 
@@ -1245,6 +1245,130 @@ Start-Sleep -Seconds 30
     catch { $capturedNineHundredError = $_.Exception.Message }
     Assert-Test ([string]::IsNullOrWhiteSpace($capturedNineHundredError)) 'captured command accepts 900 second timeout without parameter binding failure'
     Assert-Test ((-not $capturedNineHundred.TimedOut) -and $capturedNineHundred.ExitCode -eq 0) 'captured command 900 second safe command exits 0 without timeout'
+
+    # ============================================================
+    # ACC-061: Redacted safe backups must not be used as internal rollback source
+    # ============================================================
+
+    # Functional Test 1: 脱敏备份不能作为 live 回滚源，内存回滚能恢复真实 Key
+    $testSettingsDir = Join-Path $testRoot 'acc061-safe-backup-rollback'
+    New-Item -ItemType Directory -Path $testSettingsDir -Force | Out-Null
+    $testSettingsPath = Join-Path $testSettingsDir 'settings.json'
+    $testKey = "sk-" + ("RollbackSafeKey_1234567890-" * 2)
+    $testOriginalJson = @{
+        env = [ordered]@{
+            ANTHROPIC_AUTH_TOKEN = $testKey
+            ANTHROPIC_BASE_URL = "https://api.deepseek.com"
+            CUSTOM_KEEP = "keep-me"
+        }
+        permissions = [ordered]@{
+            allow = @("Bash(echo:*)")
+        }
+    }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $originalJsonText = ($testOriginalJson | ConvertTo-Json -Depth 10)
+    [System.IO.File]::WriteAllText($testSettingsPath, $originalJsonText, $utf8NoBom)
+
+    # 1a. Create memory snapshot
+    $snapshot = New-SettingsJsonMemorySnapshot -FilePath $testSettingsPath
+    Assert-Test ($snapshot.Exists -and $snapshot.Raw -match [regex]::Escape($testKey)) 'Test1a: memory snapshot captures real API Key'
+
+    # 1b. Create safe backup
+    $safeBackup = Backup-SettingsJsonSafe -FilePath $testSettingsPath
+    Assert-Test ($safeBackup -and (Test-Path -LiteralPath $safeBackup)) 'Test1b: safe backup created'
+    $safeBackupContent = [System.IO.File]::ReadAllText($safeBackup, $utf8NoBom)
+    Assert-Test ($safeBackupContent -notmatch [regex]::Escape($testKey)) 'Test1c: safe backup does NOT contain real Key'
+    Assert-Test ($safeBackupContent -match '__REDACTED_BY_CCDI__') 'Test1d: safe backup contains REDACTED placeholder'
+
+    # 1e. Simulate dangerous rollback: copy safe backup to live settings (this is the bug scenario)
+    Copy-Item -LiteralPath $safeBackup -Destination $testSettingsPath -Force
+    $afterRedactedContent = [System.IO.File]::ReadAllText($testSettingsPath, $utf8NoBom)
+    Assert-Test ($afterRedactedContent -match '__REDACTED_BY_CCDI__') 'Test1e: after dangerous rollback, live settings has REDACTED placeholder'
+    Assert-Test ($afterRedactedContent -notmatch [regex]::Escape($testKey)) 'Test1f: after dangerous rollback, live settings does NOT have real Key'
+
+    # 1g. Fix it: restore from memory snapshot
+    $rollback = Restore-SettingsJsonFromMemorySnapshot `
+        -FilePath $testSettingsPath `
+        -Snapshot $snapshot `
+        -Reason "test rollback safety"
+
+    Assert-Test $rollback.Success 'Test1g: memory rollback succeeds'
+    Assert-Test $rollback.RestoredExisting 'Test1h: RestoredExisting is true'
+    $restoredContent = [System.IO.File]::ReadAllText($testSettingsPath, $utf8NoBom)
+    Assert-Test ($restoredContent -match [regex]::Escape($testKey)) 'Test1i: after memory rollback, live settings has real Key'
+    Assert-Test ($restoredContent -notmatch '__REDACTED_BY_CCDI__') 'Test1j: after memory rollback, no REDACTED placeholder'
+    Assert-Test ($restoredContent -match 'CUSTOM_KEEP') 'Test1k: CUSTOM_KEEP preserved'
+    Assert-Test ($restoredContent -match 'Bash\(echo:\*\)') 'Test1l: permissions.allow preserved'
+
+    # Functional Test 2: 原 settings.json 不存在时，失败回滚会删除新创建文件
+    # Use the same directory created in Test 1
+    $acc061TestDir = $testSettingsDir
+    $testMissingPathForRollback = Join-Path $acc061TestDir 'settings-missing.json'
+    if (Test-Path -LiteralPath $testMissingPathForRollback) {
+        Remove-Item -LiteralPath $testMissingPathForRollback -Force
+    }
+    $missingSnapshot = New-SettingsJsonMemorySnapshot -FilePath $testMissingPathForRollback
+    Assert-Test (-not $missingSnapshot.Exists) 'Test2a: snapshot for missing file reports Exists=false'
+    Assert-Test ($null -eq $missingSnapshot.Raw) 'Test2b: snapshot for missing file has null Raw'
+
+    # Create a fake incomplete settings.json (simulating failed write)
+    Set-Content -LiteralPath $testMissingPathForRollback -Value '{broken' -Encoding UTF8
+    Assert-Test (Test-Path -LiteralPath $testMissingPathForRollback) 'Test2c: incomplete file exists before rollback'
+    Assert-Test (-not (Test-JsonValid -FilePath $testMissingPathForRollback)) 'Test2d: incomplete file is not valid JSON'
+
+    $rollbackMissing = Restore-SettingsJsonFromMemorySnapshot `
+        -FilePath $testMissingPathForRollback `
+        -Snapshot $missingSnapshot `
+        -Reason "test rollback missing file"
+
+    Assert-Test $rollbackMissing.Success 'Test2e: rollback for missing file succeeds'
+    Assert-Test $rollbackMissing.RemovedCreatedFile 'Test2f: RemovedCreatedFile is true'
+    Assert-Test (-not (Test-Path -LiteralPath $testMissingPathForRollback)) 'Test2g: incomplete file removed after rollback'
+
+    # Functional Test 3: 静态确认不再用脱敏 backup 回滚
+    $sourceFiles = @()
+    $sourceRoots = @(
+        (Join-Path $ProjectRoot "lib\common.ps1"),
+        (Join-Path $ProjectRoot "lib\config-writer.ps1"),
+        (Join-Path $ProjectRoot "uninstall-config.ps1")
+    )
+    foreach ($srcPath in $sourceRoots) {
+        if (Test-Path -LiteralPath $srcPath) {
+            $sourceFiles += [System.IO.File]::ReadAllText($srcPath, [System.Text.Encoding]::UTF8)
+        }
+    }
+    $allSourceText = $sourceFiles -join "`n"
+    $dangerousCopyPatterns = @(
+        'Copy-Item\s+-LiteralPath\s+\$result\.BackupPath\s+-Destination\s+\$ConfigPath',
+        'Copy-Item\s+-LiteralPath\s+\$preBackup\s+-Destination\s+\$configPath',
+        'Copy-Item\s+-Path\s+\$result\.BackupPath\s+-Destination\s+\$ConfigPath',
+        'Copy-Item\s+-Path\s+\$preBackup\s+-Destination\s+\$configPath'
+    )
+    $foundDangerous = $false
+    $matchedPattern = ""
+    foreach ($pattern in $dangerousCopyPatterns) {
+        if ($allSourceText -match $pattern) {
+            $foundDangerous = $true
+            $matchedPattern = $pattern
+            break
+        }
+    }
+    Assert-Test (-not $foundDangerous) "Test3a: no dangerous Copy-Item rollback from redacted backup. Matched=$matchedPattern"
+
+    # Functional Test 4: release scan regex 覆盖 _ 和 -
+    $checkPs1Content = if (Test-Path (Join-Path $ProjectRoot "scripts\check.ps1")) {
+        [System.IO.File]::ReadAllText((Join-Path $ProjectRoot "scripts\check.ps1"), [System.Text.Encoding]::UTF8)
+    } else { "" }
+    Assert-Test ($checkPs1Content -match 'sk-\[A-Za-z0-9_-\]\{20,\}') 'Test4a: check.ps1 release scan regex covers _ and -'
+    $leakKey1 = "sk-test_KEY_12345678901234567890"
+    $leakKey2 = "sk-test-KEY-12345678901234567890"
+    Assert-Test ($leakKey1 -match 'sk-[A-Za-z0-9_-]{20,}') 'Test4b: regex matches key with underscores'
+    Assert-Test ($leakKey2 -match 'sk-[A-Za-z0-9_-]{20,}') 'Test4c: regex matches key with dashes'
+
+    # Cleanup test artifacts (acc061)
+    if (Test-Path -LiteralPath $testSettingsDir) {
+        Remove-Item -LiteralPath $testSettingsDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
 
     # Real environment must be byte-identical to the baseline captured before any test ran.
     Assert-Test ([Environment]::GetEnvironmentVariable('Path', 'User') -ceq $realEnvBaseline.UserPath) 'real user PATH unchanged across all tests'

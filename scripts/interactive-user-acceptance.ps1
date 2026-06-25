@@ -114,7 +114,7 @@ function ConvertTo-SafeFailurePattern {
 
     if ([string]::IsNullOrEmpty($Text)) { return "" }
     $safe = [string]$Text
-    $matches = @([regex]::Matches($safe, 'sk-[A-Za-z0-9]{20,}')) | Sort-Object Index -Descending
+    $matches = @([regex]::Matches($safe, 'sk-[A-Za-z0-9_-]{20,}')) | Sort-Object Index -Descending
     foreach ($match in $matches) {
         $key = [string]$match.Value
         $suffix = if ($key.Length -ge 4) { $key.Substring($key.Length - 4) } else { '' }

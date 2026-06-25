@@ -1985,7 +1985,7 @@
         "Full API Key 'sk-xxxxxxxx...' found in report.txt",
         "report.txt contains unmasked API key"
       ],
-      "detection": "Sanitize-ReportText 扫描报告文件，正则匹配 sk-[A-Za-z0-9]{32,}。排除已知占位符。",
+      "detection": "Sanitize-ReportText 扫描报告文件，正则匹配 sk-[A-Za-z0-9_-]{32,}。排除已知占位符。",
       "expectedDiagnosis": "[OK] 所有报告文件中 API Key 已脱敏。未发现完整 Key。",
       "fixPolicy": "AUTO_FIX_SAFE",
       "safeRepairMock": "Convert-ToSafeReportText / Mask-ApiKey 自动脱敏。所有报告写入路径经过 Sanitize-ReportText。",

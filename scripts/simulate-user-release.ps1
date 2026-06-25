@@ -1066,9 +1066,9 @@ Write-Output "2.1.179 (Claude Code)"
     if ($fbContent -notmatch '五、最近终端输出尾部') {
         throw "support-feedback.txt missing section '五、最近终端输出尾部'"
     }
-    if ($fbContent -match 'sk-[A-Za-z0-9]{20,}') {
+    if ($fbContent -match 'sk-[A-Za-z0-9_-]{20,}') {
         # Check that the dummy key is NOT exposed in full
-        $fullKeyMatches = [regex]::Matches($fbContent, 'sk-[A-Za-z0-9]{20,}')
+        $fullKeyMatches = [regex]::Matches($fbContent, 'sk-[A-Za-z0-9_-]{20,}')
         foreach ($m in $fullKeyMatches) {
             if ($m.Value -notmatch '\*{4}') {
                 throw "support-feedback.txt contains unmasked API Key: $($m.Value)"

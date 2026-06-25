@@ -214,19 +214,22 @@ New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
 # 共享定义（源预扫描和 staging 扫描共用）
 $safePlaceholders = @(
     "sk-你的DeepSeekKey",
+    "sk-your-deepseek-api-key-here",
     "sk-xxxx",
     "__API_KEY__",
     ("sk-" + ("x" * 32)),      # scripts/check.ps1 Mask-ApiKey test
     ("sk-test" + ("x" * 42)),  # ux-check.ps1/test scripts
     ("sk-fake" + ("x" * 42)),  # ux-check.sh test key
-    ("sk-" + ("x" * 46))       # ux-check.ps1 test key
+    ("sk-" + ("x" * 46)),      # ux-check.ps1 test key
+    "sk-test_KEY_12345678901234567890",  # test-vm-acceptance.ps1 ACC-061 regex test
+    "sk-test-KEY-12345678901234567890"   # test-vm-acceptance.ps1 ACC-061 regex test
 )
 
 $dangerPatterns = @(
-    'sk-[A-Za-z0-9]{20,}',
-    'ANTHROPIC_AUTH_TOKEN.*sk-[A-Za-z0-9]{20,}',
-    'DEEPSEEK_API_KEY.*sk-[A-Za-z0-9]{20,}',
-    'CCDI_API_KEY.*sk-[A-Za-z0-9]{20,}'
+    'sk-[A-Za-z0-9_-]{20,}',
+    'ANTHROPIC_AUTH_TOKEN.*sk-[A-Za-z0-9_-]{20,}',
+    'DEEPSEEK_API_KEY.*sk-[A-Za-z0-9_-]{20,}',
+    'CCDI_API_KEY.*sk-[A-Za-z0-9_-]{20,}'
 )
 
 $textExtensions = @("*.ps1", "*.psm1", "*.sh", "*.json", "*.md", "*.txt", "*.cmd", "*.bat",

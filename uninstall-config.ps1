@@ -221,6 +221,14 @@ function Restore-LatestConfigBackup {
     }
 
     $configPath = Get-ClaudeConfigFile
+
+    # 在复制备份之前创建当前配置的内存快照（用于失败回滚）
+    $preRestoreSnapshot = New-SettingsJsonMemorySnapshot -FilePath $configPath
+    if ($preRestoreSnapshot.Error) {
+        Write-Error-Msg "读取当前配置快照失败，已停止恢复，避免破坏用户配置: $($preRestoreSnapshot.Error)"
+        return $false
+    }
+
     $preBackup = $null
     if (Test-Path $configPath) {
         $preBackup = Backup-SettingsJsonSafe -FilePath $configPath
@@ -238,9 +246,18 @@ function Restore-LatestConfigBackup {
     Copy-Item -LiteralPath $latest.FullName -Destination $configPath -Force
     if (-not (Test-JsonValid -FilePath $configPath)) {
         Write-Error-Msg "恢复后 JSON 校验失败，正在回滚。"
-        if ($preBackup -and (Test-Path -LiteralPath $preBackup)) {
-            Copy-Item -LiteralPath $preBackup -Destination $configPath -Force
-            Write-Warning "已用恢复前的脱敏备份回滚。API Key 如为占位值，需要重新配置。"
+
+        # 使用内存快照回滚，不能用脱敏备份（脱敏备份不含真实 Key）
+        $rollback = Restore-SettingsJsonFromMemorySnapshot `
+            -FilePath $configPath `
+            -Snapshot $preRestoreSnapshot `
+            -Reason "Restore-LatestConfigBackup post-restore JSON validation failed"
+
+        if ($rollback.Success) {
+            Write-Warning "恢复失败，已回滚到恢复前配置。"
+        }
+        else {
+            Write-Warning "恢复失败，且自动回滚失败：$($rollback.Error)"
         }
         return $false
     }

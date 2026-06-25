@@ -5541,6 +5541,86 @@ Write-Host "[check]   17. no .cmd files have .ps1 args inside -File quotes OK"
 
 Write-Host "[check] v1.3.3 support-feedback polish anti-regression OK"
 
+# --- v1.3.3 P1 fix anti-regression: redacted safe backups must not be used as internal rollback source (ACC-061) ---
+Write-Host ""
+Write-Host "[check] v1.3.3 redacted backup rollback safety"
+
+# Read source files for gate analysis
+$configWriterText = if (Test-Path (Join-Path $RootDir "lib\config-writer.ps1")) {
+    [System.IO.File]::ReadAllText((Join-Path $RootDir "lib\config-writer.ps1"), [System.Text.Encoding]::UTF8)
+} else { "" }
+$uninstallText = if (Test-Path (Join-Path $RootDir "uninstall-config.ps1")) {
+    [System.IO.File]::ReadAllText((Join-Path $RootDir "uninstall-config.ps1"), [System.Text.Encoding]::UTF8)
+} else { "" }
+
+# 18. lib/common.ps1 must contain New-SettingsJsonMemorySnapshot and Restore-SettingsJsonFromMemorySnapshot
+if ($commonText -notmatch 'function New-SettingsJsonMemorySnapshot') {
+    throw "lib/common.ps1 must contain function New-SettingsJsonMemorySnapshot"
+}
+if ($commonText -notmatch 'function Restore-SettingsJsonFromMemorySnapshot') {
+    throw "lib/common.ps1 must contain function Restore-SettingsJsonFromMemorySnapshot"
+}
+if ($commonText -notmatch 'ReadAllText') {
+    throw "lib/common.ps1 must contain ReadAllText (used in New-SettingsJsonMemorySnapshot)"
+}
+if ($commonText -notmatch 'WriteAllText') {
+    throw "lib/common.ps1 must contain WriteAllText (used in Restore-SettingsJsonFromMemorySnapshot)"
+}
+Write-Host "[check]  18. memory snapshot and rollback functions exist in common.ps1 OK"
+
+# 19. lib/config-writer.ps1 Write-DeepSeekConfig must call New-SettingsJsonMemorySnapshot, Backup-SettingsJsonSafe, Restore-SettingsJsonFromMemorySnapshot
+$writeDeepSeekConfigFunc = if ($configWriterText -match '(?s)function Write-DeepSeekConfig\s*\{.*?(?=^function \w+\s*\{|\Z)') { $matches[0] } else { "" }
+if ($writeDeepSeekConfigFunc -notmatch 'New-SettingsJsonMemorySnapshot') {
+    throw "Write-DeepSeekConfig must call New-SettingsJsonMemorySnapshot before modifications"
+}
+if ($writeDeepSeekConfigFunc -notmatch 'Backup-SettingsJsonSafe') {
+    throw "Write-DeepSeekConfig must call Backup-SettingsJsonSafe for safe on-disk backup"
+}
+if ($writeDeepSeekConfigFunc -notmatch 'Restore-SettingsJsonFromMemorySnapshot') {
+    throw "Write-DeepSeekConfig must call Restore-SettingsJsonFromMemorySnapshot on failure"
+}
+Write-Host "[check]  19. Write-DeepSeekConfig uses memory snapshot and safe backup correctly OK"
+
+# 20. Prohibit dangerous Copy-Item rollback patterns that use safe backup as live config source
+$dangerousPatterns = @(
+    'Copy-Item\s+-LiteralPath\s+\$result\.BackupPath\s+-Destination\s+\$ConfigPath',
+    'Copy-Item\s+-LiteralPath\s+\$preBackup\s+-Destination\s+\$configPath',
+    'Copy-Item\s+-Path\s+\$result\.BackupPath\s+-Destination\s+\$ConfigPath',
+    'Copy-Item\s+-Path\s+\$preBackup\s+-Destination\s+\$configPath'
+)
+foreach ($pattern in $dangerousPatterns) {
+    $allSourceText = "$commonText`n$configWriterText`n$uninstallText"
+    if ($allSourceText -match $pattern) {
+        throw "Dangerous Copy-Item rollback pattern found: $pattern. Use Restore-SettingsJsonFromMemorySnapshot instead."
+    }
+}
+Write-Host "[check]  20. no dangerous Copy-Item rollback from redacted backup OK"
+
+# 21. uninstall-config.ps1 restore flow must call New-SettingsJsonMemorySnapshot and Restore-SettingsJsonFromMemorySnapshot
+if ($uninstallText -notmatch 'New-SettingsJsonMemorySnapshot') {
+    throw "uninstall-config.ps1 must call New-SettingsJsonMemorySnapshot before restore"
+}
+if ($uninstallText -notmatch 'Restore-SettingsJsonFromMemorySnapshot') {
+    throw "uninstall-config.ps1 must call Restore-SettingsJsonFromMemorySnapshot on restore failure"
+}
+# uninstall-config.ps1 must NOT use $preBackup as Copy-Item rollback source
+if ($uninstallText -match 'Copy-Item\s+-LiteralPath\s+\$preBackup\s+-Destination\s+\$configPath') {
+    throw "uninstall-config.ps1 must NOT use Copy-Item -LiteralPath `$preBackup -Destination `$configPath for rollback"
+}
+Write-Host "[check]  21. uninstall-config.ps1 uses memory snapshot rollback correctly OK"
+
+# 22. Release key scan regex must cover _ and -
+# check.ps1 self-text is accessible via the script file content
+$checkPs1Self = if (Test-Path (Join-Path $RootDir "scripts\check.ps1")) {
+    [System.IO.File]::ReadAllText((Join-Path $RootDir "scripts\check.ps1"), [System.Text.Encoding]::UTF8)
+} else { "" }
+if ($checkPs1Self -notmatch 'sk-\\\[A-Za-z0-9_\-\\]\\\{20,\\\}' -and $checkPs1Self -notmatch "sk-\[A-Za-z0-9_-\]\{20,\}") {
+    throw "Release key scan regex must include _ and -: sk-[A-Za-z0-9_-]{20,}"
+}
+Write-Host "[check]  22. release key scan regex covers _ and - OK"
+
+Write-Host "[check] v1.3.3 redacted backup rollback safety anti-regression OK"
+
 # ============================================================
 Write-Host ""
 Write-Host "[check] v1.3.3 buyer documentation safety"
@@ -6707,7 +6787,7 @@ if (Test-Path $releaseZip) {
         Write-Host "[check]   3. ZIP 中无禁用条目 OK"
 
         # 4. 扫描文件内容：API Key 泄露与 OpenCode 引用
-        $skPattern = 'sk-[A-Za-z0-9]{20,}'
+        $skPattern = 'sk-[A-Za-z0-9_-]{20,}'
         $scanExts = @('.txt', '.md', '.ps1', '.cmd', '.json', '.env', '.log', '.yml', '.yaml', '.cfg', '.ini', '.xml', '.html', '.htm', '.css', '.js', '.ts', '.py', '.sh', '.bat')
         foreach ($entry in $zip.Entries) {
             if ($entry.FullName.EndsWith('/')) { continue }

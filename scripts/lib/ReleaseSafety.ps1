@@ -9,7 +9,7 @@ function Redact-SensitiveMatch {
         return '<redacted-api-key>'
     }
 
-    $keyMatch = [regex]::Match($RawMatch, 'sk-[A-Za-z0-9]{20,}')
+    $keyMatch = [regex]::Match($RawMatch, 'sk-[A-Za-z0-9_-]{20,}')
     if ($keyMatch.Success) {
         $key = [string]$keyMatch.Value
         $suffix = if ($key.Length -ge 4) { $key.Substring($key.Length - 4) } else { '' }
@@ -78,7 +78,7 @@ function Add-ApiKeyHitsFromContent {
         $matches = [regex]::Matches($Content, $pattern)
         foreach ($match in $matches) {
             $candidate = $match.Value.Trim()
-            $keyMatches = [regex]::Matches($candidate, 'sk-[A-Za-z0-9]{20,}')
+            $keyMatches = [regex]::Matches($candidate, 'sk-[A-Za-z0-9_-]{20,}')
 
             foreach ($keyMatch in $keyMatches) {
                 $keyPart = $keyMatch.Value

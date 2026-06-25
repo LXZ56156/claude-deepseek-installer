@@ -212,3 +212,15 @@
 | ACC-058 | `repair-deps.ps1` | Claude usable + Node/npm missing reports base usability and fallback-only WARN; native PATH missing/present/write-fail do not trigger installs | Claude-available branch must be before repair install path and distinguish base usability from fallback readiness | 否 |
 | ACC-059 | `Start-Here.ps1` | 不适用；source-gated | maintenance menu/default test action required; maintenance block must not call `Open-DeepSeekApiKeyPage` | 否 |
 | ACC-060 | tracked source tree | 不适用；source-gated | `git grep -I` rejects `ccdi-cfg-input`/`cfg-input` outside the gate itself | 否；结论为 repo 内未找到产品源生成器 |
+
+## 2026-06-26 redacted backup rollback safety (ACC-061)
+
+| ID | Problem | Root cause | Fix | Regression |
+|---|---|---|---|---|
+| ACC-061 | Safe backup rollback could overwrite real settings.json with `__REDACTED_BY_CCDI__` | `Write-DeepSeekConfig` and `Restore-LatestConfigBackup` used `Copy-Item` from the redacted safe backup as the failure rollback source, but the safe backup intentionally replaces the real API Key with a placeholder | Added `New-SettingsJsonMemorySnapshot` (in-memory only, never logged/written) and `Restore-SettingsJsonFromMemorySnapshot` (restores from memory or deletes newly-created file on failure); all three write/restore paths now snapshot before modification and rollback from memory, not from the on-disk redacted backup. Release key-scan regexes updated from `sk-[A-Za-z0-9]{20,}` to `sk-[A-Za-z0-9_-]{20,}` to match the validated key format. | `check.ps1` memory-snapshot/rollback source gates, dangerous Copy-Item prohibition, release regex gate; `test-vm-acceptance.ps1` 4 functional tests covering safe backup isolation, memory rollback, missing-file cleanup, and regex coverage |
+
+## 2026-06-26 ACC-061 coverage index
+
+| ID | 修复函数/脚本 | test-vm-acceptance.ps1 断言 | check.ps1 防回归 | 需专用 VM Live |
+|---|---|---|---|---|
+| ACC-061 | `New-SettingsJsonMemorySnapshot` / `Restore-SettingsJsonFromMemorySnapshot` (common.ps1) / `Write-DeepSeekConfig` (config-writer.ps1) / `Restore-LatestConfigBackup` (uninstall-config.ps1) / `Restore-ConfigFromBackup` (config-writer.ps1) / key-scan regexes in build-release/ReleaseSafety/ux-check/interactive-acceptance/simulate-release/test-vm | memory snapshot preserves real Key; safe backup contains REDACTED placeholder only; memory rollback restores real Key + non-sensitive fields; missing-file rollback deletes incomplete file; no dangerous Copy-Item from redacted backup; release regex covers _ and - | memory snapshot/rollback function existence; Write-DeepSeekConfig must call both; no `Copy-Item.*BackupPath.*ConfigPath` in source; uninstall must use memory rollback; release scan regex gate | 否；host 沙盒验证，不涉及真实安装或 API |

@@ -237,6 +237,118 @@ function Backup-SettingsJsonSafe {
 }
 
 # ============================================================
+# 内存快照与内存回滚（程序内部失败回滚源）
+# ============================================================
+
+function New-SettingsJsonMemorySnapshot {
+    <#
+    .SYNOPSIS
+        在修改 settings.json 之前创建内存快照。
+        快照仅存于内存中，不落盘，不写日志，不进入 report/state。
+        用于程序内部失败时回滚到原始配置，避免用脱敏备份覆盖真实 Key。
+    .PARAMETER FilePath
+        settings.json 文件路径
+    .RETURNS
+        PSCustomObject with Exists (bool), Raw (string|null), Error (string)
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath
+    )
+
+    $snapshot = [ordered]@{
+        Exists = $false
+        Raw    = $null
+        Error  = ""
+    }
+
+    try {
+        if (Test-Path -LiteralPath $FilePath -PathType Leaf) {
+            $snapshot.Exists = $true
+            $snapshot.Raw = [System.IO.File]::ReadAllText($FilePath, [System.Text.Encoding]::UTF8)
+        }
+    }
+    catch {
+        $snapshot.Error = $_.Exception.Message
+    }
+
+    return [PSCustomObject]$snapshot
+}
+
+function Restore-SettingsJsonFromMemorySnapshot {
+    <#
+    .SYNOPSIS
+        使用内存快照回滚 settings.json。
+        如果原文件存在，将内存中的原始内容写回。
+        如果原文件不存在（即本次新创建），删除新创建的残缺文件。
+        内存快照中的 Raw 可能包含真实 API Key，绝不写日志/报告/state。
+    .PARAMETER FilePath
+        settings.json 文件路径
+    .PARAMETER Snapshot
+        由 New-SettingsJsonMemorySnapshot 创建的内存快照
+    .PARAMETER Reason
+        回滚原因（用于日志和用户提示，不含 Key）
+    .RETURNS
+        PSCustomObject with Success, RestoredExisting, RemovedCreatedFile, Error
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [Parameter(Mandatory = $true)]
+        $Snapshot,
+
+        [string]$Reason = ""
+    )
+
+    $result = [ordered]@{
+        Success            = $false
+        RestoredExisting   = $false
+        RemovedCreatedFile = $false
+        Error              = ""
+    }
+
+    try {
+        $configDir = Split-Path -Parent $FilePath
+        if ($configDir -and -not (Test-Path -LiteralPath $configDir)) {
+            New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+        }
+
+        if ($Snapshot.Exists) {
+            if ($null -eq $Snapshot.Raw) {
+                $result.Error = "内存快照为空，无法恢复原配置"
+                return [PSCustomObject]$result
+            }
+
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($FilePath, [string]$Snapshot.Raw, $utf8NoBom)
+
+            $result.Success = $true
+            $result.RestoredExisting = $true
+            Write-Log "WARN" "settings.json 已从内存快照回滚。Reason=$Reason"
+            Write-Warning "已恢复修改前的配置文件。"
+            return [PSCustomObject]$result
+        }
+
+        if (Test-Path -LiteralPath $FilePath) {
+            Remove-Item -LiteralPath $FilePath -Force -ErrorAction Stop
+            $result.RemovedCreatedFile = $true
+        }
+
+        $result.Success = $true
+        Write-Log "WARN" "settings.json 写入失败后已移除新创建文件。Reason=$Reason"
+        Write-Warning "写入失败，已清理未完成的配置文件。"
+        return [PSCustomObject]$result
+    }
+    catch {
+        $result.Error = $_.Exception.Message
+        Write-Log "ERROR" "Restore-SettingsJsonFromMemorySnapshot failed: $($result.Error)"
+        Write-Warning "尝试恢复原配置失败，请运行一键诊断。"
+        return [PSCustomObject]$result
+    }
+}
+
+# ============================================================
 # ZIP 内运行检测
 # ============================================================
 
@@ -2883,8 +2995,8 @@ function Sanitize-SecretLikeText {
 
     $result = $Text
 
-    # 脱敏完整 DeepSeek Key: sk-[A-Za-z0-9]{20,}
-    $keyPattern = 'sk-[A-Za-z0-9]{20,}'
+    # 脱敏完整 DeepSeek Key: sk-[A-Za-z0-9_-]{20,}
+    $keyPattern = 'sk-[A-Za-z0-9_-]{20,}'
     $matches = [regex]::Matches($result, $keyPattern)
     foreach ($m in $matches) {
         $result = $result.Replace($m.Value, (Mask-ApiKey -Key $m.Value))
@@ -2892,11 +3004,11 @@ function Sanitize-SecretLikeText {
 
     # 脱敏 env 变量值中的 Key（如 ANTHROPIC_AUTH_TOKEN=sk-xxx）
     $tokenPatterns = @(
-        'ANTHROPIC_AUTH_TOKEN["\s:=]+(sk-[A-Za-z0-9]+)',
-        'DEEPSEEK_API_KEY["\s:=]+(sk-[A-Za-z0-9]+)',
-        'CCDI_API_KEY["\s:=]+(sk-[A-Za-z0-9]+)',
-        'x-api-key["\s:=]+(sk-[A-Za-z0-9]+)',
-        'Authorization["\s:=]+Bearer\s+(sk-[A-Za-z0-9]+)'
+        'ANTHROPIC_AUTH_TOKEN["\s:=]+(sk-[A-Za-z0-9_-]+)',
+        'DEEPSEEK_API_KEY["\s:=]+(sk-[A-Za-z0-9_-]+)',
+        'CCDI_API_KEY["\s:=]+(sk-[A-Za-z0-9_-]+)',
+        'x-api-key["\s:=]+(sk-[A-Za-z0-9_-]+)',
+        'Authorization["\s:=]+Bearer\s+(sk-[A-Za-z0-9_-]+)'
     )
 
     foreach ($pattern in $tokenPatterns) {
