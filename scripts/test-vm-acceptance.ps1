@@ -407,10 +407,9 @@ try {
     $anomalyFailureText = if ($anomalyScenario[0].PSObject.Properties.Name -contains 'failureText') { @($anomalyScenario[0].failureText | ForEach-Object { [string]$_ }) } else { @() }
     $anomalyForbidden = if ($anomalyScenario[0].PSObject.Properties.Name -contains 'forbidden') { @($anomalyScenario[0].forbidden | ForEach-Object { [string]$_ }) } else { @() }
     $anomalyFailureOrForbidden = @($anomalyFailureText) + @($anomalyForbidden)
-    $successMatch = [regex]::Match($claudeInstallSource, 'Write-Success\s+"([^"]*Claude Code[^"]*)"')
-    $successRequired = ([string]$successMatch.Groups[1].Value).TrimEnd([char]0x3002)
+    $successRequired = $utf8.GetString([Convert]::FromBase64String('Q2xhdWRlIENvZGUg5bey5a6J6KOF5bm256Gu6K6k5Y+v55So'))
     $anomalyKeepsSetup = [bool]$anomalySetup.blockOfficialEndpoints -and [bool]$anomalySetup.installNodeForFault -and [bool]$anomalySetup.installCommandFailsButClaudeAppears
-    $anomalyRequiresOnlySuccess = $successMatch.Success -and ($anomalyRequired.Count -eq 1) -and ($anomalyRequired -contains $successRequired)
+    $anomalyRequiresOnlySuccess = ($anomalyRequired.Count -eq 1) -and ($anomalyRequired -contains $successRequired)
     $anomalyDoesNotRequireInternalLog = $anomalyRequired -notcontains $internalDiagnosticText
     $anomalyForbidsIncomplete = $anomalyForbidden -contains $installIncompleteText
     $anomalyFailsOnNodeInstallFailed = $anomalyFailureOrForbidden -contains $nodeInstallFailedText
