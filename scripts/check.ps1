@@ -126,6 +126,8 @@ $requiredCommands = @(
     "Write-FatalError",
     "Invoke-CommandSafe",
     "Read-ApiKeyWithMaskedConfirmation",
+    "Test-ApiKeyInputSafe",
+    "Backup-SettingsJsonSafe",
     "Sanitize-ReportText",
     "Sanitize-PathForReport",
     "Convert-WindowsPathToWslPath",
@@ -163,6 +165,9 @@ $requiredCommands = @(
     "Get-WslVersionClean",
     "Resolve-NpmCmdPath",
     "Resolve-NodeExePath",
+    "Test-NodeCommandInFreshShell",
+    "Test-NpmCommandInFreshShell",
+    "Ensure-NodeNpmPathForFreshShell",
     "Test-WingetNodeInstallAccepted",
     "Install-ClaudeCodeViaWinget"
 )
@@ -790,6 +795,73 @@ if ($commonText -notmatch 'yyyyMMdd-HHmmss-fff') {
     throw "Backup-File must use millisecond precision to avoid overwriting backups created in the same second"
 }
 
+Write-Host "[check] safe settings.json backup and API key validation"
+$safeBackupRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ccdi-safe-backup-check-" + [Guid]::NewGuid().ToString("N"))
+$oldCcdiTestMode = $env:CCDI_TEST_MODE
+$oldCcdiArtifactRoot = $env:CCDI_TEST_ARTIFACT_ROOT
+try {
+    New-Item -ItemType Directory -Path $safeBackupRoot -Force | Out-Null
+    $env:CCDI_TEST_MODE = "1"
+    $env:CCDI_TEST_ARTIFACT_ROOT = $safeBackupRoot
+    $safeSettingsPath = Join-Path $safeBackupRoot "settings.json"
+    $safeBackupKey = "sk-" + ("testSECRET" * 4) + "123456"
+    $safeSettings = [PSCustomObject]@{
+        env = [PSCustomObject]@{
+            ANTHROPIC_AUTH_TOKEN = $safeBackupKey
+            ANTHROPIC_BASE_URL = "https://api.deepseek.com"
+            CUSTOM_KEEP = "keep-me"
+        }
+        permissions = [PSCustomObject]@{
+            allow = @("Bash(echo:*)")
+        }
+        autoUpdatesChannel = "stable"
+    }
+    $safeSettings | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $safeSettingsPath -Encoding UTF8
+    $safeBackupPath = Backup-SettingsJsonSafe -FilePath $safeSettingsPath
+    if (-not $safeBackupPath -or -not (Test-Path -LiteralPath $safeBackupPath)) {
+        throw "Backup-SettingsJsonSafe did not create a backup"
+    }
+    $safeBackupText = Get-Content -LiteralPath $safeBackupPath -Raw -Encoding UTF8
+    if ($safeBackupText -match [regex]::Escape($safeBackupKey)) {
+        throw "safe settings backup leaked plaintext API key"
+    }
+    if ($safeBackupText -notmatch "__REDACTED_BY_CCDI__" -or $safeBackupText -notmatch "Bash\(echo:\*\)" -or $safeBackupText -notmatch "autoUpdatesChannel") {
+        throw "safe settings backup did not preserve non-sensitive structure or redacted token"
+    }
+    $plainBackup = Backup-File -FilePath $safeSettingsPath
+    if ($plainBackup) {
+        throw "Backup-File must refuse plaintext settings.json backups containing API keys"
+    }
+
+    $validApiKey = "sk-" + ("a" * 24)
+    if (-not (Test-ApiKeyInputSafe -Key $validApiKey).Valid) {
+        throw "Test-ApiKeyInputSafe rejected a valid single-line sk- token"
+    }
+    $invalidApiKeySamples = @(
+        "",
+        "sk-short",
+        "__REDACTED_BY_CCDI__",
+        "not-sk-" + ("a" * 40),
+        "sk-" + ("a" * 10),
+        "sk-" + ("a" * 24) + " with-space",
+        "sk-" + ("a" * 24) + "`t",
+        "sk-" + ("a" * 24) + "`nextra",
+        "sk-" + ("a" * 24) + "中文",
+        "this is a long paragraph that should never be accepted as an api key because it is not a token"
+    )
+    foreach ($invalidApiKey in $invalidApiKeySamples) {
+        if ((Test-ApiKeyInputSafe -Key $invalidApiKey).Valid) {
+            throw "Test-ApiKeyInputSafe accepted invalid input: $invalidApiKey"
+        }
+    }
+    Write-Host "[check]   safe settings backup and API key validation OK"
+}
+finally {
+    if ($null -eq $oldCcdiTestMode) { Remove-Item Env:\CCDI_TEST_MODE -ErrorAction SilentlyContinue } else { $env:CCDI_TEST_MODE = $oldCcdiTestMode }
+    if ($null -eq $oldCcdiArtifactRoot) { Remove-Item Env:\CCDI_TEST_ARTIFACT_ROOT -ErrorAction SilentlyContinue } else { $env:CCDI_TEST_ARTIFACT_ROOT = $oldCcdiArtifactRoot }
+    Remove-Item -LiteralPath $safeBackupRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host "[check] Doctor state guardrails"
 $doctorText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
 if ($doctorText -notmatch '\$script:DoctorState') {
@@ -813,6 +885,77 @@ Write-Host "[check] Claude doctor interactive invocation"
 $claudeInstallText = Get-Content -Path (Join-Path $RootDir "lib\claude-install.ps1") -Raw -Encoding UTF8
 $commonText = Get-Content -Path (Join-Path $RootDir "lib\common.ps1") -Raw -Encoding UTF8
 $doctorText = Get-Content -Path (Join-Path $RootDir "doctor.ps1") -Raw -Encoding UTF8
+$configWriterText = Get-Content -Path (Join-Path $RootDir "lib\config-writer.ps1") -Raw -Encoding UTF8
+$uninstallConfigText = Get-Content -Path (Join-Path $RootDir "uninstall-config.ps1") -Raw -Encoding UTF8
+$startHereTextForP0 = Get-Content -Path (Join-Path $RootDir "Start-Here.ps1") -Raw -Encoding UTF8
+$repairDepsTextForP0 = Get-Content -Path (Join-Path $RootDir "repair-deps.ps1") -Raw -Encoding UTF8
+
+if ($configWriterText -match 'Backup-File\s+-FilePath\s+\$ConfigPath') {
+    throw "Write-DeepSeekConfig must use Backup-SettingsJsonSafe for settings.json backups"
+}
+if ($uninstallConfigText -match 'Backup-File\s+-FilePath\s+\$configPath') {
+    throw "uninstall-config.ps1 must use Backup-SettingsJsonSafe for settings.json backups"
+}
+if ($commonText -notmatch 'function Backup-SettingsJsonSafe' -or $commonText -notmatch 'Backup-File refused plaintext settings\.json backup') {
+    throw "common.ps1 must provide safe settings backup and Backup-File plaintext settings defense"
+}
+if ($configWriterText -notmatch '检测到 Claude Code 默认配置，正在安全合并 DeepSeek 设置' -or
+    $configWriterText -notmatch '检测到已有 DeepSeek 配置，将先生成脱敏安全备份') {
+    throw "Write-DeepSeekConfig must distinguish default Claude settings from existing DeepSeek config"
+}
+if ($commonText -match 'trim 以防粘贴带入空格' -or $commonText -match 'trim\(\).*API Key') {
+    throw "API key input must not silently trim away unsafe whitespace before validation"
+}
+if ($commonText -notmatch 'function Test-ApiKeyInputSafe' -or $commonText -notmatch '\^sk-\[A-Za-z0-9_-\]\{20,\}\$') {
+    throw "common.ps1 must enforce strict sk- API key validation"
+}
+if ($commonText -notmatch 'function Test-NodeCommandInFreshShell' -or
+    $commonText -notmatch 'function Test-NpmCommandInFreshShell' -or
+    $commonText -notmatch 'function Ensure-NodeNpmPathForFreshShell') {
+    throw "common.ps1 must expose Node/npm fresh shell helpers"
+}
+$nodeFreshBodyMatch = [regex]::Match($commonText, '(?s)function Test-NodeNpmCommandInFreshShell\s*\{.*?(?=^function Test-NodeCommandInFreshShell)', [System.Text.RegularExpressions.RegexOptions]::Multiline)
+if (-not $nodeFreshBodyMatch.Success -or $nodeFreshBodyMatch.Value -match 'Refresh-CurrentProcessPath') {
+    throw "Test-NodeCommandInFreshShell/Test-NpmCommandInFreshShell must not depend on Refresh-CurrentProcessPath"
+}
+if ($claudeInstallText -notmatch 'Ensure-NodeNpmPathForFreshShell' -or $claudeInstallText -notmatch 'node_npm_ready_fresh_shell') {
+    throw "Node.js winget postcheck must require Node/npm fresh shell readiness"
+}
+if ($repairDepsTextForP0 -notmatch 'Claude Code 基础使用已可用' -or
+    $repairDepsTextForP0 -notmatch '备用依赖存在问题' -or
+    $repairDepsTextForP0 -notmatch '新 PowerShell Node\.js' -or
+    $repairDepsTextForP0 -notmatch 'Node/npm fresh shell 修复') {
+    throw "repair-deps.ps1 must distinguish Claude base usability from Node/npm fallback readiness"
+}
+if ($startHereTextForP0 -notmatch 'function Get-CcdiCurrentUserState' -or
+    $startHereTextForP0 -notmatch 'function Show-MaintenanceMenu' -or
+    $startHereTextForP0 -notmatch '重新执行完整安装流程' -or
+    $startHereTextForP0 -notmatch '直接回车默认选 1') {
+    throw "Start-Here.ps1 must provide maintenance mode with default test action"
+}
+$maintenanceBlock = [regex]::Match($startHereTextForP0, '(?s)function Show-MaintenanceMenu\s*\{.*?(?=^function Show-MainMenu)', [System.Text.RegularExpressions.RegexOptions]::Multiline)
+if (-not $maintenanceBlock.Success -or $maintenanceBlock.Value -match 'Open-DeepSeekApiKeyPage') {
+    throw "maintenance mode must not open the DeepSeek API Key page unless user chooses key update"
+}
+$cfgInputGrep = @(& git -C $RootDir grep -n -I -E 'ccdi-cfg-input|cfg-input' -- . 2>$null)
+$cfgInputGrepExit = $LASTEXITCODE
+if ($cfgInputGrepExit -ne 0 -and $cfgInputGrepExit -ne 1) {
+    throw "Unable to scan tracked files for ccdi-cfg-input gate"
+}
+$cfgInputHits = @($cfgInputGrep | Where-Object {
+    $_ -and
+    $_ -notmatch '^scripts/check\.ps1:' -and
+    $_ -notmatch '^\.\/scripts/check\.ps1:' -and
+    $_ -notmatch '^"scripts/check\.ps1":' -and
+    $_ -notmatch '^"\.\/scripts/check\.ps1":' -and
+    $_ -notmatch '^docs/dev/bug-registry\.md:' -and
+    $_ -notmatch '^\.\/docs/dev/bug-registry\.md:' -and
+    $_ -notmatch '^AGENTS\.md:' -and
+    $_ -notmatch '^\.\/AGENTS\.md:'
+})
+if ($cfgInputHits.Count -gt 0) {
+    throw "release source must not contain ccdi-cfg-input temp input implementation: $($cfgInputHits -join ', ')"
+}
 
 # 1. Invoke-ClaudeDoctorInteractiveSafe exists with required fields
 if ($claudeInstallText -notmatch 'function Invoke-ClaudeDoctorInteractiveSafe') {
@@ -4286,9 +4429,9 @@ if ($claudeInstallText -notmatch 'Wait-ClaudeCommandReady\s+-TotalWaitSec\s+30\s
 if ($claudeInstallText -match 'Wait-ClaudeCommandReady\s+-TotalWaitSec\s+30\s+-IntervalSec\s+2\s+-RequireFreshShell\s+-Context "npm 镜像安装后确认"') {
     throw "npm postcheck must not require fresh shell before continuing current install flow"
 }
-if ($claudeInstallText -notmatch 'Node install classification: node_ready_after_install' -or
+if ($claudeInstallText -notmatch 'Node install classification: node_npm_ready_fresh_shell' -or
     $claudeInstallText -notmatch 'Node install classification: node_install_failed') {
-    throw "winget Node branch must log explicit node_ready_after_install/node_install_failed classifications"
+    throw "winget Node branch must log explicit node_npm_ready_fresh_shell/node_install_failed classifications"
 }
 if ($claudeInstallText -notmatch 'Status\s*=\s*"node_install_failed"') {
     throw "winget Node fixed-path verification failure must return node_install_failed"
@@ -5154,17 +5297,16 @@ Write-Host "[check]   1c. Scenario C node.exe fixed-path mock OK"
 $repairDepsText = Get-Content -Path (Join-Path $RootDir "repair-deps.ps1") -Raw -Encoding UTF8
 $repairCmdText = Get-Content -Path (Join-Path $RootDir "一键修复依赖.cmd") -Raw -Encoding UTF8
 $repairDepsMainIndex = $repairDepsText.IndexOf('function Start-RepairDeps')
-$claudeAvailableIndex = $repairDepsText.IndexOf('if ($claudeAvailable) {', $repairDepsMainIndex)
+$claudePathRepairStageIndex = $repairDepsText.IndexOf('Repair-ClaudePathIfNeeded', $repairDepsMainIndex)
+$claudeAvailableIndex = $repairDepsText.IndexOf('if ($claudeAvailable) {', $claudePathRepairStageIndex)
 $invokeRepairIndex = $repairDepsText.IndexOf('Invoke-ClaudeRepair', $repairDepsMainIndex)
 if ($claudeAvailableIndex -lt 0 -or $invokeRepairIndex -lt 0 -or $claudeAvailableIndex -gt $invokeRepairIndex) {
     throw "repair-deps.ps1 must branch on Claude availability before Invoke-ClaudeRepair"
 }
 $claudeAvailableArea = $repairDepsText.Substring($claudeAvailableIndex, [Math]::Min($invokeRepairIndex - $claudeAvailableIndex, 5000))
-if ($claudeAvailableArea -notmatch 'Claude Code 已可用，无需修复。' -or $claudeAvailableArea -notmatch 'Node\.js 仅 npm fallback/开发场景需要') {
-    throw "repair-deps.ps1 Claude-available branch must state that Node.js/npm are optional and no repair is needed"
-}
-if ($claudeAvailableArea -match 'Add-CR\s+"Node\.js"\s+"(?:WARN|ERROR)"' -or $claudeAvailableArea -match 'Add-CR\s+"npm"\s+"(?:WARN|ERROR)"') {
-    throw "repair-deps.ps1 must not mark Node.js/npm WARN/ERROR when Claude Code is usable"
+if ($claudeAvailableArea -notmatch 'Claude Code (基础使用已可用|已可用；Node\.js/npm 新 PowerShell 验证通过)' -or
+    $claudeAvailableArea -notmatch '备用安装方式/npm fallback') {
+    throw "repair-deps.ps1 Claude-available branch must distinguish Claude base usability from optional Node/npm fallback readiness"
 }
 foreach ($forbiddenRepairText in @(
     '需要安装/升级 Node.js',
@@ -5210,18 +5352,21 @@ foreach ($requiredPathHelper in @('Get-NativeClaudeBinPath', 'Test-UserPathConta
     }
 }
 $repairClaudePathCallIndex = $repairDepsText.IndexOf('Repair-ClaudePathIfNeeded', $repairDepsMainIndex)
-$noRepairMsgIndex = $repairDepsText.IndexOf('Claude Code 已可用，无需修复。', $repairDepsMainIndex)
-if ($repairClaudePathCallIndex -lt 0 -or $noRepairMsgIndex -lt 0 -or $repairClaudePathCallIndex -ge $noRepairMsgIndex) {
-    throw "repair-deps.ps1 must call Repair-ClaudePathIfNeeded before the 'Claude Code 已可用，无需修复。' early return (ACC-048)"
+$baseUsableMsgIndex = $repairDepsText.IndexOf('Claude Code 基础使用已可用。', $repairDepsMainIndex)
+$freshReadyMsgIndex = $repairDepsText.IndexOf('Claude Code 已可用；Node.js/npm 新 PowerShell 验证通过。', $repairDepsMainIndex)
+$usableMsgIndexes = @($baseUsableMsgIndex, $freshReadyMsgIndex) | Where-Object { $_ -ge 0 } | Sort-Object
+$firstUsableMsgIndex = if (@($usableMsgIndexes).Count -gt 0) { @($usableMsgIndexes)[0] } else { -1 }
+if ($repairClaudePathCallIndex -lt 0 -or $firstUsableMsgIndex -lt 0 -or $repairClaudePathCallIndex -ge $firstUsableMsgIndex) {
+    throw "repair-deps.ps1 must call Repair-ClaudePathIfNeeded before the Claude-available early return messages (ACC-048)"
 }
-if ($repairDepsText -notmatch 'if\s*\(\s*-not\s+\$pathWriteFailed\s*\)[\s\S]{0,300}Claude Code 已可用，无需修复') {
-    throw "repair-deps.ps1 must gate the 'Claude Code 已可用，无需修复。' message on -not `$pathWriteFailed so PATH write failure is not masked (ACC-048)"
+if ($repairDepsText -notmatch 'if\s*\(\s*-not\s+\$pathWriteFailed\s*\)[\s\S]{0,600}Claude Code (基础使用已可用|已可用；Node\.js/npm 新 PowerShell 验证通过)') {
+    throw "repair-deps.ps1 must gate Claude-available success messages on -not `$pathWriteFailed so PATH write failure is not masked (ACC-048)"
 }
 if ($repairDepsText -notmatch 'PATH 自动修复失败') {
     throw "repair-deps.ps1 must report 'PATH 自动修复失败' when Native PATH write fails (ACC-048)"
 }
-if ($repairDepsText -notmatch 'Claude Code 当前可用，但 PATH 自动修复失败') {
-    throw "repair-deps.ps1 must state 'Claude Code 当前可用，但 PATH 自动修复失败' when PATH write fails, not 'no repair needed' (ACC-048)"
+if ($repairDepsText -notmatch 'Claude Code 当前固定路径可用，但 PATH 自动修复失败') {
+    throw "repair-deps.ps1 must state 'Claude Code 当前固定路径可用，但 PATH 自动修复失败' when PATH write fails, not a success message (ACC-048)"
 }
 if ($repairDepsText -notmatch '手动将' -or $repairDepsText -notmatch '加入用户 PATH') {
     throw "repair-deps.ps1 PATH write failure must suggest manually adding native bin to User PATH (ACC-048)"

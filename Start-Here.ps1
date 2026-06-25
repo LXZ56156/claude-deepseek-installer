@@ -852,8 +852,13 @@ function Step-GetApiKey {
             Write-Error-Msg "$($envKey.Error)。非交互模式需要设置环境变量。"
             return $null
         }
-        Write-Info "已从环境变量 $($envKey.Source) 读取 API Key: $(Mask-ApiKey -Key $envKey.Key)"
-        return $envKey.Key
+        $envKeyCheck = Test-ApiKeyInputSafe -Key $envKey.Key
+        if (-not $envKeyCheck.Valid) {
+            Write-Error-Msg "环境变量中的 API Key 格式不安全: $($envKeyCheck.Reason)"
+            return $null
+        }
+        Write-Info "已从环境变量 $($envKey.Source) 读取 API Key: $(Mask-ApiKey -Key $envKeyCheck.Normalized)"
+        return $envKeyCheck.Normalized
     }
 
     # 自动打开 DeepSeek API Key 页面（首次）
@@ -895,15 +900,6 @@ function Step-GetApiKey {
                     Write-Info "已取消 API Key 输入。"
                     Write-ApiKeySkipGuidance
                     return $null
-                }
-
-                # 格式检查
-                if (-not (Is-ApiKeyFormatValid -Key $apiKey)) {
-                    Write-Warning "API Key 格式看起来不典型（DeepSeek Key 通常以 sk- 开头，长度 >= 32 字符）"
-                    if (-not (Confirm-UserChoice -Message "是否仍然使用此 Key？" -Default "No")) {
-                        Write-Info "已取消。您可以稍后重新运行配置。"
-                        return $null
-                    }
                 }
 
                 return $apiKey
@@ -1041,17 +1037,49 @@ function Step-TestApi {
 # Step 6: 创建测试项目
 # ============================================================
 
+function Test-CcdiManagedTestProject {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Container)) {
+        return $false
+    }
+
+    $readmePath = Join-Path $Path "README.md"
+    $claudeMdPath = Join-Path $Path "CLAUDE.md"
+    if (Test-Path -LiteralPath $readmePath) {
+        $readmeText = Get-Content -LiteralPath $readmePath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ($readmeText -match "Claude Code 测试项目" -and $readmeText -match "DeepSeek API 配置") {
+            return $true
+        }
+    }
+    if (Test-Path -LiteralPath $claudeMdPath) {
+        $claudeMdText = Get-Content -LiteralPath $claudeMdPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ($claudeMdText -match "Claude Code \+ DeepSeek API 本地配置助手") {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Step-CreateTestProject {
     Write-Step "Step 6/7：创建测试项目"
 
     $desktopPath = Get-DesktopPath
     $testDir = Join-Path $desktopPath "ClaudeCode-Test"
 
-    # 如果目录已存在，使用带时间戳的备用名
+    # 如果目录已存在且是本工具创建的测试目录，直接复用，避免重复生成目录。
     if (Test-Path $testDir) {
-        $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-        $testDir = Join-Path $desktopPath "ClaudeCode-Test-$timestamp"
-        Write-Info "ClaudeCode-Test 目录已存在，创建备用目录: $testDir"
+        if (Test-CcdiManagedTestProject -Path $testDir) {
+            $script:TestProjectPath = $testDir
+            Write-Info "检测到已有 ClaudeCode-Test 测试项目，将直接复用: $testDir"
+            return $true
+        }
+        else {
+            $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+            $testDir = Join-Path $desktopPath "ClaudeCode-Test-$timestamp"
+            Write-Info "桌面已有非本工具测试目录，创建备用目录: $testDir"
+        }
     }
 
     try {
@@ -2261,11 +2289,149 @@ function Start-UninstallMenu {
 # 主菜单
 # ============================================================
 
+function Get-CcdiCurrentUserState {
+    $claude = Test-ClaudeCommandExisting
+    $fresh = if ($claude.Usable) { Test-ClaudeCommandInFreshShell -TestSafe:$script:TestSafeMode } else { $null }
+    $deepSeek = Get-DeepSeekConfigStatus
+    $configFile = Test-ClaudeConfigExists
+    $state = Read-CcdiState
+    $lastApiTest = if ($state) { Get-CcdiStateValue -State $state -Name "lastApiTest" -Default "" } else { "" }
+    $installMethod = if ($state) { Get-CcdiStateValue -State $state -Name "claudeInstallMethod" -Default "" } else { "" }
+    $installAt = if ($state) { Get-CcdiStateValue -State $state -Name "claudeInstallCompletedAt" -Default "" } else { "" }
+
+    $redactedKey = ($deepSeek.ErrorMessage -match "脱敏")
+    $maintenanceReady = $claude.Usable -and $deepSeek.IsConfigured -and $deepSeek.HasApiKey -and -not $redactedKey
+    $recommended = "install"
+    if ($maintenanceReady) {
+        $recommended = "maintenance"
+    }
+    elseif ($configFile.Exists -and -not $configFile.IsValid) {
+        $recommended = "repair_config"
+    }
+    elseif ($claude.Usable -and -not $deepSeek.IsConfigured) {
+        $recommended = "configure_key"
+    }
+    elseif ((-not $claude.Usable) -and $deepSeek.IsConfigured) {
+        $recommended = "repair_claude"
+    }
+    elseif ($redactedKey) {
+        $recommended = "configure_key"
+    }
+
+    return [PSCustomObject]@{
+        Claude                 = $claude
+        FreshClaude            = $fresh
+        DeepSeek               = $deepSeek
+        ConfigFile             = $configFile
+        LastApiTest            = $lastApiTest
+        InstallMethod          = $installMethod
+        InstallCompletedAt     = $installAt
+        IsMaintenanceReady     = $maintenanceReady
+        RecommendedMode        = $recommended
+        HasRedactedApiKey      = $redactedKey
+    }
+}
+
+function Invoke-RepairDepsFromMenu {
+    $repairScript = Join-Path $ScriptDir "repair-deps.ps1"
+    if (Test-Path $repairScript) {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $repairScript
+    }
+    else {
+        Write-Error-Msg "找不到 repair-deps.ps1，请确认文件完整。"
+    }
+}
+
+function Show-MaintenanceMenu {
+    param($CurrentState)
+
+    Write-Host ""
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host "                    已安装配置，进入维护模式                  " -ForegroundColor Cyan
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host "  Claude Code：已可用 $($CurrentState.Claude.Version)" -ForegroundColor Green
+    Write-Host "  DeepSeek：已配置 $($CurrentState.DeepSeek.MaskedKey)" -ForegroundColor Green
+    if ($CurrentState.FreshClaude -and -not $CurrentState.FreshClaude.Success) {
+        Write-Host "  新 PowerShell：暂未确认 claude，可运行修复依赖。" -ForegroundColor Yellow
+    }
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host "  [1] 启动 Claude Code 测试（推荐）" -ForegroundColor Green
+    Write-Host "  [2] 一键诊断" -ForegroundColor White
+    Write-Host "  [3] 更新 DeepSeek API Key" -ForegroundColor White
+    Write-Host "  [4] 修复依赖" -ForegroundColor White
+    Write-Host "  [5] 恢复/卸载配置" -ForegroundColor White
+    Write-Host "  [6] 重新执行完整安装流程" -ForegroundColor White
+    Write-Host "  [7] 退出" -ForegroundColor White
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host ""
+
+    $choice = Read-Host "请输入选项编号 (1-7，直接回车默认选 1)"
+    if ([string]::IsNullOrWhiteSpace($choice)) { $choice = "1" }
+
+    switch ($choice) {
+        "1" {
+            Write-Log "INFO" "维护模式：启动 Claude Code 测试"
+            if (-not $script:TestProjectPath -or -not (Test-Path -LiteralPath $script:TestProjectPath)) {
+                [void](Step-CreateTestProject)
+            }
+            if ($script:TestProjectPath -and (Test-Path -LiteralPath $script:TestProjectPath)) {
+                [void](Start-ClaudeTestTerminal -ProjectPath $script:TestProjectPath)
+            }
+            else {
+                Write-Warning "测试项目不可用，请运行一键诊断。"
+            }
+        }
+        "2" {
+            Write-Log "INFO" "维护模式：一键诊断"
+            Start-DoctorOnly
+        }
+        "3" {
+            Write-Log "INFO" "维护模式：更新 DeepSeek API Key"
+            Start-ConfigureOnly
+        }
+        "4" {
+            Write-Log "INFO" "维护模式：修复依赖"
+            Invoke-RepairDepsFromMenu
+        }
+        "5" {
+            Write-Log "INFO" "维护模式：恢复或卸载配置"
+            Start-UninstallMenu
+        }
+        "6" {
+            Write-Log "INFO" "维护模式：用户选择重新执行完整安装流程"
+            Start-LazyInstall
+        }
+        "7" {
+            Write-Info "感谢使用！"
+            exit 0
+        }
+        default {
+            Write-Warning "无效选项，请输入 1-7。"
+            Show-MaintenanceMenu -CurrentState $CurrentState
+        }
+    }
+}
+
 function Show-MainMenu {
+    $currentState = Get-CcdiCurrentUserState
+    if ($currentState.IsMaintenanceReady) {
+        Show-MaintenanceMenu -CurrentState $currentState
+        return
+    }
+
     Write-Host ""
     Write-Host "==============================================================" -ForegroundColor Cyan
     Write-Host "                    请选择要执行的操作                        " -ForegroundColor Cyan
     Write-Host "==============================================================" -ForegroundColor Cyan
+    if ($currentState.RecommendedMode -eq "configure_key") {
+        Write-Host "  当前状态：Claude Code 已可用，但 DeepSeek API Key 尚未配置或需要重新配置。" -ForegroundColor Yellow
+    }
+    elseif ($currentState.RecommendedMode -eq "repair_claude") {
+        Write-Host "  当前状态：DeepSeek 配置存在，但 Claude Code 暂不可用，建议先修复依赖。" -ForegroundColor Yellow
+    }
+    elseif ($currentState.RecommendedMode -eq "repair_config") {
+        Write-Host "  当前状态：settings.json 格式损坏，建议先恢复/修复配置。" -ForegroundColor Yellow
+    }
     Write-Host "  [1] 一键安装（推荐）                                        " -ForegroundColor Green
     Write-Host "      自动检测 → 安装 → 配置 → 测试 → 生成报告               " -ForegroundColor White
     Write-Host "  [2] 遇到问题：一键诊断（生成 support-feedback.txt / report.txt）    " -ForegroundColor White
@@ -2293,13 +2459,7 @@ function Show-MainMenu {
         }
         "3" {
             Write-Log "INFO" "用户选择: 一键修复依赖"
-            $repairScript = Join-Path $ScriptDir "repair-deps.ps1"
-            if (Test-Path $repairScript) {
-                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $repairScript
-            }
-            else {
-                Write-Error-Msg "找不到 repair-deps.ps1，请确认文件完整。"
-            }
+            Invoke-RepairDepsFromMenu
         }
         "4" {
             Write-Log "INFO" "用户选择: 恢复或卸载配置"

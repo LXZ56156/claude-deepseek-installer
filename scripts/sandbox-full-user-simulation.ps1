@@ -1434,7 +1434,7 @@ try {
             Write-SandboxFail "N4. RemoveDeepSeekEnv" "DeepSeek fields not removed"
         }
 
-        # N5: RestoreLatest restores from backup
+        # N5: RestoreLatest restores a safe redacted backup and preserves non-sensitive fields
         $restRun = Invoke-SandboxProcess -Label "uninstall -RestoreLatest" `
             -FileName "powershell.exe" `
             -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
@@ -1443,10 +1443,12 @@ try {
             -WorkingDirectory $extractDir -Environment $custEnv -TimeoutSec 180
 
         $afterRestore = Get-Content -Path $customSettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($afterRestore.env.ANTHROPIC_AUTH_TOKEN -eq $DummyApiKey) {
-            Write-SandboxPass "N5. RestoreLatest restores DeepSeek config from backup"
+        if ($afterRestore.env.ANTHROPIC_AUTH_TOKEN -eq "__REDACTED_BY_CCDI__" -and
+            $afterRestore.permissions.deny -contains "Read(./.env)" -and
+            $afterRestore.env.CUSTOM_KEEP -eq "yes") {
+            Write-SandboxPass "N5. RestoreLatest restores redacted backup and preserves non-sensitive config"
         } else {
-            Write-SandboxFail "N5. RestoreLatest" "API Key not restored"
+            Write-SandboxFail "N5. RestoreLatest" "redacted backup or non-sensitive config not restored"
         }
 
         # N6: DeleteSettings requires -Yes and can recover

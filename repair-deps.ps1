@@ -320,6 +320,9 @@ function Start-RepairDeps {
     Write-Info "正在检测系统依赖状态..."
     Write-Host ""
     Refresh-CurrentProcessPath
+    $nodeFreshInfo = $null
+    $npmFreshInfo = $null
+    $nodeNpmFreshRepair = $null
 
     # ============================================================
     # 1. 优先检测 Claude Code
@@ -411,6 +414,57 @@ function Start-RepairDeps {
         Add-CR "npm" "INFO" $npmStatus
     }
 
+    # ============================================================
+    # 4.5. 检测 Node/npm fresh shell（区别当前窗口和新 PowerShell）
+    # ============================================================
+    Write-Info "--- Node.js/npm 新 PowerShell ---"
+    $nodeFreshInfo = Test-NodeCommandInFreshShell -TestSafe:$IsTestSafe
+    $npmFreshInfo = Test-NpmCommandInFreshShell -TestSafe:$IsTestSafe
+    if ($nodeFreshInfo.Success) {
+        Add-CR "新 PowerShell Node.js" "OK" "$($nodeFreshInfo.Version); path=$($nodeFreshInfo.CommandPath)"
+    }
+    else {
+        Add-CR "新 PowerShell Node.js" "WARN" "未确认可用: $($nodeFreshInfo.Error)"
+    }
+    if ($npmFreshInfo.Success) {
+        Add-CR "新 PowerShell npm" "OK" "$($npmFreshInfo.Version); path=$($npmFreshInfo.CommandPath)"
+    }
+    else {
+        Add-CR "新 PowerShell npm" "WARN" "未确认可用: $($npmFreshInfo.Error)"
+    }
+
+    $shouldAttemptNodeNpmPathRepair = (-not ($nodeFreshInfo.Success -and $npmFreshInfo.Success)) -and
+        ($nodeInfo.IsSupported -or $npmInfo.Installed -or $nodeFreshInfo.ProgramFilesNodeExists -or $npmFreshInfo.AppDataNpmExists)
+    if ($shouldAttemptNodeNpmPathRepair) {
+        $canRepairNodeNpmPath = $false
+        if ($IsTestSafe) {
+            $canRepairNodeNpmPath = $true
+        }
+        elseif ($NonInteractive) {
+            $canRepairNodeNpmPath = $AllowInstall
+        }
+        else {
+            Write-Host ""
+            Write-Warning "检测到 Node.js/npm 在当前窗口或固定路径中可见，但新 PowerShell 未完全确认。"
+            $canRepairNodeNpmPath = Confirm-UserChoice -Message "是否尝试修复 Node.js/npm User PATH？" -Default "Yes"
+        }
+
+        if ($canRepairNodeNpmPath) {
+            $nodeNpmFreshRepair = Ensure-NodeNpmPathForFreshShell -TestSafe:$IsTestSafe
+            if ($nodeNpmFreshRepair.Success) {
+                Add-CR "Node/npm fresh shell 修复" "OK" "新 PowerShell 验证通过 ($($nodeNpmFreshRepair.Status))"
+                $nodeFreshInfo = $nodeNpmFreshRepair.PostNodeFresh
+                $npmFreshInfo = $nodeNpmFreshRepair.PostNpmFresh
+            }
+            else {
+                Add-CR "Node/npm fresh shell 修复" "WARN" "仍未完全就绪: $($nodeNpmFreshRepair.Error)"
+            }
+        }
+        else {
+            Add-CR "Node/npm fresh shell 修复" "WARN" "未授权自动修复；Claude 基础使用不受影响，npm fallback 可能受限。"
+        }
+    }
+
     $needsRestart = $false
     $pathWriteFailed = $false
     $nativeBinPath = ""
@@ -429,7 +483,13 @@ function Start-RepairDeps {
     if ($claudeAvailable) {
         Write-Host ""
         if (-not $pathWriteFailed) {
-            Write-Success "Claude Code 已可用，无需修复。"
+            if ($nodeFreshInfo.Success -and $npmFreshInfo.Success) {
+                Write-Success "Claude Code 已可用；Node.js/npm 新 PowerShell 验证通过。"
+            }
+            else {
+                Write-Success "Claude Code 基础使用已可用。"
+                Write-Warning "Node.js/npm 未完全就绪；这只影响备用安装方式/npm fallback，不影响当前 Native Claude 基础使用。"
+            }
         }
         else {
             Write-Warning "Claude Code 当前固定路径可用，但 PATH 自动修复失败。"
@@ -554,18 +614,28 @@ function Generate-Report {
         elseif ($npmInfo.Status) { $npmInfo.Status }
         else { "不可用" }
     $claudeStatus = if ($claudeAvailable) { "已可用" } elseif ($claudeVer) { "已安装" } else { "未安装" }
+    $nodeFreshStatus = if ($nodeFreshInfo -and $nodeFreshInfo.Success) { "正常" } else { "失败/未确认" }
+    $npmFreshStatus = if ($npmFreshInfo -and $npmFreshInfo.Success) { "正常" } else { "失败/未确认" }
 
-    Add-RL "  Node.js:     $nodeStatus"
-    Add-RL "  npm:         $npmStatus"
+    Add-RL "  当前窗口 Node.js:      $nodeStatus"
+    Add-RL "  当前窗口 npm:          $npmStatus"
+    Add-RL "  新 PowerShell Node.js: $nodeFreshStatus"
+    Add-RL "  新 PowerShell npm:     $npmFreshStatus"
     Add-RL "  Claude Code: $claudeStatus"
     Add-RL "  winget:      $(if ($wingetOk) { '可用' } else { '未检测到' })"
 
     if ($claudeAvailable) {
         Add-RL ""
         if (-not $pathWriteFailed) {
-            Add-RL "  状态: Claude Code 已可用，无需修复。"
-            if (-not $nodeInfo.IsSupported -or -not $npmInfo.Installed) {
-                Add-RL "  说明: Node.js/npm 仅 npm fallback/开发场景需要，当前无需修复。"
+            if ($nodeFreshInfo.Success -and $npmFreshInfo.Success) {
+                Add-RL "  状态: Claude Code 基础使用已就绪；Node.js/npm fallback 也已就绪。"
+            }
+            else {
+                Add-RL "  状态: Claude Code 基础使用可用；备用依赖存在问题。"
+                Add-RL "  说明: Node.js/npm 未完全就绪，仅影响备用安装方式/npm fallback，不影响当前已安装 Claude Code 的基础使用。"
+                if ($nodeNpmFreshRepair -and $nodeNpmFreshRepair.PathRepaired) {
+                    Add-RL "  PATH 修复: 已尝试修复 Node.js/npm User PATH；结果 $($nodeNpmFreshRepair.Status)。"
+                }
             }
         }
         else {
@@ -619,6 +689,11 @@ function Generate-Report {
                 Add-RL "  1. 手动将 Claude Code 安装目录（%USERPROFILE%\.local\bin）加入用户 PATH"
             }
             Add-RL "  2. 或运行 [一键诊断.cmd] 生成反馈"
+        }
+        elseif (-not ($nodeFreshInfo.Success -and $npmFreshInfo.Success)) {
+            Add-RL "  1. 如果只使用当前已安装的 Claude Code，可以继续使用。"
+            Add-RL "  2. 如果后续安装失败或 npm fallback 失败，请修复 Node.js/npm PATH，或重新运行本工具并允许修复。"
+            Add-RL "  3. 如需售后，运行 [一键诊断.cmd] 生成反馈。"
         }
         else {
             Add-RL "  无需进一步操作。"

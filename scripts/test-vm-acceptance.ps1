@@ -24,7 +24,10 @@ $installerEnvNames = @(
     'CCDI_MOCK_NATIVE_INSTALL', 'CCDI_MOCK_WINGET', 'CCDI_MOCK_NODE',
     'CCDI_MOCK_NPM', 'CCDI_MOCK_NPMMIRROR', 'CCDI_MOCK_NODE_INSTALL',
     'CCDI_MOCK_NODE_VERSION', 'CCDI_MOCK_NPM_VERSION', 'CCDI_MOCK_NPM_INSTALL',
-    'CCDI_MOCK_NODE_EXE', 'CCDI_MOCK_NPM_CMD'
+    'CCDI_MOCK_NODE_EXE', 'CCDI_MOCK_NPM_CMD',
+    'CCDI_MOCK_FRESH_NODE', 'CCDI_MOCK_FRESH_NPM',
+    'CCDI_MOCK_PROGRAMFILES_NODE_EXISTS', 'CCDI_MOCK_APPDATA_NPM_EXISTS',
+    'CCDI_MOCK_USER_PATH_NODE', 'CCDI_MOCK_MACHINE_PATH_NODE'
 )
 $oldInstallerEnv = @{}
 foreach ($installerEnvName in $installerEnvNames) { $oldInstallerEnv[$installerEnvName] = [Environment]::GetEnvironmentVariable($installerEnvName, 'Process') }
@@ -529,6 +532,90 @@ try {
             if ($null -eq $savedScenarioCMocks.NpmVersion) { Remove-Item Env:\CCDI_MOCK_NPM_VERSION -ErrorAction SilentlyContinue } else { $env:CCDI_MOCK_NPM_VERSION = $savedScenarioCMocks.NpmVersion }
         }
 
+        $manualAcceptanceKey = "sk-" + ("ManualAcceptKey1234567890" * 2)
+        $safeConfigDir = Join-Path $installerProfile '.claude'
+        New-Item -ItemType Directory -Path $safeConfigDir -Force | Out-Null
+        $safeSettingsPath = Join-Path $safeConfigDir 'settings.json'
+        $safeSettingsObject = [ordered]@{
+            env = [ordered]@{
+                ANTHROPIC_AUTH_TOKEN = $manualAcceptanceKey
+                ANTHROPIC_BASE_URL = 'https://api.deepseek.com'
+                CUSTOM_KEEP = 'keep-me'
+            }
+            permissions = [ordered]@{ allow = @('Bash(echo:*)') }
+            autoUpdatesChannel = 'stable'
+        }
+        $safeSettingsObject | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $safeSettingsPath -Encoding UTF8
+        $safeBackupPath = Backup-SettingsJsonSafe -FilePath $safeSettingsPath
+        $safeBackupText = Get-Content -LiteralPath $safeBackupPath -Raw -Encoding UTF8
+        $safeBackupJson = $safeBackupText | ConvertFrom-Json
+        Assert-Test ((Test-Path -LiteralPath $safeBackupPath) -and ([IO.Path]::GetFileName($safeBackupPath) -match '\.safe\.bak$')) 'Backup-SettingsJsonSafe creates a safe settings.json backup'
+        Assert-Test (($safeBackupText -notmatch [regex]::Escape($manualAcceptanceKey)) -and $safeBackupText -match '__REDACTED_BY_CCDI__') 'Backup-SettingsJsonSafe redacts the full API key'
+        Assert-Test (($safeBackupJson.env.CUSTOM_KEEP -eq 'keep-me') -and ($safeBackupJson.permissions.allow -contains 'Bash(echo:*)') -and ($safeBackupJson.autoUpdatesChannel -eq 'stable')) 'Backup-SettingsJsonSafe preserves non-sensitive settings'
+        $plainBackupAttempt = Backup-File -FilePath $safeSettingsPath
+        Assert-Test ($null -eq $plainBackupAttempt) 'Backup-File refuses plaintext settings.json backups containing API keys'
+
+        $validKeyCheck = Test-ApiKeyInputSafe -Key $manualAcceptanceKey
+        Assert-Test ($validKeyCheck.Valid -and $validKeyCheck.Normalized -eq $manualAcceptanceKey) 'Test-ApiKeyInputSafe accepts a single valid sk token'
+        foreach ($invalidApiKey in @(
+            '',
+            'sk-short',
+            " $manualAcceptanceKey",
+            "$manualAcceptanceKey ",
+            ($manualAcceptanceKey + "`n" + $manualAcceptanceKey),
+            ('sk-' + ([string][char]0x6D4B) + ([string][char]0x8BD5) + '12345678901234567890'),
+            'https://api.deepseek.com',
+            '__REDACTED_BY_CCDI__'
+        )) {
+            Assert-Test (-not (Test-ApiKeyInputSafe -Key $invalidApiKey).Valid) "Test-ApiKeyInputSafe rejects invalid key sample '$invalidApiKey'"
+        }
+
+        $invalidSettingsText = '{ "env": { "ANTHROPIC_AUTH_TOKEN": "' + $manualAcceptanceKey + '", "CUSTOM_KEEP": "keep-me", }'
+        Set-Content -LiteralPath $safeSettingsPath -Value $invalidSettingsText -Encoding UTF8
+        $invalidBackupPath = Backup-SettingsJsonSafe -FilePath $safeSettingsPath
+        $invalidBackupText = Get-Content -LiteralPath $invalidBackupPath -Raw -Encoding UTF8
+        $invalidBackupRedacted = ($invalidBackupText -match '__REDACTED_BY_CCDI__' -or $invalidBackupText -match 'sk-\*\*\*\*REDACTED\*\*\*\*')
+        Assert-Test (([IO.Path]::GetFileName($invalidBackupPath) -match '\.invalid-redacted\.bak$') -and $invalidBackupText -notmatch [regex]::Escape($manualAcceptanceKey) -and $invalidBackupRedacted) 'Backup-SettingsJsonSafe redacts invalid JSON backups without making them restorable'
+
+        $restoreRoot = Join-Path $installerRoot 'restore-invalid-backup'
+        $restoreProfile = Join-Path $restoreRoot 'profile'
+        $restoreArtifacts = Join-Path $restoreRoot 'artifacts'
+        $restoreBackupDir = Join-Path $restoreArtifacts 'backup'
+        $restoreConfigDir = Join-Path $restoreProfile '.claude'
+        foreach ($restoreDir in @($restoreProfile, $restoreArtifacts, $restoreBackupDir, $restoreConfigDir)) {
+            New-Item -ItemType Directory -Path $restoreDir -Force | Out-Null
+        }
+        Copy-Item -LiteralPath $invalidBackupPath -Destination (Join-Path $restoreBackupDir 'settings.json.99999999-999999-999.invalid-redacted.bak') -Force
+        '{"env":{"CUSTOM_KEEP":"current"}}' | Set-Content -LiteralPath (Join-Path $restoreConfigDir 'settings.json') -Encoding UTF8
+        $savedRestoreEnv = @{
+            UserProfile = $env:USERPROFILE
+            AppData = $env:APPDATA
+            LocalAppData = $env:LOCALAPPDATA
+            TestUserProfile = $env:CCDI_TEST_USERPROFILE
+            ArtifactRoot = $env:CCDI_TEST_ARTIFACT_ROOT
+        }
+        try {
+            $env:USERPROFILE = $restoreProfile
+            $env:APPDATA = Join-Path $restoreProfile 'AppData\Roaming'
+            $env:LOCALAPPDATA = Join-Path $restoreProfile 'AppData\Local'
+            $env:CCDI_TEST_USERPROFILE = $restoreProfile
+            $env:CCDI_TEST_ARTIFACT_ROOT = $restoreArtifacts
+            $restoreInvalidRun = Invoke-AcceptanceCapturedCommand -FilePath (Join-Path $ProjectRoot 'uninstall-config.ps1') -ArgumentList @('-RestoreLatest','-Yes','-NonInteractive') -TimeoutSec 45
+        }
+        finally {
+            $env:USERPROFILE = $savedRestoreEnv.UserProfile
+            $env:APPDATA = $savedRestoreEnv.AppData
+            $env:LOCALAPPDATA = $savedRestoreEnv.LocalAppData
+            if ($null -eq $savedRestoreEnv.TestUserProfile) { Remove-Item Env:\CCDI_TEST_USERPROFILE -ErrorAction SilentlyContinue } else { $env:CCDI_TEST_USERPROFILE = $savedRestoreEnv.TestUserProfile }
+            if ($null -eq $savedRestoreEnv.ArtifactRoot) { Remove-Item Env:\CCDI_TEST_ARTIFACT_ROOT -ErrorAction SilentlyContinue } else { $env:CCDI_TEST_ARTIFACT_ROOT = $savedRestoreEnv.ArtifactRoot }
+        }
+        $restoreInvalidOutput = "$($restoreInvalidRun.StdOut)`n$($restoreInvalidRun.StdErr)"
+        $restoreInvalidRejected = ($restoreInvalidRun.ExitCode -eq 1 -and $restoreInvalidOutput -match 'settings\.json')
+        if (-not $restoreInvalidRejected) {
+            throw "VM acceptance functional test failed: RestoreLatest rejects invalid redacted settings backups"
+        }
+        Assert-Test -Condition $true -Name "RestoreLatest rejects invalid redacted settings backups"
+
         function Invoke-RepairDepsFunctionalCase {
             param(
                 [string]$Name,
@@ -550,6 +637,9 @@ try {
                 'CCDI_MOCK_NPM', 'CCDI_MOCK_NPMMIRROR', 'CCDI_MOCK_NODE_INSTALL',
                 'CCDI_MOCK_NODE_VERSION', 'CCDI_MOCK_NPM_VERSION', 'CCDI_MOCK_NPM_INSTALL',
                 'CCDI_MOCK_NODE_EXE', 'CCDI_MOCK_NPM_CMD',
+                'CCDI_MOCK_FRESH_NODE', 'CCDI_MOCK_FRESH_NPM',
+                'CCDI_MOCK_PROGRAMFILES_NODE_EXISTS', 'CCDI_MOCK_APPDATA_NPM_EXISTS',
+                'CCDI_MOCK_USER_PATH_NODE', 'CCDI_MOCK_MACHINE_PATH_NODE',
                 'CCDI_MOCK_USER_PATH_NATIVE', 'CCDI_MOCK_PATH_WRITE'
             )
             $savedCaseEnv = @{}
@@ -594,12 +684,26 @@ try {
             }
         }
 
+        $cnBaseUsableText = [string]::Concat('Claude Code ', [char]0x57FA, [char]0x7840, [char]0x4F7F, [char]0x7528, [char]0x5DF2, [char]0x53EF, [char]0x7528)
+        $cnFreshNodeText = [string]::Concat([char]0x65B0, ' PowerShell Node.js')
+        $cnFreshNpmText = [string]::Concat([char]0x65B0, ' PowerShell npm')
+        $cnFreshReadyText = [string]::Concat('Claude Code ', [char]0x5DF2, [char]0x53EF, [char]0x7528, [char]0xFF1B, 'Node.js/npm ', [char]0x65B0, ' PowerShell ', [char]0x9A8C, [char]0x8BC1, [char]0x901A, [char]0x8FC7)
+        $cnPathWriteFailSummary = [string]::Concat('Claude Code ', [char]0x5F53, [char]0x524D, [char]0x56FA, [char]0x5B9A, [char]0x8DEF, [char]0x5F84, [char]0x53EF, [char]0x7528, [char]0xFF0C, [char]0x4F46, ' PATH ', [char]0x81EA, [char]0x52A8, [char]0x4FEE, [char]0x590D, [char]0x5931, [char]0x8D25)
+
         $repairClaudeOk = Invoke-RepairDepsFunctionalCase -Name 'claude-ok-node-missing' -Overrides @{
             CCDI_MOCK_CLAUDE = 'ok'; CCDI_MOCK_NODE = 'missing'; CCDI_MOCK_NPM = 'missing'
         }
         $repairClaudeOkText = "$($repairClaudeOk.Output)`n$($repairClaudeOk.ReportText)"
-        Assert-Test (-not $repairClaudeOk.Run.TimedOut -and $repairClaudeOk.Run.ExitCode -eq 0 -and $repairClaudeOk.ReportText -match 'Claude Code:' -and $repairClaudeOk.ReportText -match 'Node\.js/npm' -and $repairClaudeOk.ReportText -match 'npm fallback') 'repair-deps reports no repair needed when Claude is usable and Node/npm are missing'
-        Assert-Test ($repairClaudeOkText -notmatch '\[(WARN|ERROR)\]\s+Node\.js' -and $repairClaudeOkText -notmatch '\[(WARN|ERROR)\]\s+npm' -and $repairClaudeOkText -notmatch 'Node\.js LTS|failed_missing_node_or_npm') 'repair-deps does not warn about optional Node/npm when Claude is usable'
+        Assert-Test (-not $repairClaudeOk.Run.TimedOut -and $repairClaudeOk.Run.ExitCode -eq 0 -and $repairClaudeOk.ReportText -match 'Claude Code:' -and $repairClaudeOk.ReportText -match 'Node\.js/npm' -and $repairClaudeOk.ReportText -match 'npm fallback') 'repair-deps reports Claude base usability when Claude is usable and Node/npm are missing'
+        Assert-Test ($repairClaudeOkText -match '\[INFO\]\s+Node\.js' -and $repairClaudeOkText -match '\[INFO\]\s+npm' -and $repairClaudeOkText -match '\[WARN\].*PowerShell Node\.js' -and $repairClaudeOkText -match '\[WARN\].*PowerShell npm' -and $repairClaudeOkText -match 'npm fallback') 'repair-deps distinguishes optional Node/npm fallback readiness from Claude base use'
+        Assert-Test ($repairClaudeOkText -notmatch 'Node\.js LTS|failed_missing_node_or_npm|official_native|Install-ClaudeCodeAuto') 'repair-deps does not install or block base Claude use when optional Node/npm are missing'
+
+        $repairClaudeFreshOk = Invoke-RepairDepsFunctionalCase -Name 'claude-ok-fresh-node-npm' -Overrides @{
+            CCDI_MOCK_CLAUDE = 'ok'; CCDI_MOCK_NODE = 'ok'; CCDI_MOCK_NPM = 'ok'
+            CCDI_MOCK_FRESH_NODE = 'ok'; CCDI_MOCK_FRESH_NPM = 'ok'
+        }
+        $repairClaudeFreshOkText = "$($repairClaudeFreshOk.Output)`n$($repairClaudeFreshOk.ReportText)"
+        Assert-Test (-not $repairClaudeFreshOk.Run.TimedOut -and $repairClaudeFreshOk.Run.ExitCode -eq 0 -and $repairClaudeFreshOkText -match 'Node\.js/npm' -and $repairClaudeFreshOkText -match 'PowerShell' -and $repairClaudeFreshOkText -notmatch '\[WARN\].*PowerShell') 'repair-deps reports full fresh-shell readiness when Claude and Node/npm are all usable'
 
         $repairNativeFirst = Invoke-RepairDepsFunctionalCase -Name 'native-before-node' -AllowInstall -Overrides @{
             CCDI_MOCK_CLAUDE = 'missing'; CCDI_MOCK_NODE = 'missing'; CCDI_MOCK_NPM = 'missing'; CCDI_MOCK_OFFICIAL = 'reachable'; CCDI_MOCK_NATIVE_INSTALL = 'success'
@@ -626,8 +730,7 @@ try {
         Assert-Test ($repairNativeMissingText -match 'source=native_local_bin') 'repair-deps judges Claude usable via native fixed path'
         Assert-Test ($repairNativeMissingText -match 'Native Install PATH' -and $repairNativeMissingText -match '\[WARN\]\s+Native Install PATH') 'repair-deps detects Native Install PATH gap when Claude fixed-path usable but User PATH missing'
         Assert-Test ($repairNativeMissingText -match '\[SKIP\]\s+Native Install PATH') 'repair-deps TestSafe skips real User PATH write for native bin'
-        Assert-Test ($repairNativeMissingText -match "Claude Code $cnNoRepair") 'repair-deps reports no repair needed alongside PATH records when native usable and TestSafe skips write'
-        Assert-Test ($repairNativeMissingText -notmatch '\[(WARN|ERROR)\]\s+Node\.js' -and $repairNativeMissingText -notmatch '\[(WARN|ERROR)\]\s+npm') 'repair-deps native fixed-path does not warn about optional Node/npm'
+        Assert-Test ($repairNativeMissingText -match 'Claude Code' -and $repairNativeMissingText -match 'npm fallback') 'repair-deps reports native base usability alongside optional fallback warning when User PATH missing'
         Assert-Test ($repairNativeMissingText -notmatch 'official_native' -and $repairNativeMissingText -notmatch 'Install-ClaudeCodeAuto') 'repair-deps native usable does not trigger Claude/Node install'
 
         $repairNativePresent = Invoke-RepairDepsFunctionalCase -Name 'native-path-present' -Overrides @{
@@ -637,8 +740,7 @@ try {
         $repairNativePresentText = "$($repairNativePresent.Output)`n$($repairNativePresent.ReportText)"
         Assert-Test (-not $repairNativePresent.Run.TimedOut -and $repairNativePresent.Run.ExitCode -eq 0) 'repair-deps native fixed-path usable exits cleanly when User PATH present'
         Assert-Test ($repairNativePresentText -match '\[OK\]\s+Native Install PATH') 'repair-deps reports Native Install PATH OK when User PATH present'
-        Assert-Test ($repairNativePresentText -match "Claude Code $cnNoRepair") 'repair-deps reports no repair needed when native usable and User PATH present'
-        Assert-Test ($repairNativePresentText -notmatch '\[(WARN|ERROR)\]\s+Node\.js' -and $repairNativePresentText -notmatch '\[(WARN|ERROR)\]\s+npm') 'repair-deps native present does not warn about optional Node/npm'
+        Assert-Test ($repairNativePresentText -match 'Claude Code' -and $repairNativePresentText -match 'npm fallback') 'repair-deps reports native base usability when User PATH present and optional Node/npm are missing'
         Assert-Test ($repairNativePresentText -notmatch 'official_native') 'repair-deps native present does not trigger install'
 
         $repairNativeWriteFail = Invoke-RepairDepsFunctionalCase -Name 'native-path-writefail' -Overrides @{
@@ -649,9 +751,10 @@ try {
         Assert-Test (-not $repairNativeWriteFail.Run.TimedOut -and $repairNativeWriteFail.Run.ExitCode -eq 0) 'repair-deps native fixed-path write-fail exits cleanly'
         Assert-Test ($repairNativeWriteFailText -match '\[ERROR\]\s+Native Install PATH') 'repair-deps reports PATH write failure when native bin User PATH write fails'
         Assert-Test ($repairNativeWriteFailText -notmatch "Claude Code $cnNoRepair") 'repair-deps must not claim no-repair-needed when PATH write failed'
+        Assert-Test ((-not $repairNativeWriteFailText.Contains($cnBaseUsableText)) -and (-not $repairNativeWriteFailText.Contains($cnFreshReadyText))) 'repair-deps must not print success summary when Native PATH write failed'
         Assert-Test ($repairNativeWriteFailText -match '1\.\s.*\.local\\bin') 'repair-deps PATH write failure suggests manual PATH add with native bin'
         Assert-Test ($repairNativeWriteFailText -match '2\.\s.*\.cmd') 'repair-deps PATH write failure suggests running diagnostics cmd'
-        Assert-Test ($repairNativeWriteFailText -notmatch '\[(WARN|ERROR)\]\s+Node\.js' -and $repairNativeWriteFailText -notmatch '\[(WARN|ERROR)\]\s+npm') 'repair-deps native write-fail does not promote Node/npm to main error'
+        Assert-Test ($repairNativeWriteFailText -match 'PATH' -and $repairNativeWriteFailText -notmatch 'failed_missing_node_or_npm|official_native|Install-ClaudeCodeAuto') 'repair-deps native write-fail reports PATH failure instead of fallback dependency failure'
 
         $repairDepsSource = Get-Content -LiteralPath (Join-Path $ProjectRoot 'repair-deps.ps1') -Raw -Encoding UTF8
         $repairCmdName = [string]::Concat([char]0x4E00, [char]0x952E, [char]0x4FEE, [char]0x590D, [char]0x4F9D, [char]0x8D56, '.cmd')
@@ -698,7 +801,7 @@ try {
         $processPathHasNode = @($env:Path -split ';' | Where-Object { $_ -eq $fakeNodeDir }).Count -gt 0
         Assert-Test ($nodeSuccess.Status -ne 'node_installed_needs_restart' -and $processPathHasNode) 'Node winget success injects nodejs into current PATH and continues without restart status'
 
-        foreach ($installerEnvName in @('CCDI_MOCK_INSTALL_DECISION','CCDI_MOCK_CLAUDE','CCDI_MOCK_OFFICIAL','CCDI_MOCK_WINGET','CCDI_MOCK_NODE','CCDI_MOCK_NODE_INSTALL','CCDI_MOCK_NPMMIRROR','CCDI_MOCK_NPM_INSTALL','CCDI_MOCK_NODE_VERSION','CCDI_MOCK_NPM_VERSION')) {
+        foreach ($installerEnvName in @('CCDI_MOCK_INSTALL_DECISION','CCDI_MOCK_CLAUDE','CCDI_MOCK_OFFICIAL','CCDI_MOCK_WINGET','CCDI_MOCK_NODE','CCDI_MOCK_NODE_INSTALL','CCDI_MOCK_NPMMIRROR','CCDI_MOCK_NPM_INSTALL','CCDI_MOCK_NODE_VERSION','CCDI_MOCK_NPM_VERSION','CCDI_MOCK_FRESH_NODE','CCDI_MOCK_FRESH_NPM','CCDI_MOCK_PROGRAMFILES_NODE_EXISTS','CCDI_MOCK_APPDATA_NPM_EXISTS','CCDI_MOCK_USER_PATH_NODE','CCDI_MOCK_MACHINE_PATH_NODE')) {
             Remove-Item -Path "Env:\$installerEnvName" -ErrorAction SilentlyContinue
         }
         $emptyPathDir = Join-Path $installerRoot 'empty-path'

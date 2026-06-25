@@ -81,6 +81,49 @@ function Show-ConfigBackups {
     }
 }
 
+function Test-ConfigBackupRestorable {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.IO.FileInfo]$Backup
+    )
+
+    $result = @{
+        Restorable      = $false
+        HasRedactedKey  = $false
+        Config          = $null
+        Error           = ""
+    }
+
+    if ($Backup.Name -match '\.invalid') {
+        $result.Error = "该备份是损坏配置的脱敏文本备份，不能恢复为 settings.json"
+        return $result
+    }
+
+    $config = Read-JsonFileSafe -FilePath $Backup.FullName
+    if ($null -eq $config) {
+        $result.Error = "该备份已损坏，未恢复"
+        return $result
+    }
+
+    $result.Config = $config
+    $props = @(Get-JsonPropertyNamesSafe -Object $config)
+    if (($props -contains "env") -and $null -ne $config.env -and
+        ($config.env -is [System.Management.Automation.PSCustomObject])) {
+        $envProps = @(Get-JsonPropertyNamesSafe -Object $config.env)
+        if (($envProps -contains "ANTHROPIC_AUTH_TOKEN") -and
+            ([string]$config.env.ANTHROPIC_AUTH_TOKEN -eq "__REDACTED_BY_CCDI__")) {
+            $result.HasRedactedKey = $true
+            if ($props.Count -le 1 -and $envProps.Count -le 1) {
+                $result.Error = "该备份只包含脱敏 API Key，占位值不能作为可恢复配置"
+                return $result
+            }
+        }
+    }
+
+    $result.Restorable = $true
+    return $result
+}
+
 function Remove-DeepSeekEnvConfig {
     param([switch]$AssumeYes)
 
@@ -101,7 +144,7 @@ function Remove-DeepSeekEnvConfig {
         }
     }
 
-    $backupResult = Backup-File -FilePath $configPath
+    $backupResult = Backup-SettingsJsonSafe -FilePath $configPath
     if (-not $backupResult) {
         Write-Error-Msg "配置文件备份失败，已停止修改，避免破坏用户配置。"
         return $false
@@ -160,6 +203,15 @@ function Restore-LatestConfigBackup {
         return $false
     }
 
+    $restoreCheck = Test-ConfigBackupRestorable -Backup $latest
+    if (-not $restoreCheck.Restorable) {
+        Write-Error-Msg $restoreCheck.Error
+        if (-not $AssumeYes) {
+            Write-Info "请运行列表查看其他备份，或重新配置 DeepSeek API Key。"
+        }
+        return $false
+    }
+
     if (-not $AssumeYes) {
         Write-Warning "即将恢复最新备份: $($latest.FullName)"
         if (-not (Confirm-UserChoice -Message "确认恢复？" -Default "No")) {
@@ -169,8 +221,9 @@ function Restore-LatestConfigBackup {
     }
 
     $configPath = Get-ClaudeConfigFile
+    $preBackup = $null
     if (Test-Path $configPath) {
-        $preBackup = Backup-File -FilePath $configPath
+        $preBackup = Backup-SettingsJsonSafe -FilePath $configPath
         if (-not $preBackup) {
             Write-Error-Msg "恢复前备份当前配置失败，已停止。"
             return $false
@@ -182,8 +235,21 @@ function Restore-LatestConfigBackup {
         New-Item -ItemType Directory -Path $configDir -Force | Out-Null
     }
 
-    Copy-Item -Path $latest.FullName -Destination $configPath -Force
+    Copy-Item -LiteralPath $latest.FullName -Destination $configPath -Force
+    if (-not (Test-JsonValid -FilePath $configPath)) {
+        Write-Error-Msg "恢复后 JSON 校验失败，正在回滚。"
+        if ($preBackup -and (Test-Path -LiteralPath $preBackup)) {
+            Copy-Item -LiteralPath $preBackup -Destination $configPath -Force
+            Write-Warning "已用恢复前的脱敏备份回滚。API Key 如为占位值，需要重新配置。"
+        }
+        return $false
+    }
+
     Write-Success "已恢复最新备份: $($latest.Name)"
+    if ($restoreCheck.HasRedactedKey) {
+        Write-Warning "已恢复非敏感配置，但 API Key 已脱敏，需要重新配置。"
+        Write-Info "可运行 00-点我开始安装.cmd 并选择更新 Key，或运行 configure-deepseek.ps1。"
+    }
     return $true
 }
 
@@ -205,7 +271,7 @@ function Remove-SettingsFile {
         }
     }
 
-    $backupResult = Backup-File -FilePath $configPath
+    $backupResult = Backup-SettingsJsonSafe -FilePath $configPath
     if (-not $backupResult) {
         Write-Error-Msg "配置文件备份失败，已停止删除操作。"
         return $false

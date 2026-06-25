@@ -96,24 +96,55 @@ function Write-DeepSeekConfig {
     }
     $result.ConfigPath = $ConfigPath
 
+    $apiKeyCheck = Test-ApiKeyInputSafe -Key $ApiKey
+    if (-not $apiKeyCheck.Valid) {
+        $result.Error = "API Key 格式不安全: $($apiKeyCheck.Reason)"
+        Write-Error-Msg $result.Error
+        return $result
+    }
+    $ApiKey = $apiKeyCheck.Normalized
+
     Write-Log "INFO" "开始写入 DeepSeek 配置..."
     Write-Log "INFO" "目标配置文件: $ConfigPath"
 
     # 1. 备份旧文件
-    if (Test-Path $ConfigPath) {
-        Write-Info "检测到已有配置文件，正在备份..."
-        $backupPath = Backup-File -FilePath $ConfigPath
+    if (Test-Path -LiteralPath $ConfigPath) {
+        $oldConfig = Read-JsonFileSafe -FilePath $ConfigPath
+        if ($null -eq $oldConfig) {
+            Write-Warning "检测到配置文件格式损坏，已生成脱敏备份，将重建配置。"
+        }
+        else {
+            $oldProps = @(Get-JsonPropertyNamesSafe -Object $oldConfig)
+            $hasDeepSeekEnv = $false
+            if (($oldProps -contains "env") -and $null -ne $oldConfig.env -and
+                ($oldConfig.env -is [System.Management.Automation.PSCustomObject])) {
+                $oldEnvProps = @(Get-JsonPropertyNamesSafe -Object $oldConfig.env)
+                if (($oldEnvProps -contains "ANTHROPIC_BASE_URL" -and [string]$oldConfig.env.ANTHROPIC_BASE_URL -match "api.deepseek.com") -or
+                    ($oldEnvProps -contains "ANTHROPIC_AUTH_TOKEN" -and -not [string]::IsNullOrWhiteSpace([string]$oldConfig.env.ANTHROPIC_AUTH_TOKEN))) {
+                    $hasDeepSeekEnv = $true
+                }
+            }
+
+            if ($hasDeepSeekEnv) {
+                Write-Info "检测到已有 DeepSeek 配置，将先生成脱敏安全备份，再更新。"
+            }
+            else {
+                Write-Info "检测到 Claude Code 默认配置，正在安全合并 DeepSeek 设置。"
+            }
+        }
+
+        $backupPath = Backup-SettingsJsonSafe -FilePath $ConfigPath
         $result.BackupPath = $backupPath
 
         # 备份失败则阻止继续写入
         if (-not $backupPath) {
-            $result.Error = "已有配置文件备份失败，已停止写入，避免破坏用户配置。请检查 backup/ 目录权限或磁盘空间。"
+            $result.Error = "已有配置文件安全备份失败，已停止写入，避免破坏用户配置。请检查 backup/ 目录权限或磁盘空间。"
             Write-Error-Msg $result.Error
             return $result
         }
 
         # 检查旧文件是否有效
-        if (-not (Test-JsonValid -FilePath $ConfigPath)) {
+        if ($null -eq $oldConfig) {
             $result.RebuiltFromDamagedJson = $true
             Write-Warning "旧配置文件 JSON 格式无效！已备份到: $backupPath"
             Write-Warning "将创建新的配置文件来替换。"
@@ -129,6 +160,9 @@ function Write-DeepSeekConfig {
                 Write-Info "非交互模式：旧文件已备份，将继续创建新配置。"
             }
         }
+    }
+    else {
+        Write-Info "正在创建 Claude Code 配置。"
     }
 
     # 2. 获取默认 env 配置
@@ -174,7 +208,7 @@ function Write-DeepSeekConfig {
         # 如果有备份，尝试恢复
         if ($result.BackupPath) {
             Write-Warning "正在恢复备份文件..."
-            Copy-Item -Path $result.BackupPath -Destination $ConfigPath -Force
+            Copy-Item -LiteralPath $result.BackupPath -Destination $ConfigPath -Force
             Write-Info "已恢复备份文件。"
         }
         return $result
@@ -186,7 +220,7 @@ function Write-DeepSeekConfig {
     # 如果是从损坏 JSON 重建，额外警告
     if ($result.RebuiltFromDamagedJson) {
         Write-Warning "本次配置是从损坏 JSON 重建的。旧配置中的非 env 字段（如 permissions）可能未保留。"
-        Write-Warning "如需恢复，请从 backup/ 目录手动合并。"
+        Write-Warning "如需恢复，请从 backup/ 目录中的脱敏备份手动合并非敏感字段，并重新配置 API Key。"
     }
 
     # 输出脱敏后的配置摘要
@@ -303,15 +337,22 @@ function Get-DeepSeekConfigStatus {
     # 检查 ANTHROPIC_AUTH_TOKEN（排除空字符串情况）
     if ($envNames -contains "ANTHROPIC_AUTH_TOKEN" `
         -and -not [string]::IsNullOrEmpty($env.ANTHROPIC_AUTH_TOKEN)) {
-        $result.HasApiKey = $true
-        $result.MaskedKey = Mask-ApiKey -Key $env.ANTHROPIC_AUTH_TOKEN
+        $tokenCheck = Test-ApiKeyInputSafe -Key ([string]$env.ANTHROPIC_AUTH_TOKEN)
+        if ($tokenCheck.Valid) {
+            $result.HasApiKey = $true
+            $result.MaskedKey = Mask-ApiKey -Key $tokenCheck.Normalized
+        }
+        elseif ([string]$env.ANTHROPIC_AUTH_TOKEN -eq "__REDACTED_BY_CCDI__") {
+            $result.MaskedKey = "(已脱敏，需要重新配置)"
+            $result.ErrorMessage = "API Key 已脱敏，需要重新配置"
+        }
     }
 
     $result.IsConfigured = ($hasDeepSeekBaseUrl -and $result.HasApiKey)
     if (-not $hasDeepSeekBaseUrl) {
         $result.ErrorMessage = "ANTHROPIC_BASE_URL 未指向 DeepSeek 官方接口"
     }
-    elseif (-not $result.HasApiKey) {
+    elseif (-not $result.HasApiKey -and -not $result.ErrorMessage) {
         $result.ErrorMessage = "未设置 API Key"
     }
 
@@ -373,10 +414,30 @@ function Restore-ConfigFromBackup {
 
     if ($BackupPath -and (Test-Path $BackupPath)) {
         # 使用指定的备份文件
-        Copy-Item -Path $BackupPath -Destination $configPath -Force
+        if ([System.IO.Path]::GetFileName($BackupPath) -match '\.invalid') {
+            $result.Message = "该备份是损坏配置的脱敏文本备份，不能恢复为 settings.json"
+            Write-Error-Msg $result.Message
+            return $result
+        }
+        $backupJson = Read-JsonFileSafe -FilePath $BackupPath
+        if ($null -eq $backupJson) {
+            $result.Message = "该备份已损坏，未恢复"
+            Write-Error-Msg $result.Message
+            return $result
+        }
+        Copy-Item -LiteralPath $BackupPath -Destination $configPath -Force
+        if (-not (Test-JsonValid -FilePath $configPath)) {
+            $result.Message = "恢复后 JSON 校验失败，已停止"
+            Write-Error-Msg $result.Message
+            return $result
+        }
         $result.Success = $true
         $result.Message = "已从 $BackupPath 恢复配置"
         Write-Success $result.Message
+        $restoredStatus = Get-DeepSeekConfigStatus
+        if ($restoredStatus.ErrorMessage -match "脱敏") {
+            Write-Warning "已恢复非敏感配置，但 API Key 已脱敏，需要重新配置。"
+        }
         return $result
     }
 
@@ -406,10 +467,30 @@ function Restore-ConfigFromBackup {
         }
         if ($choiceNum -ge 1 -and $choiceNum -le $backups.Count) {
             $selected = $backups[$choiceNum - 1]
-            Copy-Item -Path $selected.FullName -Destination $configPath -Force
+            if ($selected.Name -match '\.invalid') {
+                $result.Message = "该备份已损坏，未恢复"
+                Write-Error-Msg $result.Message
+                return $result
+            }
+            $selectedJson = Read-JsonFileSafe -FilePath $selected.FullName
+            if ($null -eq $selectedJson) {
+                $result.Message = "该备份已损坏，未恢复"
+                Write-Error-Msg $result.Message
+                return $result
+            }
+            Copy-Item -LiteralPath $selected.FullName -Destination $configPath -Force
+            if (-not (Test-JsonValid -FilePath $configPath)) {
+                $result.Message = "恢复后 JSON 校验失败，未确认恢复成功"
+                Write-Error-Msg $result.Message
+                return $result
+            }
             $result.Success = $true
             $result.Message = "已从备份恢复: $($selected.Name)"
             Write-Success $result.Message
+            $restoredStatus = Get-DeepSeekConfigStatus
+            if ($restoredStatus.ErrorMessage -match "脱敏") {
+                Write-Warning "已恢复非敏感配置，但 API Key 已脱敏，需要重新配置。"
+            }
         }
         else {
             $result.Message = "无效的选择"

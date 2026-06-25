@@ -701,8 +701,11 @@ try {
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $releaseRoot "uninstall-config.ps1"), "-RestoreLatest", "-Yes"
     ) -WorkingDirectory $releaseRoot -Environment $envVars))
     $restoredConfig = Get-Content -Path $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($restoredConfig.env.ANTHROPIC_AUTH_TOKEN -ne $DummyApiKey) {
-        throw "RestoreLatest did not restore DeepSeek API token"
+    if ($restoredConfig.env.ANTHROPIC_AUTH_TOKEN -ne "__REDACTED_BY_CCDI__") {
+        throw "RestoreLatest must restore redacted API token placeholder, not plaintext token"
+    }
+    if ($restoredConfig.permissions.deny -notcontains "Read(./.env)" -or $restoredConfig.env.CUSTOM_KEEP -ne "yes") {
+        throw "RestoreLatest did not preserve non-sensitive custom configuration"
     }
 
     [void]$runs.Add((Invoke-SimCommand -Name "uninstall-config.ps1 -DeleteSettings" -FileName $powerShellExe -Arguments @(
@@ -757,6 +760,11 @@ try {
     if (-not (Get-ChildItem -Path $reportsDir -Filter "report-*.txt" -ErrorAction SilentlyContinue)) {
         throw "doctor did not create reports/report-*.txt"
     }
+
+    # RestoreLatest now restores a redacted token placeholder by design. Recreate
+    # a valid sandbox config before API mock diagnostics so doctor can exercise
+    # the API-status matrix without relying on plaintext backup restore.
+    New-TestClaudeConfig -ProfileDir $testProfile -DummyKey $DummyApiKey
 
     $apiMockCases = @(
         @{ Status = "200"; Expected = "200 OK" },

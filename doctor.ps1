@@ -582,12 +582,20 @@ function Check-Files {
 
                     if ($envProps -contains "ANTHROPIC_AUTH_TOKEN") {
                         $token = $env.ANTHROPIC_AUTH_TOKEN
-                        $masked = Mask-ApiKey -Key $token
                         if ([string]::IsNullOrWhiteSpace($token)) {
                             Add-CheckResult "ANTHROPIC_AUTH_TOKEN" "ERROR" "Key 为空"
                             Add-Suggestion "API Key 为空，请运行 configure-deepseek.ps1 设置。"
                         }
+                        elseif ([string]$token -eq "__REDACTED_BY_CCDI__") {
+                            Add-CheckResult "ANTHROPIC_AUTH_TOKEN" "ERROR" "API Key 已脱敏，需要重新配置"
+                            Add-Suggestion "已恢复非敏感配置，但 API Key 已脱敏。请运行 configure-deepseek.ps1 重新输入。"
+                        }
+                        elseif (-not (Is-ApiKeyFormatValid -Key ([string]$token))) {
+                            Add-CheckResult "ANTHROPIC_AUTH_TOKEN" "ERROR" "API Key 格式不安全"
+                            Add-Suggestion "请只粘贴一行以 sk- 开头的 DeepSeek API Key。"
+                        }
                         else {
+                            $masked = Mask-ApiKey -Key $token
                             Add-CheckResult "ANTHROPIC_AUTH_TOKEN" "OK" "已设置 ($masked)"
                         }
                     }

@@ -3784,6 +3784,9 @@ function Install-ClaudeCodeAuto {
                         $env:CCDI_MOCK_NPM = "ok"
                         $env:CCDI_MOCK_NODE_VERSION = "v20.11.1"
                         $env:CCDI_MOCK_NPM_VERSION = "10.2.4"
+                        $env:CCDI_MOCK_PROGRAMFILES_NODE_EXISTS = "1"
+                        $env:CCDI_MOCK_FRESH_NODE = "ok"
+                        $env:CCDI_MOCK_FRESH_NPM = "ok"
                         @{ Success = $true; ExitCode = 0; Output = "mock: OpenJS.NodeJS.LTS installed"; Error = ""; Status = "installed_mock" }
                     }
                     else {
@@ -3802,8 +3805,24 @@ function Install-ClaudeCodeAuto {
                 $nodeRecheck = Test-NodeJsInstalled
                 $npmRecheck = Test-NpmInstalled
                 if ($nodeRecheck.Installed -and $nodeRecheck.IsSupported -and $npmRecheck.Installed) {
+                    $nodeNpmFresh = Ensure-NodeNpmPathForFreshShell -TestSafe:($isMockDecision -or $env:CCDI_TEST_MODE -eq "1")
+                    if (-not $nodeNpmFresh.Success) {
+                        Write-Warning "当前窗口已检测到 Node.js/npm，但新 PowerShell 暂未确认可用。"
+                        Write-Info "将按 Node.js/npm fallback 环境未就绪处理，避免后续安装误判。"
+                        Write-Log "ERROR" "Node/npm fresh shell verification failed after winget Node install: Status=$($nodeNpmFresh.Status); Error=$($nodeNpmFresh.Error)"
+                        $result.Method = "node-via-winget"
+                        $result.Status = "node_install_failed"
+                        $result.Success = $false
+                        $result.UserMessage = "Node.js/npm 新 PowerShell 验证未通过，请运行一键修复依赖或手动修复 PATH。"
+                        Update-CcdiState -Updates @{
+                            claudeInstallMethod = "node-via-winget"
+                            claudeInstallStatus = "node_install_failed"
+                        } | Out-Null
+                        return $result
+                    }
+
                     Write-Success "Node.js 已安装并确认可用，继续安装 Claude Code。"
-                    Write-Log "INFO" "Node install classification: node_ready_after_install; CommandAccepted=$nodeInstallCommandAccepted; Node=$($nodeRecheck.Version); NodePath=$($nodeRecheck.Path); npm=$($npmRecheck.Version); NpmPath=$($npmRecheck.Path)"
+                    Write-Log "INFO" "Node install classification: node_npm_ready_fresh_shell; CommandAccepted=$nodeInstallCommandAccepted; Node=$($nodeRecheck.Version); NodePath=$($nodeRecheck.Path); npm=$($npmRecheck.Version); NpmPath=$($npmRecheck.Path); FreshStatus=$($nodeNpmFresh.Status)"
 
                     # Node 安装后先检测 Claude 是否已由 winget 装好。
                     # 如果 Claude 已可用，直接返回成功，不必继续 npm。

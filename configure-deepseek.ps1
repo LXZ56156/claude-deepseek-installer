@@ -74,6 +74,12 @@ if ($NonInteractive) {
         exit 1
     }
     $apiKey = $envKey.Key
+    $apiKeyCheck = Test-ApiKeyInputSafe -Key $apiKey
+    if (-not $apiKeyCheck.Valid) {
+        Write-Error-Msg "环境变量中的 API Key 格式不安全: $($apiKeyCheck.Reason)"
+        exit 1
+    }
+    $apiKey = $apiKeyCheck.Normalized
     Write-Info "已从环境变量 $($envKey.Source) 读取 API Key: $(Mask-ApiKey -Key $apiKey)"
 }
 else {
@@ -100,18 +106,12 @@ if ([string]::IsNullOrWhiteSpace($apiKey)) {
 }
 
 # 检查格式
-$validFormat = Is-ApiKeyFormatValid -Key $apiKey
-if (-not $validFormat) {
-    Write-Warning "API Key 格式不典型（通常以 sk- 开头）"
-    if ($NonInteractive) {
-        Write-Error-Msg "非交互模式下拒绝使用格式异常的 API Key。"
-        exit 1
-    }
-    if (-not (Confirm-UserChoice -Message "是否继续使用此 Key？" -Default "No")) {
-        Write-Info "已取消配置。"
-        exit 0
-    }
+$apiKeyCheck = Test-ApiKeyInputSafe -Key $apiKey
+if (-not $apiKeyCheck.Valid) {
+    Write-Error-Msg "API Key 格式不安全: $($apiKeyCheck.Reason)"
+    exit 1
 }
+$apiKey = $apiKeyCheck.Normalized
 
 # 写入配置
 Write-Host ""

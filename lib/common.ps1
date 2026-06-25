@@ -120,6 +120,16 @@ function Backup-File {
     }
 
     try {
+        $fileName = [System.IO.Path]::GetFileName($FilePath)
+        if ($fileName -ieq "settings.json") {
+            $settingsText = Get-Content -LiteralPath $FilePath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+            if ($settingsText -match 'ANTHROPIC_AUTH_TOKEN' -or $settingsText -match 'sk-[A-Za-z0-9_-]{20,}') {
+                Write-Error-Msg "拒绝明文备份 settings.json；请改用 Backup-SettingsJsonSafe。"
+                Write-Log "ERROR" "Backup-File refused plaintext settings.json backup: $FilePath"
+                return $null
+            }
+        }
+
         $backupDir = Get-BackupDir
         $fullBackupDir = [System.IO.Path]::GetFullPath($backupDir)
 
@@ -131,11 +141,10 @@ function Backup-File {
 
         # 生成备份文件名
         $timestamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
-        $fileName = [System.IO.Path]::GetFileName($FilePath)
         $backupName = "$fileName.$timestamp.bak"
         $backupPath = Join-Path $fullBackupDir $backupName
 
-        Copy-Item -Path $FilePath -Destination $backupPath -Force
+        Copy-Item -LiteralPath $FilePath -Destination $backupPath -Force
         Write-Log "INFO" "已备份: $FilePath -> $backupPath"
         Write-Info "已备份旧配置文件到: $backupPath"
         return $backupPath
@@ -143,6 +152,86 @@ function Backup-File {
     catch {
         Write-Error-Msg "备份失败: $FilePath"
         Write-Log "ERROR" "备份失败: $_"
+        return $null
+    }
+}
+
+function Redact-CcdiSecretsInText {
+    param([AllowNull()][string]$Text)
+
+    if ($null -eq $Text) { return "" }
+
+    $redacted = [string]$Text
+    $redacted = [regex]::Replace(
+        $redacted,
+        '(?is)("ANTHROPIC_AUTH_TOKEN"\s*:\s*")[^"]*(")',
+        '${1}__REDACTED_BY_CCDI__${2}'
+    )
+    $redacted = [regex]::Replace(
+        $redacted,
+        '(?is)(ANTHROPIC_AUTH_TOKEN\s*[:=]\s*)\S+',
+        '${1}__REDACTED_BY_CCDI__'
+    )
+    $redacted = [regex]::Replace(
+        $redacted,
+        'sk-[A-Za-z0-9_-]{20,}',
+        'sk-****REDACTED****'
+    )
+
+    return $redacted
+}
+
+function Backup-SettingsJsonSafe {
+    <#
+    .SYNOPSIS
+        Safely backs up Claude Code settings.json with API keys redacted.
+    .RETURNS
+        Backup path, or $null on failure/missing file.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath
+    )
+
+    if (-not (Test-Path -LiteralPath $FilePath)) {
+        Write-Log "INFO" "安全备份: settings.json 不存在，无需备份: $FilePath"
+        return $null
+    }
+
+    try {
+        $backupDir = Get-BackupDir
+        $fullBackupDir = [System.IO.Path]::GetFullPath($backupDir)
+        if (-not (Test-Path -LiteralPath $fullBackupDir)) {
+            New-Item -ItemType Directory -Path $fullBackupDir -Force | Out-Null
+            Write-Log "INFO" "创建备份目录: $fullBackupDir"
+        }
+
+        $timestamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
+        $raw = Get-Content -LiteralPath $FilePath -Raw -Encoding UTF8
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+        try {
+            $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+            $jsonText = $parsed | ConvertTo-Json -Depth 100
+            $safeText = Redact-CcdiSecretsInText -Text $jsonText
+            $backupPath = Join-Path $fullBackupDir "settings.json.$timestamp.safe.bak"
+            [System.IO.File]::WriteAllText($backupPath, $safeText, $utf8NoBom)
+            Write-Log "INFO" "已生成 settings.json 脱敏安全备份: $backupPath"
+            Write-Info "已生成脱敏安全备份: $backupPath"
+            return $backupPath
+        }
+        catch {
+            $safeText = Redact-CcdiSecretsInText -Text $raw
+            $backupPath = Join-Path $fullBackupDir "settings.json.$timestamp.invalid-redacted.bak"
+            [System.IO.File]::WriteAllText($backupPath, $safeText, $utf8NoBom)
+            Write-Log "WARN" "settings.json JSON 损坏，已生成脱敏文本备份: $backupPath"
+            Write-Warning "检测到配置文件格式损坏，已生成脱敏备份: $backupPath"
+            return $backupPath
+        }
+    }
+    catch {
+        Write-Error-Msg "settings.json 安全备份失败。"
+        Write-Log "ERROR" "Backup-SettingsJsonSafe failed: $_"
         return $null
     }
 }
@@ -330,6 +419,93 @@ function Mask-ApiKey {
     return "$prefix****$suffix"
 }
 
+function Test-ApiKeyInputSafe {
+    <#
+    .SYNOPSIS
+        Strictly validates a DeepSeek API Key before it is stored or sent.
+    #>
+    param([AllowNull()][string]$Key)
+
+    $result = [ordered]@{
+        Valid             = $false
+        Reason            = ""
+        Normalized        = ""
+        IsTypicalDeepSeek = $false
+    }
+
+    if ($null -eq $Key) {
+        $result.Reason = "API Key 为空"
+        return [PSCustomObject]$result
+    }
+
+    $raw = [string]$Key
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        $result.Reason = "API Key 为空"
+        return [PSCustomObject]$result
+    }
+
+    if ($raw -eq "__REDACTED_BY_CCDI__") {
+        $result.Reason = "检测到脱敏占位值，需要重新输入真实 DeepSeek API Key"
+        return [PSCustomObject]$result
+    }
+
+    if ($raw -match '[\r\n]') {
+        $result.Reason = "检测到多行内容，API Key 应该是一行以 sk- 开头的字符串"
+        return [PSCustomObject]$result
+    }
+
+    if ($raw -match "`t") {
+        $result.Reason = "检测到 Tab，请只粘贴 DeepSeek API Key 本身"
+        return [PSCustomObject]$result
+    }
+
+    if ($raw -match '[\x00-\x1F\x7F-\x9F]') {
+        $result.Reason = "检测到控制字符，请只粘贴 DeepSeek API Key 本身"
+        return [PSCustomObject]$result
+    }
+
+    if ($raw -match '\s') {
+        $result.Reason = "检测到空格或换行，请只粘贴 DeepSeek API Key 本身"
+        return [PSCustomObject]$result
+    }
+
+    if ($raw -match '[^\x21-\x7E]') {
+        $result.Reason = "检测到中文或其他非 ASCII 字符，API Key 应该是 HTTP header token"
+        return [PSCustomObject]$result
+    }
+
+    if ($raw -match '["'':：，,;；]') {
+        $result.Reason = "检测到冒号、引号或标点，请只粘贴 DeepSeek API Key 本身"
+        return [PSCustomObject]$result
+    }
+
+    $tokens = @($raw -split '\s+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($tokens.Count -ne 1) {
+        $result.Reason = "检测到多个 token，请只粘贴一个 DeepSeek API Key"
+        return [PSCustomObject]$result
+    }
+
+    if ($raw.Length -gt 256) {
+        $result.Reason = "输入内容过长，不像 DeepSeek API Key"
+        return [PSCustomObject]$result
+    }
+
+    if (-not $raw.StartsWith("sk-")) {
+        $result.Reason = "API Key 应以 sk- 开头，请确认只粘贴 DeepSeek API Key"
+        return [PSCustomObject]$result
+    }
+
+    if ($raw -notmatch '^sk-[A-Za-z0-9_-]{20,}$') {
+        $result.Reason = "API Key 格式不正确，应为一行 sk- 开头的字母、数字、下划线或短横线"
+        return [PSCustomObject]$result
+    }
+
+    $result.Valid = $true
+    $result.Normalized = $raw
+    $result.IsTypicalDeepSeek = $true
+    return [PSCustomObject]$result
+}
+
 function Is-ApiKeyFormatValid {
     <#
     .SYNOPSIS
@@ -339,25 +515,8 @@ function Is-ApiKeyFormatValid {
     #>
     param([string]$Key)
 
-    if ([string]::IsNullOrWhiteSpace($Key)) {
-        return $false
-    }
-
-    # 先 trim 以防粘贴带入空格
-    $trimmed = $Key.Trim()
-
-    # DeepSeek API Key 通常以 sk- 开头
-    if ($trimmed -match '^sk-[a-zA-Z0-9]{32,}$') {
-        return $true
-    }
-
-    # 通用检查：至少 20 个字符
-    # 注意：此函数不输出 UI 提示，避免在诊断等后台场景产生噪音
-    if ($trimmed.Length -ge 20) {
-        return $true
-    }
-
-    return $false
+    $safe = Test-ApiKeyInputSafe -Key $Key
+    return [bool]$safe.Valid
 }
 
 function Write-SupportSafeGuidance {
@@ -952,9 +1111,8 @@ function Read-SecretInput {
     $secureString = Read-Host -Prompt $Prompt -AsSecureString
     $ptr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureString)
     try {
-        # 去除前后空格（用户粘贴时可能带入）
         $raw = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
-        return $raw.Trim()
+        return $raw
     }
     finally {
         [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
@@ -981,6 +1139,20 @@ function Read-ApiKeyWithMaskedConfirmation {
             return $null
         }
 
+        $safe = Test-ApiKeyInputSafe -Key $apiKey
+        if (-not $safe.Valid) {
+            Write-Host ""
+            Write-Warning $safe.Reason
+            Write-Info "请重新粘贴；输入 Q 可取消。"
+            $retryChoice = Read-Host "按回车重新粘贴，输入 Q 取消"
+            if ($retryChoice.Trim().ToUpperInvariant() -eq "Q") {
+                Write-Info "已取消输入 API Key。"
+                return $null
+            }
+            continue
+        }
+
+        $apiKey = $safe.Normalized
         Write-Host ""
         Write-Info "已收到 API Key: $(Mask-ApiKey -Key $apiKey)"
         $choice = Read-Host "按回车继续，输入 R 重新粘贴，输入 Q 取消"
@@ -1024,7 +1196,7 @@ function Get-ApiKeyFromEnvironment {
         $value = [System.Environment]::GetEnvironmentVariable($name, "Process")
         if (-not [string]::IsNullOrWhiteSpace($value)) {
             $result.Found = $true
-            $result.Key = $value.Trim()
+            $result.Key = $value
             $result.Source = $name
             return $result
         }
@@ -1518,6 +1690,312 @@ catch {
         }
     }
 
+    return $result
+}
+
+function New-NodeNpmFreshShellResult {
+    param([string]$CommandName)
+
+    return @{
+        Success                 = $false
+        Version                 = $null
+        CommandPath             = ""
+        Error                   = ""
+        ExitCode                = -1
+        CommandName             = $CommandName
+        UserPathContainsNode    = $false
+        MachinePathContainsNode = $false
+        ProgramFilesNodeExists  = $false
+        AppDataNpmExists        = $false
+    }
+}
+
+function Test-NodeNpmCommandInFreshShell {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("node", "npm")]
+        [string]$CommandName,
+        [switch]$TestSafe
+    )
+
+    $result = New-NodeNpmFreshShellResult -CommandName $CommandName
+
+    if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
+        $freshEnvName = if ($CommandName -eq "node") { "CCDI_MOCK_FRESH_NODE" } else { "CCDI_MOCK_FRESH_NPM" }
+        $currentEnvName = if ($CommandName -eq "node") { "CCDI_MOCK_NODE" } else { "CCDI_MOCK_NPM" }
+        $versionEnvName = if ($CommandName -eq "node") { "CCDI_MOCK_NODE_VERSION" } else { "CCDI_MOCK_NPM_VERSION" }
+        $mockFresh = [Environment]::GetEnvironmentVariable($freshEnvName, "Process")
+        if ([string]::IsNullOrWhiteSpace($mockFresh)) {
+            $mockFresh = [Environment]::GetEnvironmentVariable($currentEnvName, "Process")
+        }
+        if ([string]::IsNullOrWhiteSpace($mockFresh)) { $mockFresh = "missing" }
+
+        $result.UserPathContainsNode = ($env:CCDI_MOCK_USER_PATH_NODE -eq "present")
+        $result.MachinePathContainsNode = ($env:CCDI_MOCK_MACHINE_PATH_NODE -eq "present")
+        $result.ProgramFilesNodeExists = ($env:CCDI_MOCK_PROGRAMFILES_NODE_EXISTS -eq "1" -or $env:CCDI_MOCK_NODE -eq "ok")
+        $result.AppDataNpmExists = ($env:CCDI_MOCK_APPDATA_NPM_EXISTS -eq "1" -or $env:CCDI_MOCK_NPM -eq "ok")
+
+        if ($mockFresh -eq "ok") {
+            $result.Success = $true
+            $result.ExitCode = 0
+            $mockVersion = [Environment]::GetEnvironmentVariable($versionEnvName, "Process")
+            if ([string]::IsNullOrWhiteSpace($mockVersion)) {
+                $mockVersion = if ($CommandName -eq "node") { "v20.11.1" } else { "10.2.4" }
+            }
+            $result.Version = $mockVersion
+            $result.CommandPath = "C:\mock\$CommandName.cmd"
+            return $result
+        }
+
+        $result.Error = "mock: $CommandName not found in reconstructed User+Machine PATH"
+        $result.ExitCode = 10
+        return $result
+    }
+
+    $tempDir = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
+    $tempScript = Join-Path $tempDir "ccdi_fresh_${CommandName}_${PID}_$(Get-Random).ps1"
+    $tempOut = Join-Path $tempDir "ccdi_fresh_${CommandName}_out_${PID}_$(Get-Random).txt"
+    $tempErr = Join-Path $tempDir "ccdi_fresh_${CommandName}_err_${PID}_$(Get-Random).txt"
+
+    $probeScript = @"
+`$ErrorActionPreference = "Stop"
+`$commandName = "$CommandName"
+`$result = [ordered]@{
+    Success = `$false
+    Version = `$null
+    CommandPath = ""
+    Error = ""
+    UserPathContainsNode = `$false
+    MachinePathContainsNode = `$false
+    ProgramFilesNodeExists = `$false
+    AppDataNpmExists = `$false
+}
+
+function Test-PathListContainsEntry {
+    param([string]`$PathValue, [string]`$Target)
+    if ([string]::IsNullOrWhiteSpace(`$PathValue) -or [string]::IsNullOrWhiteSpace(`$Target)) { return `$false }
+    `$normTarget = `$Target.Trim().TrimEnd('\').ToLowerInvariant()
+    foreach (`$entry in @(`$PathValue -split ';')) {
+        if ([string]::IsNullOrWhiteSpace(`$entry)) { continue }
+        `$normEntry = `$entry.Trim().TrimEnd('\').ToLowerInvariant()
+        if (`$normEntry -eq `$normTarget) { return `$true }
+    }
+    return `$false
+}
+
+try {
+    `$nodeDir = Join-Path `$env:ProgramFiles "nodejs"
+    `$npmDir = Join-Path `$env:APPDATA "npm"
+    `$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    `$machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    `$result.ProgramFilesNodeExists = Test-Path -LiteralPath `$nodeDir -PathType Container
+    `$result.AppDataNpmExists = Test-Path -LiteralPath `$npmDir -PathType Container
+    `$result.UserPathContainsNode = Test-PathListContainsEntry -PathValue `$userPath -Target `$nodeDir
+    `$result.MachinePathContainsNode = Test-PathListContainsEntry -PathValue `$machinePath -Target `$nodeDir
+    `$parts = @()
+    if (`$userPath) { `$parts += `$userPath }
+    if (`$machinePath) { `$parts += `$machinePath }
+    `$env:Path = (`$parts -join ";")
+
+    `$lookupName = if (`$commandName -eq "npm") { "npm.cmd" } else { "node.exe" }
+    `$cmd = Get-Command `$lookupName -ErrorAction SilentlyContinue
+    if (-not `$cmd) {
+        `$result.Error = "`$lookupName not found in reconstructed User+Machine PATH"
+        `$result | ConvertTo-Json -Compress
+        exit 10
+    }
+
+    `$cmdPath = if (`$cmd.Source) { `$cmd.Source } else { `$cmd.Definition }
+    `$result.CommandPath = `$cmdPath
+    `$output = & `$cmdPath --version 2>&1
+    `$code = `$LASTEXITCODE
+    if (`$code -eq 0 -and -not [string]::IsNullOrWhiteSpace((`$output | Out-String))) {
+        `$result.Success = `$true
+        `$result.Version = ((`$output | Out-String).Trim())
+        `$result | ConvertTo-Json -Compress
+        exit 0
+    }
+
+    `$result.Error = "`$lookupName --version failed, exit=`$code, output=`$((`$output | Out-String).Trim())"
+    `$result | ConvertTo-Json -Compress
+    exit 11
+}
+catch {
+    `$result.Error = "fresh shell `$commandName probe exception: `$(`$_.Exception.Message)"
+    `$result | ConvertTo-Json -Compress
+    exit 20
+}
+"@
+
+    try {
+        [System.IO.File]::WriteAllText($tempScript, $probeScript, (New-Object System.Text.UTF8Encoding($false)))
+        $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+        if (-not (Test-Path -LiteralPath $psExe)) { $psExe = "powershell.exe" }
+        $argumentLine = "-NoProfile -ExecutionPolicy Bypass -File $(ConvertTo-CommandLineArgument -Argument $tempScript)"
+        $proc = Start-Process -FilePath $psExe `
+            -ArgumentList $argumentLine `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardOutput $tempOut `
+            -RedirectStandardError $tempErr
+        if (-not $proc.WaitForExit(30000)) {
+            $result.Error = "$CommandName fresh shell 验证超时"
+            try { if (-not $proc.HasExited) { $proc.Kill() } } catch { }
+            $result.ExitCode = -1
+            return $result
+        }
+
+        $result.ExitCode = $proc.ExitCode
+        $jsonOutput = ""
+        if (Test-Path -LiteralPath $tempOut) {
+            $jsonOutput = Get-Content -LiteralPath $tempOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+            if ($null -eq $jsonOutput) { $jsonOutput = "" }
+        }
+        $stderrText = ""
+        if (Test-Path -LiteralPath $tempErr) {
+            $stderrText = Get-Content -LiteralPath $tempErr -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+            if ($null -eq $stderrText) { $stderrText = "" }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($jsonOutput)) {
+            $parsed = $jsonOutput.Trim() | ConvertFrom-Json
+            $result.Success = [bool]$parsed.Success
+            $result.Version = if ($parsed.Version) { [string]$parsed.Version } else { $null }
+            $result.CommandPath = if ($parsed.CommandPath) { [string]$parsed.CommandPath } else { "" }
+            $result.Error = if ($parsed.Error) { [string]$parsed.Error } else { "" }
+            $result.UserPathContainsNode = [bool]$parsed.UserPathContainsNode
+            $result.MachinePathContainsNode = [bool]$parsed.MachinePathContainsNode
+            $result.ProgramFilesNodeExists = [bool]$parsed.ProgramFilesNodeExists
+            $result.AppDataNpmExists = [bool]$parsed.AppDataNpmExists
+        }
+        else {
+            $result.Error = if ($stderrText.Trim()) { "stdout 非 JSON, stderr=$($stderrText.Trim())" } else { "stdout 非 JSON" }
+        }
+    }
+    catch {
+        $result.Error = "$CommandName fresh shell 验证异常: $($_.Exception.Message)"
+        Write-Log "WARN" "Test-NodeNpmCommandInFreshShell($CommandName): $($result.Error)"
+    }
+    finally {
+        foreach ($tmpPath in @($tempScript, $tempOut, $tempErr)) {
+            if ($tmpPath -and (Test-Path -LiteralPath $tmpPath)) {
+                Remove-Item -LiteralPath $tmpPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    return $result
+}
+
+function Test-NodeCommandInFreshShell {
+    param([switch]$TestSafe)
+    return Test-NodeNpmCommandInFreshShell -CommandName "node" -TestSafe:$TestSafe
+}
+
+function Test-NpmCommandInFreshShell {
+    param([switch]$TestSafe)
+    return Test-NodeNpmCommandInFreshShell -CommandName "npm" -TestSafe:$TestSafe
+}
+
+function Ensure-NodeNpmPathForFreshShell {
+    param([switch]$TestSafe)
+
+    $result = @{
+        Success       = $false
+        Status        = "node_npm_failed"
+        PathRepaired  = $false
+        Error         = ""
+        NodeFresh     = $null
+        NpmFresh      = $null
+        PostNodeFresh = $null
+        PostNpmFresh  = $null
+    }
+
+    $nodeFresh = Test-NodeCommandInFreshShell -TestSafe:$TestSafe
+    $npmFresh = Test-NpmCommandInFreshShell -TestSafe:$TestSafe
+    $result.NodeFresh = $nodeFresh
+    $result.NpmFresh = $npmFresh
+
+    if ($nodeFresh.Success -and $npmFresh.Success) {
+        $result.Success = $true
+        $result.Status = "node_npm_ready_fresh_shell"
+        return $result
+    }
+
+    $nodeDir = if ($env:ProgramFiles) { Join-Path $env:ProgramFiles "nodejs" } else { "" }
+    $npmDir = if ($env:APPDATA) { Join-Path $env:APPDATA "npm" } else { "" }
+    $nodeDirExists = if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
+        [bool]$nodeFresh.ProgramFilesNodeExists
+    } else {
+        ($nodeDir -and (Test-Path -LiteralPath $nodeDir -PathType Container))
+    }
+    $npmDirExists = if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
+        [bool]$npmFresh.AppDataNpmExists
+    } else {
+        ($npmDir -and (Test-Path -LiteralPath $npmDir -PathType Container))
+    }
+
+    $attempted = $false
+    $writeFailed = $false
+
+    if ($nodeDirExists -and $nodeDir -and -not $nodeFresh.UserPathContainsNode -and -not $nodeFresh.MachinePathContainsNode) {
+        $attempted = $true
+        $ensureNode = Ensure-UserPathEntry -PathToAdd $nodeDir -TestSafe:$TestSafe
+        if (-not $ensureNode.Success) {
+            $writeFailed = $true
+            $result.Error = "Node.js PATH 写入失败: $($ensureNode.Error)"
+        }
+    }
+
+    if ($npmDirExists -and $npmDir) {
+        $npmPathCheck = Test-UserPathContains -TargetPath $npmDir
+        if (-not $npmPathCheck.Contains) {
+            $attempted = $true
+            $ensureNpm = Ensure-UserPathEntry -PathToAdd $npmDir -TestSafe:$TestSafe
+            if (-not $ensureNpm.Success) {
+                $writeFailed = $true
+                if ($result.Error) { $result.Error += "; " }
+                $result.Error += "npm PATH 写入失败: $($ensureNpm.Error)"
+            }
+        }
+    }
+
+    if ($writeFailed) {
+        $result.Status = "node_npm_failed"
+        return $result
+    }
+
+    if ($attempted) {
+        $result.PathRepaired = $true
+        if ($TestSafe -or $env:CCDI_TEST_MODE -eq "1") {
+            $env:CCDI_MOCK_USER_PATH_NODE = "present"
+            if ($env:CCDI_MOCK_PATH_WRITE -ne "fail") {
+                $env:CCDI_MOCK_FRESH_NODE = "ok"
+                if ($env:CCDI_MOCK_NPM -eq "ok" -or $env:CCDI_MOCK_APPDATA_NPM_EXISTS -eq "1") {
+                    $env:CCDI_MOCK_FRESH_NPM = "ok"
+                }
+            }
+        }
+        else {
+            Refresh-CurrentProcessPath
+        }
+    }
+
+    $postNodeFresh = Test-NodeCommandInFreshShell -TestSafe:$TestSafe
+    $postNpmFresh = Test-NpmCommandInFreshShell -TestSafe:$TestSafe
+    $result.PostNodeFresh = $postNodeFresh
+    $result.PostNpmFresh = $postNpmFresh
+
+    if ($postNodeFresh.Success -and $postNpmFresh.Success) {
+        $result.Success = $true
+        $result.Status = if ($attempted) { "node_npm_path_repaired" } else { "node_npm_ready_fresh_shell" }
+        return $result
+    }
+
+    if (($nodeFresh.Success -or $npmFresh.Success) -or $nodeDirExists -or $npmDirExists) {
+        $result.Status = "node_npm_current_process_only"
+    }
+    $result.Error = "Node/npm 新 PowerShell 验证未通过"
     return $result
 }
 
