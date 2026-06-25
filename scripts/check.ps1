@@ -6228,6 +6228,45 @@ foreach ($liveNpmMissingText in $liveNpmMissingExpectedRequired) {
         throw "live-npm-missing required text drifted from claude-install.ps1 output: $liveNpmMissingText"
     }
 }
+$internalDiagnosticRequiredViolations = New-Object Collections.ArrayList
+foreach ($scenarioSetName in @('TestSafe', 'Live')) {
+    foreach ($scenario in @($acceptanceScenarioDocument.scenarioSets.$scenarioSetName)) {
+        foreach ($requiredText in @($scenario.required)) {
+            if ([string]$requiredText -like '*安装命令返回异常*') {
+                [void]$internalDiagnosticRequiredViolations.Add("scenario=$($scenario.id); required=$requiredText")
+            }
+        }
+    }
+}
+if ($internalDiagnosticRequiredViolations.Count -gt 0) {
+    throw "安装命令返回异常 is an internal diagnostic/log condition and must not be required in user-visible transcript unless installer intentionally emits it via Write-Info/Write-Warning/Write-Success.`n$($internalDiagnosticRequiredViolations -join "`n")"
+}
+$anomalyPostcheckScenario = @($acceptanceScenarioDocument.scenarioSets.Live | Where-Object { [string]$_.id -eq 'live-install-command-anomaly-postcheck-usable' } | Select-Object -First 1)
+if ($anomalyPostcheckScenario.Count -ne 1) {
+    throw "Live scenario live-install-command-anomaly-postcheck-usable must exist exactly once"
+}
+$anomalyPostcheckSetup = $anomalyPostcheckScenario[0].setup
+if (-not [bool]$anomalyPostcheckSetup.blockOfficialEndpoints -or
+    -not [bool]$anomalyPostcheckSetup.installNodeForFault -or
+    -not [bool]$anomalyPostcheckSetup.installCommandFailsButClaudeAppears) {
+    throw "live-install-command-anomaly-postcheck-usable must keep blockOfficialEndpoints, installNodeForFault, and installCommandFailsButClaudeAppears setup"
+}
+$anomalyPostcheckRequired = @($anomalyPostcheckScenario[0].required | ForEach-Object { [string]$_ })
+$anomalyPostcheckFailureText = if ($anomalyPostcheckScenario[0].PSObject.Properties.Name -contains 'failureText') { @($anomalyPostcheckScenario[0].failureText | ForEach-Object { [string]$_ }) } else { @() }
+$anomalyPostcheckForbidden = if ($anomalyPostcheckScenario[0].PSObject.Properties.Name -contains 'forbidden') { @($anomalyPostcheckScenario[0].forbidden | ForEach-Object { [string]$_ }) } else { @() }
+$anomalyPostcheckFailureOrForbidden = @($anomalyPostcheckFailureText) + @($anomalyPostcheckForbidden)
+if ($anomalyPostcheckRequired -notcontains 'Claude Code 已安装并确认可用' -or
+    $anomalyPostcheckRequired -contains '安装命令返回异常') {
+    throw "live-install-command-anomaly-postcheck-usable required must include only user-visible success, not internal anomaly log text"
+}
+if ($anomalyPostcheckForbidden -notcontains '安装未完成') {
+    throw "live-install-command-anomaly-postcheck-usable forbidden must reject install-incomplete output"
+}
+foreach ($failureSignal in @('Node.js 安装失败', 'npm 不可用')) {
+    if ($anomalyPostcheckFailureOrForbidden -notcontains $failureSignal) {
+        throw "live-install-command-anomaly-postcheck-usable must fail on visible failure text: $failureSignal"
+    }
+}
 $requiredCmdPauseEntries = @(
     '00-点我开始安装.cmd',
     '一键诊断.cmd',

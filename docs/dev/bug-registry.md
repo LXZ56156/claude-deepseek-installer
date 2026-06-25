@@ -176,3 +176,15 @@
 | ID | 修复函数/脚本 | test-vm-acceptance.ps1 断言 | check.ps1 防回归 | 需专用 VM Live |
 |---|---|---|---|---|
 | ACC-052 | `scripts/data/interactive-acceptance-scenarios.json` / `lib/claude-install.ps1` Live npm fallback output | `live-npm-missing` required list must equal the current two emitted npm fallback messages extracted from `claude-install.ps1` | source gate extracts the emitted strings from `claude-install.ps1` and requires the scenario required list to match exactly | 是；修复后需在清理后的专用 VM 重新跑 Live 8 |
+
+## 2026-06-25 VM Live anomaly-postcheck required text closure fixes
+
+| ID | Problem | Root cause | Fix | Regression |
+|---|---|---|---|---|
+| ACC-053 | VM Live `live-install-command-anomaly-postcheck-usable` failed because the transcript contained `Claude Code 已安装并确认可用` but did not contain `安装命令返回异常` | The acceptance scenario treated an internal log/diagnostic condition as user-visible required transcript text | Updated the scenario to require only the final success output while keeping the anomaly fault setup and failure-text gates | `check.ps1` forbids `安装命令返回异常` in scenario required text and validates this Live scenario setup/success/failure contract; `test-vm-acceptance.ps1` asserts the same contract |
+
+## 2026-06-25 VM Live anomaly-postcheck required text coverage index
+
+| ID | 修复函数/脚本 | test-vm-acceptance.ps1 断言 | check.ps1 防回归 | 需专用 VM Live |
+|---|---|---|---|---|
+| ACC-053 | `scripts/data/interactive-acceptance-scenarios.json` | anomaly-postcheck keeps `blockOfficialEndpoints`, `installNodeForFault`, and `installCommandFailsButClaudeAppears`; required is only user-visible success; internal diagnostic log text is not required; failure/incomplete texts still fail | source gate rejects `安装命令返回异常` in any scenario required text, and checks anomaly-postcheck setup, success required, `安装未完成` forbidden, plus Node/npm failureText coverage | 是；修复后需在清理后的专用 VM 重新跑 Live 8 |

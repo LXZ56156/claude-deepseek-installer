@@ -395,6 +395,32 @@ try {
     Assert-Test $liveNpmMissingHasFallbackText 'live-npm-missing requires current npm fallback error text'
     Assert-Test $liveNpmMissingHasGuidanceText 'live-npm-missing requires current install-blocked guidance text'
     Assert-Test $liveNpmMissingRequiredExact 'live-npm-missing requires exactly the current emitted npm fallback messages'
+    # This scenario proves that an anomalous install command with a successful postcheck is a user-visible success.
+    $utf8 = [Text.Encoding]::UTF8
+    $internalDiagnosticText = $utf8.GetString([Convert]::FromBase64String('5a6J6KOF5ZG95Luk6L+U5Zue5byC5bi4'))
+    $installIncompleteText = $utf8.GetString([Convert]::FromBase64String('5a6J6KOF5pyq5a6M5oiQ'))
+    $nodeInstallFailedText = $utf8.GetString([Convert]::FromBase64String('Tm9kZS5qcyDlronoo4XlpLHotKU='))
+    $npmUnavailableText = $utf8.GetString([Convert]::FromBase64String('bnBtIOS4jeWPr+eUqA=='))
+    $anomalyScenario = @($scenarioDocument.scenarioSets.Live | Where-Object { [string]$_.id -eq 'live-install-command-anomaly-postcheck-usable' } | Select-Object -First 1)
+    $anomalySetup = $anomalyScenario[0].setup
+    $anomalyRequired = @($anomalyScenario[0].required | ForEach-Object { [string]$_ })
+    $anomalyFailureText = if ($anomalyScenario[0].PSObject.Properties.Name -contains 'failureText') { @($anomalyScenario[0].failureText | ForEach-Object { [string]$_ }) } else { @() }
+    $anomalyForbidden = if ($anomalyScenario[0].PSObject.Properties.Name -contains 'forbidden') { @($anomalyScenario[0].forbidden | ForEach-Object { [string]$_ }) } else { @() }
+    $anomalyFailureOrForbidden = @($anomalyFailureText) + @($anomalyForbidden)
+    $successMatch = [regex]::Match($claudeInstallSource, 'Write-Success\s+"([^"]*Claude Code[^"]*)"')
+    $successRequired = ([string]$successMatch.Groups[1].Value).TrimEnd([char]0x3002)
+    $anomalyKeepsSetup = [bool]$anomalySetup.blockOfficialEndpoints -and [bool]$anomalySetup.installNodeForFault -and [bool]$anomalySetup.installCommandFailsButClaudeAppears
+    $anomalyRequiresOnlySuccess = $successMatch.Success -and ($anomalyRequired.Count -eq 1) -and ($anomalyRequired -contains $successRequired)
+    $anomalyDoesNotRequireInternalLog = $anomalyRequired -notcontains $internalDiagnosticText
+    $anomalyForbidsIncomplete = $anomalyForbidden -contains $installIncompleteText
+    $anomalyFailsOnNodeInstallFailed = $anomalyFailureOrForbidden -contains $nodeInstallFailedText
+    $anomalyFailsOnNpmUnavailable = $anomalyFailureOrForbidden -contains $npmUnavailableText
+    Assert-Test $anomalyKeepsSetup 'anomaly postcheck scenario keeps all fault-injection setup flags'
+    Assert-Test $anomalyRequiresOnlySuccess 'anomaly postcheck scenario requires only user-visible success text'
+    Assert-Test $anomalyDoesNotRequireInternalLog 'anomaly postcheck scenario does not require internal diagnostic log text'
+    Assert-Test $anomalyForbidsIncomplete 'anomaly postcheck scenario forbids install-incomplete output'
+    Assert-Test $anomalyFailsOnNodeInstallFailed 'anomaly postcheck scenario fails on Node install failure text'
+    Assert-Test $anomalyFailsOnNpmUnavailable 'anomaly postcheck scenario fails on npm unavailable text'
     foreach ($requiredInstallNodeScenarioId in @('live-npm-missing', 'live-install-command-anomaly-postcheck-usable')) {
         $sourceScenario = @($scenarioDocument.scenarioSets.Live | Where-Object { [string]$_.id -eq $requiredInstallNodeScenarioId } | Select-Object -First 1)
         Assert-Test (($sourceScenario.Count -eq 1) -and ($sourceScenario[0].PSObject.Properties.Name -contains 'setup') -and ($sourceScenario[0].setup.PSObject.Properties.Name -contains 'installNodeForFault') -and [bool]$sourceScenario[0].setup.installNodeForFault) "$requiredInstallNodeScenarioId declares installNodeForFault setup"

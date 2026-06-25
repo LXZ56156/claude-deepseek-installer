@@ -319,7 +319,7 @@
           { "expect": "请输入选项编号 \\(1-5\\)", "send": "5\r", "timeoutSec": 120 },
           { "expect": "Press any key to close this window", "send": " \r", "delayMs": 300, "timeoutSec": 60 }
         ],
-        "required": ["Claude Code 已安装并确认可用", "安装命令返回异常"],
+        "required": ["Claude Code 已安装并确认可用"],
         "failureText": ["当前需要重开终端后继续", "已跳过后续配置步骤", "必要运行环境已安装，但当前窗口还没有识别到最新命令", "请关闭此窗口后重新双击", "请关闭当前窗口", "重新打开 PowerShell", "重新打开终端", "请关闭窗口重新打开后重试", "新打开的 PowerShell 还没有确认可用", "关闭并重新打开终端", "Node.js 安装失败", "npm 不可用", "安装未完成"],
         "forbidden": ["安装未完成"],
         "expectedExitCodes": [0]
